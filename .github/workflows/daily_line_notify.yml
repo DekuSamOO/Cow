@@ -14,7 +14,7 @@ on:
 
 jobs:
   send_notification:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
     - name: Checkout Repository
@@ -24,7 +24,6 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: '3.12' # 確保與你專案使用的版本一致
-        cache: 'pip'           # 快取套件以加快後續執行速度
 
     - name: Install Dependencies
       run: |

@@ -9,17 +9,16 @@ on:
 
 jobs:
   check_price:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-          cache: 'pip'
 
       - name: Install Dependencies
         run: |
@@ -28,7 +27,7 @@ jobs:
 
       # 下載上次執行留下的警報狀態（第一次執行時 artifact 不存在，continue-on-error 略過）
       - name: Download alert state
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: alert-state
           path: .
@@ -44,10 +43,9 @@ jobs:
 
       # 無論是否觸發警報，都上傳最新狀態（保留 2 天）
       - name: Upload alert state
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: alert-state
           path: alert_state.json
           retention-days: 2
-        # alert_state.json 只在條件觸發時才會被建立/更新，若不存在則略過
         continue-on-error: true

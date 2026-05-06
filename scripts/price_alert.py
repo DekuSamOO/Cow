@@ -89,9 +89,7 @@ def main() -> None:
     else:
         print(f"✓ BTC ${price:,.0f} > ${ALERT_PRICE_LOW:,.0f}，未觸及防守門檻。")
 
-    if changed:
-        _save_state(state)
-        print("📝 alert_state.json 已更新。")
+    _save_state(state)
 
 
 if __name__ == "__main__":
