@@ -17,3 +17,6 @@ BTC_HISTORY.csv
 # db/ 目錄內的 SQLite 檔案【刻意追蹤，勿加入此忽略清單】
 # 由 collector/btc_price_collector.py 在本地端生成後 push 至雲端
 # Streamlit Cloud 部署時直接從 repo 讀取，免 API 呼叫
+
+# Claude Code 本地設定
+.claude/
