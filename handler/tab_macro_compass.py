@@ -1,6 +1,6 @@
 
 from handler.components.macro_score import _score_meta, _bear_score_meta, _build_cycle_gauge, _build_phase_gauge
-from handler.components.macro_bottom import _season_css_color, _build_season_badge, _build_bear_bottom_metrics, _build_forecast_cards, _build_cycle_progress_card, _build_floor_support_card
+from handler.components.macro_bottom import _season_css_color
 
 def _make_mc_cache_key(chart_df, tvl_hist, stable_hist, fund_hist):
     s = f"{len(chart_df)}_{chart_df.index[-1] if not chart_df.empty else ''}"
