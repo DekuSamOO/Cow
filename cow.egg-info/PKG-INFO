@@ -1,0 +1,13 @@
+Metadata-Version: 2.4
+Name: cow
+Version: 3.2.0
+Summary: BTC 投資戰情室
+Author-email: Antigravity <no-reply@example.com>
+Requires-Python: >=3.9
+Requires-Dist: streamlit
+Requires-Dist: pandas
+Requires-Dist: numpy
+Requires-Dist: plotly
+Requires-Dist: requests
+Requires-Dist: python-dotenv
+Requires-Dist: ccxt

@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cow"
+version = "3.2.0"
+description = "BTC 投資戰情室"
+authors = [
+    {name = "Antigravity", email = "no-reply@example.com"}
+]
+dependencies = [
+    "streamlit",
+    "pandas",
+    "numpy",
+    "plotly",
+    "requests",
+    "python-dotenv",
+    "ccxt"
+]
+requires-python = ">=3.9"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["core*", "handler*", "service*", "strategy*", "config*"]

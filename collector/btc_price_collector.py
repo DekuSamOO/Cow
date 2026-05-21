@@ -37,6 +37,7 @@ import subprocess
 from datetime import datetime, timezone
 
 import requests
+from core.http_client import safe_get, safe_post
 
 # ── 路徑設定 ──────────────────────────────────────────────────────────────────
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -130,7 +131,7 @@ def _binance_klines(start_ms: int, end_ms: int) -> list:
     while current < end_ms:
         for attempt in range(4):
             try:
-                resp = requests.get(
+                resp = safe_get(
                     url,
                     params={
                         "symbol":    "BTCUSDT",
@@ -195,7 +196,7 @@ def _kraken_klines(start_ms: int, end_ms: int) -> list:
     while since_s < end_s:
         for attempt in range(4):
             try:
-                resp = requests.get(
+                resp = safe_get(
                     url,
                     params={"pair": "XBTUSD", "interval": 15, "since": since_s},
                     timeout=30,

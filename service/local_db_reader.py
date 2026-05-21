@@ -15,10 +15,10 @@ commit push 到 GitHub，Streamlit Cloud 直接讀取（免 API 呼叫）。
 
 import os
 import sqlite3
-from datetime import datetime, timezone
-
 import pandas as pd
 import streamlit as st
+from datetime import datetime, timezone
+from typing import Optional
 
 # ── 路徑設定 ──────────────────────────────────────────────────────────────────
 # 同時支援從 repo 根目錄或子目錄呼叫
@@ -46,7 +46,7 @@ def get_available_years() -> list[int]:
     return sorted(years)
 
 
-def _read_single_year(year: int, start_ms: int = None, end_ms: int = None) -> pd.DataFrame:
+def _read_single_year(year: int, start_ms: Optional[int] = None, end_ms: Optional[int] = None) -> pd.DataFrame:
     """讀取單一年份 DB，回傳 DatetimeIndex 的 OHLCV DataFrame（已排序）。"""
     db_path = os.path.join(DB_DIR, f"btcusdt_15m_{year}.db")
     if not os.path.exists(db_path):
@@ -85,24 +85,27 @@ def has_local_data() -> bool:
     return len(get_available_years()) > 0
 
 
-def get_latest_local_price() -> float | None:
+def get_latest_local_price() -> Optional[float]:
     """從本地 15m DB 取出最新一筆收盤價（不帶 cache，供即時備援用）。"""
     for year in reversed(get_available_years()):
         db_path = os.path.join(DB_DIR, f"btcusdt_15m_{year}.db")
         try:
-            with sqlite3.connect(db_path) as conn:
+            conn = sqlite3.connect(db_path)
+            try:
                 row = conn.execute(
                     "SELECT close FROM klines ORDER BY open_time DESC LIMIT 1"
                 ).fetchone()
-            if row:
-                return float(row[0])
+                if row:
+                    return float(row[0])
+            finally:
+                conn.close()
         except Exception:
             continue
     return None
 
 
 @st.cache_data(ttl=86400)
-def read_btc_15m(start_date: str = "2017-01-01", end_date: str = None) -> pd.DataFrame:
+def read_btc_15m(start_date: str = "2017-01-01", end_date: Optional[str] = None) -> pd.DataFrame:
     """
     讀取本地 BTC/USDT 15m K 線，合併多個年度資料庫。
 

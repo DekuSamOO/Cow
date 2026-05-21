@@ -18,6 +18,7 @@ import time
 import numpy as np
 import pandas as pd
 import requests
+from core.http_client import safe_get, safe_post
 import urllib3          # [Task #1] SSL 警告靜默（與其他模組一致）
 from datetime import timedelta
 
@@ -47,7 +48,7 @@ def _fetch_defi_risk_free_rate() -> float | None:
     合併為單次請求避免重複下載同一份大型 JSON（原為兩次獨立請求）。
     """
     try:
-        resp = requests.get(
+        resp = safe_get(
             "https://yields.llama.fi/pools",
             timeout=8,
             verify=SSL_VERIFY,

@@ -6,10 +6,14 @@ import urllib3
 # =================================================================
 # 1. 環境初始化與 SSL 處理
 # =================================================================
+from config import SSL_VERIFY
+
 # 由於公司內網 SSL 憑證問題，本地端執行時關閉驗證。
 # 詳細註解：這能防止腳本在未來擴充網路功能時，因為 SSL 憑證檢查失敗而中斷。
-http = urllib3.PoolManager(cert_reqs='CERT_NONE')
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+cert_reqs = 'CERT_REQUIRED' if SSL_VERIFY else 'CERT_NONE'
+http = urllib3.PoolManager(cert_reqs=cert_reqs)
+if not SSL_VERIFY:
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # =================================================================
 # 2. 設定檢查參數與遮蔽邏輯

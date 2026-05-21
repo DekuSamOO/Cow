@@ -16,6 +16,7 @@ import yfinance as yf
 import streamlit as st
 from datetime import datetime, timedelta, timezone
 import requests
+from core.http_client import safe_get, safe_post
 import urllib3
 
 # 從集中設定檔讀取 SSL 動態驗證旗標
@@ -28,7 +29,7 @@ from service.local_db_reader import has_local_data, read_btc_daily
 if not SSL_VERIFY:
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-BTC_CSV = "BTC_HISTORY.csv"
+BTC_CSV = "db/cache/BTC_HISTORY.csv"
 
 # Binance REST API 端點（不需要 API Key，公開 klines）
 _BINANCE_KLINES_URL = "https://api.binance.com/api/v3/klines"
@@ -65,7 +66,7 @@ def fetch_binance_daily(start_date_str):
 
     while since < now_ts:
         try:
-            resp = requests.get(
+            resp = safe_get(
                 _BINANCE_KLINES_URL,
                 params={
                     "symbol":    "BTCUSDT",
@@ -129,7 +130,7 @@ def fetch_kraken_daily(start_date_str):
 
     for _ in range(15):  # 每頁最多 720 筆，15 頁可涵蓋約 30 年
         try:
-            resp = requests.get(
+            resp = safe_get(
                 url,
                 params={'pair': 'XBTUSD', 'interval': 1440, 'since': since},
                 timeout=15,
@@ -191,7 +192,7 @@ def fetch_cryptocompare_daily(start_date_str):
 
     for _ in range(20):  # 最多 20 頁 × 2000 = 40,000 天，足以覆蓋 BTC 全歷史
         try:
-            resp = requests.get(
+            resp = safe_get(
                 url,
                 params={
                     "fsym": "BTC",
@@ -278,7 +279,6 @@ def fetch_market_data():
         last_date = None
 
     # 2. 確定需要下載的範圍
-    btc_new = pd.DataFrame()
     start_fetch_date = None
     
     if last_date and last_date < today:
@@ -287,58 +287,14 @@ def fetch_market_data():
         start_fetch_date = "2015-01-01"
 
     # 若有需要更新的日期，開始抓取
+    btc_new = pd.DataFrame()
     if start_fetch_date:
-        # --- 第零層：本地 SQLite DB ---
-        if has_local_data():
-            try:
-                btc_new = read_btc_daily(start_date=start_fetch_date)
-                if not btc_new.empty:
-                    print(f"[Market] 本地 DB 成功，取得 {len(btc_new)} 筆日線（從 15m 重採樣）")
-            except Exception as e:
-                print(f"[Market] 本地 DB 讀取失敗 ({type(e).__name__})，切換 Yahoo Finance")
-                btc_new = pd.DataFrame()
-
-        # --- 第一層：Yahoo Finance ---
-        if btc_new.empty:
-            try:
-                btc_new = yf.download("BTC-USD", start=start_fetch_date, interval="1d", progress=False, session=session)
-                if not btc_new.empty:
-                    btc_new.columns = [
-                        c[0].lower() if isinstance(c, tuple) else c.lower()
-                        for c in btc_new.columns
-                    ]
-                    print(f"[Market] Yahoo Finance 成功，取得 {len(btc_new)} 筆")
-            except Exception as e:
-                print(f"[Market] Yahoo Finance 失敗 ({type(e).__name__})，切換 Binance REST")
-
-        # --- 第二層：Binance REST API ---
-        if btc_new.empty:
-            try:
-                btc_new = fetch_binance_daily(start_fetch_date)
-                if not btc_new.empty:
-                    print(f"[Market] Binance REST 成功，取得 {len(btc_new)} 筆")
-            except Exception as e:
-                err_msg = str(e)
-                tag = "451地理封鎖" if "451" in err_msg else type(e).__name__
-                print(f"[Market] Binance REST 失敗 ({tag})，切換 Kraken")
-
-        # --- 第三層：Kraken ---
-        if btc_new.empty:
-            try:
-                btc_new = fetch_kraken_daily(start_fetch_date)
-                if not btc_new.empty:
-                    print(f"[Market] Kraken 成功，取得 {len(btc_new)} 筆")
-            except Exception as e:
-                print(f"[Market] Kraken 失敗 ({type(e).__name__})，切換 CryptoCompare")
-
-        # --- 第四層：CryptoCompare ---
-        if btc_new.empty:
-            try:
-                btc_new = fetch_cryptocompare_daily(start_fetch_date)
-                if not btc_new.empty:
-                    print(f"[Market] CryptoCompare 成功，取得 {len(btc_new)} 筆 (自 {btc_new.index[0].date()})")
-            except Exception as e:
-                print(f"[Market] CryptoCompare 失敗 ({type(e).__name__}: {e})")
+        from core.data_sources import build_btc_history_chain
+        chain = build_btc_history_chain(session)
+        result = chain.fetch(start_fetch_date)
+        if result.data is not None and not result.data.empty:
+            btc_new = result.data
+            print(f"[Market] {result.source_used} 成功，取得 {len(btc_new)} 筆")
 
     # 3. 合併並存檔
     if not btc_new.empty:
@@ -362,37 +318,14 @@ def fetch_market_data():
 
         _tday_df  = pd.DataFrame()
         
-        # 優先 Yahoo Finance（延遲最小）
-        try:
-            _tday_df = yf.download(
-                "BTC-USD", start=gap_start_date, interval="1d",
-                progress=False, session=session,
-            )
-            if not _tday_df.empty:
-                _tday_df.columns = [
-                    c[0].lower() if isinstance(c, tuple) else c.lower()
-                    for c in _tday_df.columns
-                ]
-        except Exception:
-            _tday_df = pd.DataFrame()
-            
-        # 備援 1：Kraken (取代原本的 Binance，不會被 GitHub Actions IP 擋)
-        if _tday_df.empty:
-            try:
-                _tday_df = fetch_kraken_daily(gap_start_date)
-                if not _tday_df.empty:
-                    print("[Market] 縫合區塊：成功使用 Kraken 補齊缺漏資料")
-            except Exception:
-                _tday_df = pd.DataFrame()
-                
-        # 備援 2：CryptoCompare
-        if _tday_df.empty:
-            try:
-                _tday_df = fetch_cryptocompare_daily(gap_start_date)
-                if not _tday_df.empty:
-                    print("[Market] 縫合區塊：成功使用 CryptoCompare 補齊缺漏資料")
-            except Exception:
-                _tday_df = pd.DataFrame()
+        # 縫合備援鏈
+        from core.data_sources import build_btc_stitch_chain
+        stitch_chain = build_btc_stitch_chain(session)
+        stitch_result = stitch_chain.fetch(gap_start_date)
+        
+        if stitch_result.data is not None and not stitch_result.data.empty:
+            _tday_df = stitch_result.data
+            print(f"[Market] 縫合區塊：成功使用 {stitch_result.source_used} 補齊缺漏資料")
 
         # 縫合：把補齊的數據 Concat 到歷史末端，並寫回 CSV 避免下次重複抓取
         if not _tday_df.empty:

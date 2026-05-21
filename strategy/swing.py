@@ -23,9 +23,11 @@ Antigravity v4 波段交易策略 & 回測引擎（五合一進場過濾）
 import math
 import numpy as np
 import pandas as pd
+from typing import Optional
 
 # 從集中設定檔讀取預設交易成本參數
 from config import DEFAULT_FEE_RATE, DEFAULT_SLIPPAGE_RATE
+from core.swing_signals import compute_entry_mask, compute_exit_mask
 
 try:
     import pandas_ta as ta
@@ -50,9 +52,9 @@ def run_swing_strategy_backtest(
     initial_capital=10_000,
     fee_rate=DEFAULT_FEE_RATE,
     slippage_rate=DEFAULT_SLIPPAGE_RATE,
-    entry_dist_min_pct: float = None,  # ✅ 修正 1：參數名稱改回 entry_dist_min_pct，與 UI 傳入的名稱一致
-    rsi_min: int = None,
-    adx_min: int = None,
+    entry_dist_min_pct: Optional[float] = None,  # ✅ 修正 1：參數名稱改回 entry_dist_min_pct，與 UI 傳入的名稱一致
+    rsi_min: Optional[int] = None,
+    adx_min: Optional[int] = None,
     exit_ma: str = "SMA_50",  # 接收 UI 傳來的動態防守線參數
 ):
     """
@@ -95,38 +97,15 @@ def run_swing_strategy_backtest(
     # 第一段：向量化計算所有訊號（無 Python for loop）
     # ──────────────────────────────────────────────────────────────
     close  = bt_df['close']
-    ema_20 = bt_df['EMA_20']
-
-    # 避免 EMA_20 為 0 導致 ZeroDivisionError（fillna 用 close 本身）
-    ema_safe = ema_20.replace(0, np.nan).fillna(close)
-
-    # 距離 EMA20 的百分比偏差
-    dist_pct = (close / ema_safe - 1) * 100  # 正值 = 高於 EMA20
-
-    # 條件 1+2: 年線多頭 + RSI 動能偏多（使用自訂閾值）
-    bull_trend = (close > bt_df['SMA_200']) & (bt_df['RSI_14'] > _rsi_min)
-
-    # 條件 4: MACD > Signal（多頭動能交叉確認）
-    if 'MACD_12_26_9' in bt_df.columns and 'MACDs_12_26_9' in bt_df.columns:
-        macd_bull = (bt_df['MACD_12_26_9'] > bt_df['MACDs_12_26_9']).fillna(False)
-    else:
-        macd_bull = pd.Series(True, index=bt_df.index)
-
-    # 條件 5: ADX > 自訂閾值（市場有趨勢，過濾橫盤假訊號）
-    if 'ADX' in bt_df.columns:
-        adx_trending = (bt_df['ADX'] > _adx_min).fillna(False)
-    else:
-        adx_trending = pd.Series(True, index=bt_df.index)
-
-    # 🚀 進場條件修改：放寬乖離限制，改抓「突破與趨勢確認」
-    # 只要價格大於 EMA20 (_dist_min = 0)，且動能指標 (MACD, ADX, RSI) 都轉強即進場
-    is_entry = bull_trend & (dist_pct >= _dist_min) & macd_bull & adx_trending
-
-    # 🛡️ 出場條件修改：動態使用傳入的均線名稱 (exit_ma)
-    if exit_ma in bt_df.columns:
-        is_exit = close < bt_df[exit_ma]
-    else:
-        is_exit = close < ema_safe
+    
+    is_entry = compute_entry_mask(
+        bt_df,
+        entry_dist_min_pct=_dist_min,
+        rsi_min=_rsi_min,
+        adx_min=_adx_min
+    )
+    
+    is_exit = compute_exit_mask(bt_df, exit_ma=exit_ma)
 
     # ──────────────────────────────────────────────────────────────
     # 第二段：狀態機迭代「訊號觸發點」（不是逐行，只迭代轉換）

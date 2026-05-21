@@ -36,6 +36,7 @@ core/season_forecast.py  ·  v1.3
 """
 
 from datetime import datetime, timedelta, timezone
+from typing import Tuple, Optional, Any, cast, List, Dict
 import numpy as np
 import pandas as pd
 
@@ -226,7 +227,7 @@ def _derive_real_season(time_season, drawdown, is_above_sma200, month_in_cycle):
     return time_season, s_zh, emoji, None, False
 
 
-def get_current_season(as_of: datetime = None):
+def get_current_season(as_of: Optional[datetime] = None):
     """計算「時間季節」（純減半週期時間位置，不含市場校正）。"""
     if as_of is None:
         as_of = datetime.utcnow()
@@ -277,7 +278,7 @@ def _apply_diminishing_returns(base_mult: float, cycle_index: int) -> float:
     return base_mult / (diminish_factor ** delta)
 
 
-def forecast_price(current_price: float, df: pd.DataFrame = None, as_of: datetime = None):
+def forecast_price(current_price: float, df: Optional[pd.DataFrame] = None, as_of: Optional[datetime] = None):
     """
     主要預測函數。整合時間季節 + 真實市場狀態，預測未來12個月目標價。
 

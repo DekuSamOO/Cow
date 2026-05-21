@@ -13,15 +13,13 @@ import json
 import os
 import sys
 import requests
+from core.http_client import safe_get, safe_post
 import urllib3
 from datetime import date
 
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_REPO_ROOT  = os.path.dirname(_SCRIPT_DIR)
-sys.path.append(_REPO_ROOT)
 
 from config import SSL_VERIFY, ALERT_PRICE_LOW
-from strategy.notifier import notify_58k_defense
+from service.notification.facade import notify_58k_defense
 
 if not SSL_VERIFY:
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -53,7 +51,7 @@ def _should_alert(last_date: str | None) -> bool:
 def fetch_btc_price() -> float | None:
     """透過 Coinbase 公開 API 取得 BTC 現價（GitHub Actions 環境適用）。"""
     try:
-        resp = requests.get(
+        resp = safe_get(
             "https://api.coinbase.com/v2/prices/BTC-USD/spot",
             timeout=10,
             verify=SSL_VERIFY,

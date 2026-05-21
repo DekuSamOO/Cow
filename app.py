@@ -30,7 +30,7 @@ import handler.tab_backtest       as tab4_handler
 # Service 層
 from service.market_data import fetch_market_data
 from service.onchain import fetch_aux_history
-from service.realtime import fetch_realtime_data
+from service.realtime import fetch_realtime_data, RealtimeData
 from service.mock import (
     get_mock_funding_rate,
     get_mock_tvl,
@@ -65,28 +65,24 @@ def render_realtime_overview(
         try:
             rt = fetch_realtime_data()
         except Exception:
-            rt = {k: None for k in [
-                'price', 'funding_rate', 'tvl', 'stablecoin_mcap', 'defi_yield',
-                'fng_value', 'fng_class',
-                'open_interest', 'open_interest_usd', 'oi_change_pct',
-            ]}
+            rt = RealtimeData(is_mocked=True)
 
-    _rt_price = rt.get('price')
+    _rt_price = rt.price
     current_price = _rt_price or fallback_price
-    _price_source = rt.get('price_source') or "歷史收盤"
+    _price_source = rt.price_source or "歷史收盤"
 
     _funding_rate = (
-        rt['funding_rate'] if rt['funding_rate'] is not None
+        rt.funding_rate if rt.funding_rate is not None
         else get_mock_funding_rate()
     )
     _tvl_val = (
-        rt['tvl'] if rt['tvl'] is not None
+        rt.tvl if rt.tvl is not None
         else get_mock_tvl(current_price)
     )
 
-    if rt['fng_value']:
-        _fng_val   = rt['fng_value']
-        _fng_state = rt['fng_class']
+    if rt.fng_value:
+        _fng_val   = rt.fng_value
+        _fng_state = rt.fng_class
         if "Greed" in _fng_state:
             _fng_state += " 🤑"
         elif "Fear" in _fng_state:
@@ -127,11 +123,11 @@ def render_realtime_overview(
         _fr_delta,
         delta_color="inverse" if _funding_rate > 0.03 else "normal",
     )
-    _c3.caption(f"來源：{rt.get('funding_rate_source') or '模擬值'}")
+    _c3.caption(f"來源：{rt.funding_rate_source or '模擬值'}")
 
     _tvl_display = f"${_tvl_val/1e9:.2f}B" if _tvl_val > 1e9 else f"${_tvl_val:.2f}M"
     _c4.metric("🏦 BTC 生態 TVL", _tvl_display, "↑ 鏈上活躍" if _tvl_val > 0 else "—")
-    _c4.caption(f"來源：{rt.get('tvl_source', '模擬值')}")
+    _c4.caption(f"來源：{rt.tvl_source or '模擬值'}")
 
     if not math.isnan(ahr999):
         _ahr_state = "🟢 抄底區" if ahr999 < 0.45 else ("🟡 合理區" if ahr999 < 1.2 else "🔴 高估區")
@@ -140,7 +136,7 @@ def render_realtime_overview(
         _c5.metric("📐 AHR999", "—", "計算中")
     _c5.caption("來源：歷史計算")
 
-    _stab_mcap = rt.get('stablecoin_mcap')
+    _stab_mcap = rt.stablecoin_mcap
     if _stab_mcap and _stab_mcap > 0:
         _c6.metric(
             "💵 穩定幣市值",

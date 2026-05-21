@@ -24,8 +24,13 @@ import math
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Optional, Any
+from core.swing_signals import compute_entry_mask, compute_exit_mask
 from strategy.swing import calculate_max_drawdown
-from config import WALK_FORWARD_EXIT_MODES
+from config import (
+    WALK_FORWARD_EXIT_MODES,
+    DEFAULT_FEE_RATE,
+    DEFAULT_SLIPPAGE_RATE
+)
 
 logger = logging.getLogger('Cow.walkforward')
 
@@ -33,9 +38,6 @@ logger = logging.getLogger('Cow.walkforward')
 class WalkForwardBacktester:
     """BTC 波段策略 Walk-Forward 回測器（防先視偏誤）"""
 
-    # 交易成本
-    FEE_RATE     = 0.001      # 單邊手續費（Taker 0.1%）
-    SLIPPAGE_RATE = 0.0005    # 滑點（0.05%）
 
     def __init__(self):
         self.annual_days = 365
@@ -139,32 +141,19 @@ class WalkForwardBacktester:
         if exit_ma not in bt_df.columns:
             exit_ma = 'EMA_20'
         defend_line = bt_df[exit_ma].ffill().values
-
-        # Step 3：向量化計算進場訊號
-        # 注意：所有條件用「當日」值計算，最後統一 shift(1) 一次（防先視偏誤）
-        # 不在這裡 pre-shift，否則加上後面的 shift(1) 會變成雙重移位（看到 2 天前的資料）
         open_vals = bt_df['open'].values
 
-        bull_trend = (close > bt_df['SMA_200'].fillna(0).values) & \
-                     (bt_df['RSI_14'].fillna(0).values > rsi_min)
-
-        if entry_dist_max_pct is not None:
-            dist_ok = (dist_pct >= entry_dist_min_pct) & (dist_pct <= entry_dist_max_pct)
-        else:
-            dist_ok = dist_pct >= entry_dist_min_pct
-
-        macd_ok = ((bt_df.get('MACD_12_26_9', 0).fillna(0).values >
-                    bt_df.get('MACDs_12_26_9', 0).fillna(0).values)
-                   if 'MACD_12_26_9' in bt_df.columns else np.ones(len(bt_df), dtype=bool))
-
-        adx_ok = ((bt_df.get('ADX', 0).fillna(0).values > adx_min)
-                  if 'ADX' in bt_df.columns else np.ones(len(bt_df), dtype=bool))
-
-        entry_signal = bull_trend & dist_ok & macd_ok & adx_ok
+        entry_signal = compute_entry_mask(
+            bt_df,
+            entry_dist_min_pct=entry_dist_min_pct,
+            entry_dist_max_pct=entry_dist_max_pct,
+            rsi_min=rsi_min,
+            adx_min=adx_min
+        ).values
         entry_signal_shifted = np.concatenate([[False], entry_signal[:-1]])  # shift(1)
 
         # 簡化模式出場訊號：對齊 swing.py — 以「昨日收盤 < 防守線」觸發，今日開盤執行
-        is_exit_arr = close < defend_line
+        is_exit_arr = compute_exit_mask(bt_df, exit_ma=exit_ma).values
         exit_signal_shifted = np.concatenate([[False], is_exit_arr[:-1]])  # shift(1)
 
         # 迴圈前預解析，避免每日重複字串比對
@@ -264,7 +253,7 @@ class WalkForwardBacktester:
                         # ⑤ Time Stop（15日 + 報酬 < 5%）
                         elif hold_days >= 15:
                             gross_ret = (cur_price / entry_price - 1) * 100
-                            friction = (self.FEE_RATE + self.SLIPPAGE_RATE) * 2 * 100  # 往返
+                            friction = (DEFAULT_FEE_RATE + DEFAULT_SLIPPAGE_RATE) * 2 * 100  # 往返
                             net_ret = gross_ret - friction
                             if net_ret < 5.0:
                                 do_exit = True
@@ -280,7 +269,7 @@ class WalkForwardBacktester:
                     # 簡化模式：出場均為 pending 次日 → 以今日開盤執行（對齊 swing.py）
                     # 進階模式：ATR 停損/目標為即時觸發 → 以今日收盤執行
                     exec_exit = open_vals[i] if use_simple_mode else cur_price
-                    friction_out = self.FEE_RATE + self.SLIPPAGE_RATE
+                    friction_out = DEFAULT_FEE_RATE + DEFAULT_SLIPPAGE_RATE
                     exit_price_net = exec_exit * (1.0 - friction_out)
                     balance = position * exit_price_net
                     pnl = balance - capital
@@ -315,7 +304,7 @@ class WalkForwardBacktester:
                 # ── 進場掃描（每 scan_freq 天）──
                 if day_num % scan_freq == 0 and entry_signal_shifted[i]:
                     # 進場執行：次日開盤（訊號昨日收盤確認，今日開盤下單，對齊 swing.py）
-                    friction_in = self.FEE_RATE + self.SLIPPAGE_RATE
+                    friction_in = DEFAULT_FEE_RATE + DEFAULT_SLIPPAGE_RATE
                     entry_price_net = open_vals[i] * (1.0 + friction_in)
                     position = capital / entry_price_net
 
@@ -342,7 +331,7 @@ class WalkForwardBacktester:
         if in_trade:
             last_close = close[-1]
             last_date = dates[-1]
-            friction_out = self.FEE_RATE + self.SLIPPAGE_RATE
+            friction_out = DEFAULT_FEE_RATE + DEFAULT_SLIPPAGE_RATE
             exit_price_net = last_close * (1.0 - friction_out)
             balance = position * exit_price_net
             pnl = balance - capital

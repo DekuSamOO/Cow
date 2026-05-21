@@ -3,20 +3,21 @@ service/onchain.py
 鏈上數據服務 — TVL、穩定幣市值、資金費率歷史
 透過 data_manager 本地緩存 + Binance API 補救 (新增 Bybit / OKX 極速備援)
 
-[Task #1] SSL 繞過：所有外部 requests.get() 加入 verify=False
+[Task #1] SSL 繞過：所有外部 safe_get() 加入 verify=False
 [Task #2] 非同步抓取：_fetch_funding_rate_history 改用 httpx.AsyncClient 並行發送請求
 [Task #3] Geo-block 備援：Binance 遭遇 451 時，直接抓取 Bybit/OKX 最新數據，避開舊時間戳限制
 """
 import time
 import asyncio          
 import requests
+from core.http_client import safe_get, safe_post
 import urllib3          
 import httpx            
 import pandas as pd
 import streamlit as st
 from datetime import datetime
 
-import data_manager
+import service.historical_data_manager as data_manager
 
 # 從集中設定檔讀取 SSL 動態驗證旗標
 from config import SSL_VERIFY
@@ -60,7 +61,7 @@ def _fetch_stablecoin_history():
     [Task #1] verify=False 繞過企業 SSL 憑證阻擋。
     """
     try:
-        r = requests.get(
+        r = safe_get(
             "https://stablecoins.llama.fi/stablecoincharts/all",
             timeout=10,
             verify=SSL_VERIFY,  

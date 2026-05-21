@@ -20,3 +20,6 @@ BTC_HISTORY.csv
 
 # Claude Code 本地設定
 .claude/
+ 
+db/cache/
+

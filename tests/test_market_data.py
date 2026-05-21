@@ -45,10 +45,12 @@ def test_yfinance_download_short_range():
     """
     import yfinance as yf
     start = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
-    print(f"\n[test] yf.download('BTC-USD', start={start})")
+    import requests
+    session = requests.Session()
+    session.verify = False
 
     df = yf.download("BTC-USD", start=start, interval="1d",
-                     progress=False, auto_adjust=True)
+                     progress=False, auto_adjust=True, session=session)
 
     print(f"  shape       = {df.shape}")
     print(f"  columns     = {list(df.columns)}")
@@ -71,9 +73,11 @@ def test_yfinance_ticker_history():
     """
     import yfinance as yf
     start = (datetime.now() - timedelta(days=10)).strftime('%Y-%m-%d')
-    print(f"\n[test] yf.Ticker('BTC-USD').history(start={start})")
+    import requests
+    session = requests.Session()
+    session.verify = False
 
-    ticker_obj = yf.Ticker("BTC-USD")
+    ticker_obj = yf.Ticker("BTC-USD", session=session)
     df = ticker_obj.history(start=start, interval="1d", auto_adjust=True)
 
     print(f"  shape       = {df.shape}")
@@ -97,14 +101,14 @@ def _patch_db_path(tmp_dir: str):
     將 data_manager 的 DB_PATH 改指向暫存目錄，
     避免污染正式數據庫。
     """
-    import data_manager
+    import service.historical_data_manager as data_manager
     orig_path = data_manager.DB_PATH
     data_manager.DB_PATH = os.path.join(tmp_dir, "test_cow.db")
     return orig_path
 
 
 def _restore_db_path(orig_path: str):
-    import data_manager
+    import service.historical_data_manager as data_manager
     data_manager.DB_PATH = orig_path
 
 
@@ -113,7 +117,7 @@ def test_sqlite_write_read_roundtrip():
     驗證 _df_to_sqlite → _df_from_sqlite 往返一致，
     特別測試 yfinance 常見的 'Date'（大寫）index 名稱。
     """
-    import data_manager
+    import service.historical_data_manager as data_manager
 
     with tempfile.TemporaryDirectory() as tmp:
         orig = _patch_db_path(tmp)
@@ -155,7 +159,7 @@ def test_sqlite_write_read_roundtrip():
 
 def test_sqlite_empty_on_missing_valid_table():
     """確認有效表格名稱但尚未建立時，_df_from_sqlite 回傳空 DataFrame。"""
-    import data_manager
+    import service.historical_data_manager as data_manager
 
     with tempfile.TemporaryDirectory() as tmp:
         orig = _patch_db_path(tmp)
@@ -170,7 +174,7 @@ def test_sqlite_empty_on_missing_valid_table():
 
 def test_sqlite_whitelist_rejects_invalid_table():
     """確認白名單驗證拒絕非法表格名稱，防止 SQL injection。"""
-    import data_manager
+    import service.historical_data_manager as data_manager
 
     with pytest.raises(ValueError, match="不允許的表格名稱"):
         data_manager._df_from_sqlite('nonexistent_table')

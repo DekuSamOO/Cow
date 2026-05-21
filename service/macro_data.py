@@ -34,6 +34,7 @@ FRED 公開 CSV API 說明:
 import io
 import math
 import requests
+from core.http_client import safe_get, safe_post
 import pandas as pd
 import numpy as np
 import yfinance as yf
@@ -86,7 +87,7 @@ def _fred_fetch(series_id: str, timeout: int = 15) -> pd.DataFrame:
     若請求失敗直接拋出例外，由各呼叫方的 try/except 處理備援邏輯。
     """
     url  = _FRED_CSV.format(sid=series_id)
-    resp = requests.get(url, timeout=timeout, verify=SSL_VERIFY)
+    resp = safe_get(url, timeout=timeout, verify=SSL_VERIFY)
     resp.raise_for_status()
     df = pd.read_csv(
         io.StringIO(resp.text),

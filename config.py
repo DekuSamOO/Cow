@@ -1,3 +1,4 @@
+
 """
 config.py — 比特幣投資戰情室 超參數集中管理
 
@@ -26,7 +27,7 @@ import os
 # 若未設定或為其他值，視為本地開發環境，關閉 SSL 驗證以繞過企業 Proxy
 IS_STREAMLIT_CLOUD: bool = os.getenv("IS_STREAMLIT_CLOUD", "false").lower() == "true"
 
-# 全域 SSL 驗證旗標：給 requests.get(..., verify=SSL_VERIFY) 使用
+# 全域 SSL 驗證旗標：給 safe_get(..., verify=SSL_VERIFY) 使用
 SSL_VERIFY: bool = IS_STREAMLIT_CLOUD
 
 # ==============================================================================

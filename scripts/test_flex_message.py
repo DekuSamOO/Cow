@@ -11,6 +11,7 @@ import os
 import sys
 import urllib3
 import requests
+from core.http_client import safe_get, safe_post
 import pandas as pd
 from datetime import datetime
 from dotenv import load_dotenv
@@ -20,9 +21,6 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 os.environ['CURL_CA_BUNDLE'] = ''
 os.environ['REQUESTS_CA_BUNDLE'] = ''
 
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_REPO_ROOT = os.path.dirname(_SCRIPT_DIR)
-sys.path.append(_REPO_ROOT)
 
 load_dotenv(dotenv_path=os.path.join(_REPO_ROOT, '.env'))
 
@@ -217,7 +215,7 @@ def send_test_message(flex):
     token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
     user_id = os.getenv("LINE_USER_ID")
     if token and user_id:
-        requests.post("https://api.line.me/v2/bot/message/push", headers={"Authorization": f"Bearer {token}"}, json={"to": user_id, "messages": [flex]}, verify=False)
+        safe_post("https://api.line.me/v2/bot/message/push", headers={"Authorization": f"Bearer {token}"}, json={"to": user_id, "messages": [flex]}, verify=False)
         print("✅ 測試發送成功")
 
 if __name__ == "__main__":
