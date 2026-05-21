@@ -31,6 +31,9 @@ if not SSL_VERIFY:
 
 BTC_CSV = "db/cache/BTC_HISTORY.csv"
 
+# 確保 CSV 快取目錄存在（Streamlit Cloud 上 db/cache/ 被 gitignore，首次啟動時不存在）
+os.makedirs(os.path.dirname(BTC_CSV), exist_ok=True)
+
 # Binance REST API 端點（不需要 API Key，公開 klines）
 _BINANCE_KLINES_URL = "https://api.binance.com/api/v3/klines"
 
@@ -301,7 +304,10 @@ def fetch_market_data():
         full_df = pd.concat([local_df, btc_new]) if not local_df.empty else btc_new
         full_df = full_df[~full_df.index.duplicated(keep='last')]
         full_df.sort_index(inplace=True)
-        full_df.to_csv(BTC_CSV)
+        try:
+            full_df.to_csv(BTC_CSV)
+        except Exception as e:
+            print(f"[Market] CSV 快取寫入失敗（不影響運行）: {e}")
         btc_final = full_df
     else:
         btc_final = local_df
@@ -334,10 +340,21 @@ def fetch_market_data():
             btc_final = pd.concat([btc_final, _tday_df])
             btc_final = btc_final[~btc_final.index.duplicated(keep='last')]
             btc_final.sort_index(inplace=True)
-            btc_final.to_csv(BTC_CSV)
+            try:
+                btc_final.to_csv(BTC_CSV)
+            except Exception as e:
+                print(f"[Market] CSV 快取寫入失敗（不影響運行）: {e}")
+
+    # ── 安全網：若上述所有途徑都失敗，直接嘗試本地 SQLite（跳過 FallbackChain）──
+    if btc_final.empty and has_local_data():
+        try:
+            btc_final = read_btc_daily()
+            print(f"[Market] ✅ 安全網觸發：直接從本地 SQLite 讀取 {len(btc_final)} 筆")
+        except Exception as e:
+            print(f"[Market] 安全網也失敗: {e}")
 
     if btc_final.empty:
-        print("[Market] ❌ 五層備援均失敗（本地DB / Yahoo / Binance / Kraken / CryptoCompare）")
+        print("[Market] ❌ 所有備援均失敗（本地DB / Yahoo / Binance / Kraken / CryptoCompare）")
         return pd.DataFrame(), pd.DataFrame()
 
     # 4. DXY (美元指數)
