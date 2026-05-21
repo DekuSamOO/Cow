@@ -201,32 +201,28 @@ with st.spinner("正在連線至戰情室數據庫..."):
         # 存入 session_state 快取，供 fragment 首次觸發時重用（TTL 30s）
         st.session_state['_rt_cache'] = {'data': realtime_data, 'ts': time.time()}
     except Exception as e:
-        realtime_data = {k: None for k in [
-            'price', 'funding_rate', 'tvl', 'stablecoin_mcap', 'defi_yield',
-            'fng_value', 'fng_class',
-            'open_interest', 'open_interest_usd', 'oi_change_pct',
-        ]}
+        realtime_data = RealtimeData(is_mocked=True)
         _data_warnings.append(f"即時數據載入失敗，使用模擬數據: {e}")
 
     curr          = btc.iloc[-1]
-    current_price = float(realtime_data.get('price') or curr['close'])
+    current_price = float(realtime_data.price or curr['close'])
 
     # Fallback 數值
     funding_rate = (
-        realtime_data['funding_rate']
-        if realtime_data['funding_rate'] is not None
+        realtime_data.funding_rate
+        if realtime_data.funding_rate is not None
         else get_mock_funding_rate()
     )
     tvl_val = (
-        realtime_data['tvl']
-        if realtime_data['tvl'] is not None
+        realtime_data.tvl
+        if realtime_data.tvl is not None
         else get_mock_tvl(current_price)
     )
 
     # 恐懼貪婪指數
-    if realtime_data['fng_value']:
-        fng_val   = realtime_data['fng_value']
-        fng_state = realtime_data['fng_class']
+    if realtime_data.fng_value:
+        fng_val   = realtime_data.fng_value
+        fng_state = realtime_data.fng_class
         if "Greed" in fng_state:
             fng_state += " 🤑"
         elif "Fear" in fng_state:
