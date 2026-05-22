@@ -24,6 +24,9 @@ from service.notification.facade import notify_58k_defense
 if not SSL_VERIFY:
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT  = os.path.dirname(_SCRIPT_DIR)
+
 # GitHub Actions artifact 下載後放在 repo 根目錄
 STATE_FILE = os.path.join(_REPO_ROOT, "alert_state.json")
 
