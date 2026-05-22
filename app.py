@@ -289,9 +289,9 @@ with tab1:
 with tab2:
     tab2_handler.render(
         btc, curr, funding_rate, proxies,
-        open_interest=realtime_data.get('open_interest'),
-        open_interest_usd=realtime_data.get('open_interest_usd'),
-        oi_change_pct=realtime_data.get('oi_change_pct'),
+        open_interest=realtime_data.open_interest,
+        open_interest_usd=realtime_data.open_interest_usd,
+        oi_change_pct=realtime_data.oi_change_pct,
         current_price=current_price,
     )
 

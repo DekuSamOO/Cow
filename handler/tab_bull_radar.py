@@ -301,7 +301,7 @@ def render(btc, chart_df, tvl_hist, stable_hist, fund_hist, curr, dxy,
             st.metric("BTC vs DXY 相關性 (90d)", "—", f"⚠️ {fb_note}")
 
         # 穩定幣市值
-        stab_mcap = realtime_data.get('stablecoin_mcap')
+        stab_mcap = getattr(realtime_data, 'stablecoin_mcap', None)
         if stab_mcap is not None and stab_mcap > 0:
             st.metric(
                 "全球穩定幣市值",

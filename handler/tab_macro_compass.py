@@ -215,8 +215,8 @@ def render(btc, chart_df, tvl_hist, stable_hist, fund_hist, curr, dxy, funding_r
     fr_state = '🔥 多頭過熱' if funding_rate > 0.03 else '🟢 情緒中性' if funding_rate > 0 else '❄️ 空頭主導'
     ahr_state = '🟢 抄底區間' if ahr_val < 0.45 else '🟡 合理區間' if ahr_val < 1.2 else '🔴 高估區間'
     mvrv_state = '🔥 過熱頂部' if mvrv_z > 3.0 else '🟢 價值低估' if mvrv_z < 0 else '中性區域'
-    _tvl_source = realtime_data.get('tvl_source') or 'DeFiLlama'
-    _fr_source = realtime_data.get('funding_rate_source') or '模擬值'
+    _tvl_source = getattr(realtime_data, 'tvl_source', None) or 'DeFiLlama'
+    _fr_source = getattr(realtime_data, 'funding_rate_source', None) or '模擬值'
     l2_cols = st.columns(5)
     l2_data = [('AHR999 囤幣指標', f'{ahr_val:.3f}', ahr_state, '本地計算 (Price/SMA200 × Price/PowerLaw)'), ('MVRV Z-Score', f'{mvrv_z:.2f}', mvrv_state, '本地計算 (Price-SMA200)/σ200'), ('BTC 生態 TVL', f'${tvl_val / 1000000000.0:.2f}B' if tvl_val > 1000000000.0 else f'${tvl_val:.2f}B', '↑ 持續增長' if tvl_val > 0 else '↓ 資金流出', _tvl_source), ('ETF 淨流量(24h)', f'{etf_flow:+.1f}M', '↑ 機構買盤' if etf_flow > 0 else '↓ 機構拋壓', '模擬估算 (價格變化 Proxy)'), ('資金費率', f'{funding_rate:.4f}%', fr_state, _fr_source)]
     for col, (title, val, delta, src) in zip(l2_cols, l2_data):

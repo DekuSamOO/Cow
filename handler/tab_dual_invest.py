@@ -163,7 +163,7 @@ def _build_ladder_chart(btc: pd.DataFrame, suggestion: dict,
 def render(btc, realtime_data):
     st.markdown("### 💰 雙幣理財顧問 (Dual Investment)")
 
-    defi_yield = realtime_data.get('defi_yield') or 5.0
+    defi_yield = realtime_data.defi_yield or 5.0
 
     # ── 產品期限選擇 ──
     t_days = st.select_slider(
@@ -179,7 +179,7 @@ def render(btc, realtime_data):
 
     suggestion    = get_current_suggestion(btc, t_days=t_days)
     curr_row      = btc.iloc[-1]
-    current_price = realtime_data.get('price') or float(curr_row['close'])
+    current_price = realtime_data.price or float(curr_row['close'])
 
     # ──────────────────────────────────────────────────────────────
     # [Task #7] 行權梯形圖（Session State 快取）
