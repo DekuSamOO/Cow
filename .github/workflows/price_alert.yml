@@ -38,6 +38,7 @@ jobs:
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
           IS_STREAMLIT_CLOUD: "true"
+          PYTHONPATH: ${{ github.workspace }}
         run: |
           python scripts/price_alert.py
 

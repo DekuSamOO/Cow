@@ -36,7 +36,6 @@ def _send_line_message(messages: list[dict]) -> bool:
         return False
 
     headers = {
-        "Content-Type":  "application/json",
         "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
     }
     payload = {
@@ -48,7 +47,7 @@ def _send_line_message(messages: list[dict]) -> bool:
         resp = safe_post(
             _LINE_PUSH_URL,
             headers=headers,
-            data=json.dumps(payload, ensure_ascii=False),
+            json=payload,
             timeout=8,
             verify=SSL_VERIFY,
         )

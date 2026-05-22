@@ -1,5 +1,5 @@
 from datetime import datetime
-from config import STATS as _SEASON_STATS
+from core.season_forecast import STATS as _SEASON_STATS
 
 SEASON_BG_COLOR = {
     "spring": "#27AE60",
