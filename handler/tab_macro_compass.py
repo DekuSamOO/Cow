@@ -1,18 +1,3 @@
-
-from handler.components.macro_score import _score_meta, _bear_score_meta, _build_cycle_gauge, _build_phase_gauge
-from handler.components.macro_bottom import _season_css_color
-
-def _make_mc_cache_key(chart_df, tvl_hist, stable_hist, fund_hist):
-    s = f"{len(chart_df)}_{chart_df.index[-1] if not chart_df.empty else ''}"
-    s += f"_{len(tvl_hist)}_{len(stable_hist)}_{len(fund_hist)}"
-    import hashlib
-    return hashlib.md5(s.encode()).hexdigest()
-
-def _make_bb_cache_key(btc):
-    import hashlib
-    s = f"{len(btc)}_{btc.index[-1] if not btc.empty else ''}"
-    return hashlib.md5(s.encode()).hexdigest()
-
 """
 handler/tab_macro_compass.py  ·  v1.0
 長週期週期羅盤 (Macro Cycle Compass)
@@ -38,9 +23,37 @@ from plotly.subplots import make_subplots
 import pandas as pd
 import numpy as np
 from datetime import datetime
-from service.macro_data import fetch_m2_series, fetch_usdjpy, fetch_us_cpi_yoy, get_quantum_threat_level
-from core.bear_bottom import calculate_bear_bottom_score, calculate_market_cycle_score, calculate_market_cycle_score_breakdown, score_series
-from core.season_forecast import forecast_price, get_cycle_comparison_table, get_power_law_forecast, get_current_season, HALVING_DATES, CYCLE_HISTORY
+
+from service.macro_data import fetch_m2_series, fetch_usdjpy, fetch_us_cpi_yoy
+from core.bear_bottom import (
+    calculate_bear_bottom_score,
+    calculate_market_cycle_score_breakdown,
+    score_series,
+)
+from core.season_forecast import (
+    forecast_price,
+    get_cycle_comparison_table,
+    get_power_law_forecast,
+    CYCLE_HISTORY,
+)
+from handler.components.macro_utils import (
+    _score_meta,
+    _bear_score_meta,
+    _build_cycle_gauge,
+    _build_phase_gauge,
+    _season_css_color,
+)
+
+
+def _make_mc_cache_key(chart_df, tvl_hist, stable_hist, fund_hist):
+    s = f"{len(chart_df)}_{chart_df.index[-1] if not chart_df.empty else ''}"
+    s += f"_{len(tvl_hist)}_{len(stable_hist)}_{len(fund_hist)}"
+    return hashlib.md5(s.encode()).hexdigest()
+
+
+def _make_bb_cache_key(btc):
+    s = f"{len(btc)}_{btc.index[-1] if not btc.empty else ''}"
+    return hashlib.md5(s.encode()).hexdigest()
 _FALLBACK = {'dxy': {'value': 106.5, 'date': '2025-02-21'}, 'm2': {'value': 21450, 'date': '2025-01-01'}, 'cpi': {'value': 3.0, 'date': '2025-01-01'}, 'usdjpy': {'value': 150.5, 'date': '2025-02-21'}}
 KNOWN_BOTTOMS = [('2015-08-01', '2015-09-30', '2015 Bear Bottom'), ('2018-11-01', '2019-02-28', '2018-19 Bear Bottom'), ('2020-03-01', '2020-04-30', '2020 COVID Crash'), ('2022-11-01', '2023-01-31', '2022 FTX Bear Bottom')]
 
@@ -85,7 +98,6 @@ def _render_forecast_chart(btc: pd.DataFrame, fc: dict):
     return fig
 
 def _render_cycle_waterfall(fc: dict):
-    from core.season_forecast import STATS
     labels, values, colors, bar_texts = ([], [], [], [])
     for i, c in enumerate(CYCLE_HISTORY):
         yr = c['halving'].year
@@ -133,7 +145,30 @@ def render(btc, chart_df, tvl_hist, stable_hist, fund_hist, curr, dxy, funding_r
     else:
         phase_idx, phase_name, phase_desc = (0, '❄️ 深熊築底', '均線空頭排列，底部積累區。策略：定投囤幣。')
     level_name, level_color, level_action = _score_meta(market_score)
-    st.markdown(f'\n        <div style="\n            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);\n            border: 2px solid {level_color};\n            border-radius: 14px;\n            padding: 20px 28px;\n            margin-bottom: 18px;\n            display: flex;\n            align-items: center;\n            justify-content: space-between;\n            flex-wrap: wrap;\n            gap: 12px;\n        ">\n            <div>\n                <div style="color:{level_color};font-size:1.8rem;font-weight:800;">{level_name}</div>\n                <div style="color:#ccc;font-size:0.9rem;margin-top:4px;">{level_action}</div>\n            </div>\n            <div style="text-align:right;">\n                <div style="color:#aaa;font-size:0.8rem;">多空評分</div>\n                <div style="color:{level_color};font-size:3rem;font-weight:900;line-height:1;">{market_score:+d}</div>\n                <div style="color:#666;font-size:0.75rem;">-100 (深熊) → +100 (狂熱)</div>\n            </div>\n        </div>\n        ', unsafe_allow_html=True)
+    st.markdown(f"""
+        <div style="
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            border: 2px solid {level_color};
+            border-radius: 14px;
+            padding: 20px 28px;
+            margin-bottom: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 12px;
+        ">
+            <div>
+                <div style="color:{level_color};font-size:1.8rem;font-weight:800;">{level_name}</div>
+                <div style="color:#ccc;font-size:0.9rem;margin-top:4px;">{level_action}</div>
+            </div>
+            <div style="text-align:right;">
+                <div style="color:#aaa;font-size:0.8rem;">多空評分</div>
+                <div style="color:{level_color};font-size:3rem;font-weight:900;line-height:1;">{market_score:+d}</div>
+                <div style="color:#666;font-size:0.75rem;">-100 (深熊) → +100 (狂熱)</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
     g_col1, g_col2, g_col3 = st.columns([2, 2, 3])
     with g_col1:
         st.plotly_chart(_build_cycle_gauge(market_score), use_container_width=True)
@@ -142,7 +177,16 @@ def render(btc, chart_df, tvl_hist, stable_hist, fund_hist, curr, dxy, funding_r
     with g_col3:
         st.markdown(f'### 📡 {phase_name}')
         st.info(phase_desc)
-        st.markdown('\n        | 相位 | 描述 | 策略建議 |\n        |------|------|---------|\n        | 🔥 狂熱頂部 | MVRV Z > 3.5 | 分批止盈 |\n        | 🐂 牛市主升 | 多頭排列+年線上揚 | 持有止盈 |\n        | 😴 牛市末期 | 多頭但動能減弱 | 輕倉持有 |\n        | 🌱 初牛復甦 | 站上年線 | 分批建倉 |\n        | 📉 轉折回調 | 跌破年線 | 觀望為主 |\n        | ❄️ 深熊築底 | 空頭排列 | 定投積累 |\n        ')
+        st.markdown("""
+        | 相位 | 描述 | 策略建議 |
+        |------|------|---------|
+        | 🔥 狂熱頂部 | MVRV Z > 3.5 | 分批止盈 |
+        | 🐂 牛市主升 | 多頭排列+年線上揚 | 持有止盈 |
+        | 😴 牛市末期 | 多頭但動能減弱 | 輕倉持有 |
+        | 🌱 初牛復甦 | 站上年線 | 分批建倉 |
+        | 📉 轉折回調 | 跌破年線 | 觀望為主 |
+        | ❄️ 深熊築底 | 空頭排列 | 定投積累 |
+        """)
     with st.expander(f'📐 多空評分計算公式（熊底 {_bear_total}/100 分 — 牛頂 {_bull_total}/100 分 = **{market_score:+d}**）', expanded=False):
         st.caption('**公式**：多空評分 = 牛頂分數 − 熊底分數，clip 至 [-100, +100]。8 大鏈上指標各自對熊底與牛頂分別打分，分數根據最新日線即時計算。若分數長時間不變，屬正常現象（代表市場週期位置確實穩定在當前區間，非 bug）。')
         _tbl = []
@@ -205,9 +249,20 @@ def render(btc, chart_df, tvl_hist, stable_hist, fund_hist, curr, dxy, funding_r
     prev_high = btc['high'].iloc[-40:-20].max()
     dow_state = '更高的高點 (HH)' if recent_high > prev_high else '高點降低 (LH)'
     l1_cols = st.columns(3)
-    l1_data = [('趨勢結構', struct_state, f'MA200 斜率 {('↗️ 上升' if is_rising else '↘️ 下降')}', '本地計算 (SMA200 斜率)'), ('道氏理論', dow_state, '近 20 日 vs 前 20 日高點', '本地計算 (高低點比較)'), (f'情緒指數', f'{fng_val:.0f}/100', fng_state, fng_source)]
+    _slope_arrow = '↗️ 上升' if is_rising else '↘️ 下降'
+    l1_data = [
+        ('趨勢結構', struct_state, f'MA200 斜率 {_slope_arrow}', '本地計算 (SMA200 斜率)'),
+        ('道氏理論', dow_state, '近 20 日 vs 前 20 日高點', '本地計算 (高低點比較)'),
+        ('情緒指數', f'{fng_val:.0f}/100', fng_state, fng_source),
+    ]
     for col, (title, val, delta, src) in zip(l1_cols, l1_data):
-        col.markdown(f'\n        <div class="metric-card">\n            <div class="metric-title">{title}</div>\n            <div class="metric-value">{val}</div>\n            <div class="metric-delta">{delta}</div>\n            <div class="metric-source">來源：{src}</div>\n        </div>', unsafe_allow_html=True)
+        col.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-title">{title}</div>
+            <div class="metric-value">{val}</div>
+            <div class="metric-delta">{delta}</div>
+            <div class="metric-source">來源：{src}</div>
+        </div>""", unsafe_allow_html=True)
     st.markdown('#### Level 2 · 機構視角 (On-Chain & Derivatives)')
     ahr_val = curr.get('AHR999', float('nan'))
     mvrv_z = curr.get('MVRV_Z_Proxy', 0) or 0
@@ -218,9 +273,24 @@ def render(btc, chart_df, tvl_hist, stable_hist, fund_hist, curr, dxy, funding_r
     _tvl_source = getattr(realtime_data, 'tvl_source', None) or 'DeFiLlama'
     _fr_source = getattr(realtime_data, 'funding_rate_source', None) or '模擬值'
     l2_cols = st.columns(5)
-    l2_data = [('AHR999 囤幣指標', f'{ahr_val:.3f}', ahr_state, '本地計算 (Price/SMA200 × Price/PowerLaw)'), ('MVRV Z-Score', f'{mvrv_z:.2f}', mvrv_state, '本地計算 (Price-SMA200)/σ200'), ('BTC 生態 TVL', f'${tvl_val / 1000000000.0:.2f}B' if tvl_val > 1000000000.0 else f'${tvl_val:.2f}B', '↑ 持續增長' if tvl_val > 0 else '↓ 資金流出', _tvl_source), ('ETF 淨流量(24h)', f'{etf_flow:+.1f}M', '↑ 機構買盤' if etf_flow > 0 else '↓ 機構拋壓', '模擬估算 (價格變化 Proxy)'), ('資金費率', f'{funding_rate:.4f}%', fr_state, _fr_source)]
+    _tvl_display = f'${tvl_val / 1e9:.2f}B' if tvl_val > 1e9 else f'${tvl_val:.2f}B'
+    _tvl_delta = '↑ 持續增長' if tvl_val > 0 else '↓ 資金流出'
+    _etf_delta = '↑ 機構買盤' if etf_flow > 0 else '↓ 機構拋壓'
+    l2_data = [
+        ('AHR999 囤幣指標', f'{ahr_val:.3f}', ahr_state, '本地計算 (Price/SMA200 × Price/PowerLaw)'),
+        ('MVRV Z-Score', f'{mvrv_z:.2f}', mvrv_state, '本地計算 (Price-SMA200)/σ200'),
+        ('BTC 生態 TVL', _tvl_display, _tvl_delta, _tvl_source),
+        ('ETF 淨流量(24h)', f'{etf_flow:+.1f}M', _etf_delta, '模擬估算 (價格變化 Proxy)'),
+        ('資金費率', f'{funding_rate:.4f}%', fr_state, _fr_source),
+    ]
     for col, (title, val, delta, src) in zip(l2_cols, l2_data):
-        col.markdown(f'\n        <div class="metric-card">\n            <div class="metric-title">{title}</div>\n            <div class="metric-value">{val}</div>\n            <div class="metric-delta">{delta}</div>\n            <div class="metric-source">來源：{src}</div>\n        </div>', unsafe_allow_html=True)
+        col.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-title">{title}</div>
+            <div class="metric-value">{val}</div>
+            <div class="metric-delta">{delta}</div>
+            <div class="metric-source">來源：{src}</div>
+        </div>""", unsafe_allow_html=True)
     st.markdown('#### Level 3 · 宏觀視角 (Macro)')
     m3_col1, m3_col2, m3_col3, m3_col4 = st.columns(4)
     with m3_col1:
@@ -273,7 +343,39 @@ def render(btc, chart_df, tvl_hist, stable_hist, fund_hist, curr, dxy, funding_r
     st.caption('整合 8 大鏈上+技術指標，量化評估當前是否接近歷史性熊市底部')
     curr_score, curr_signals = calculate_bear_bottom_score(btc.iloc[-1])
     score_level, score_color, score_action = _bear_score_meta(curr_score)
-    fig_bb_gauge = go.Figure(go.Indicator(mode='gauge+number+delta', value=curr_score, domain={'x': [0, 1], 'y': [0, 1]}, title={'text': "熊市底部評分<br><span style='font-size:0.8em;color:gray'>Bear Bottom Score</span>", 'font': {'size': 18}}, delta={'reference': 50, 'increasing': {'color': '#ff4b4b'}, 'decreasing': {'color': '#00ff88'}}, gauge={'axis': {'range': [0, 100], 'tickwidth': 1, 'tickcolor': 'white'}, 'bar': {'color': score_color}, 'bgcolor': '#1e1e1e', 'borderwidth': 2, 'bordercolor': '#333', 'steps': [{'range': [0, 25], 'color': '#1a3a1a'}, {'range': [25, 45], 'color': '#2a2a2a'}, {'range': [45, 60], 'color': '#3a3a1a'}, {'range': [60, 75], 'color': '#3a2a1a'}, {'range': [75, 100], 'color': '#3a1a1a'}], 'threshold': {'line': {'color': '#ffffff', 'width': 3}, 'thickness': 0.75, 'value': curr_score}}))
+    fig_bb_gauge = go.Figure(go.Indicator(
+        mode='gauge+number+delta',
+        value=curr_score,
+        domain={'x': [0, 1], 'y': [0, 1]},
+        title={
+            'text': "熊市底部評分<br><span style='font-size:0.8em;color:gray'>Bear Bottom Score</span>",
+            'font': {'size': 18},
+        },
+        delta={
+            'reference': 50,
+            'increasing': {'color': '#ff4b4b'},
+            'decreasing': {'color': '#00ff88'},
+        },
+        gauge={
+            'axis': {'range': [0, 100], 'tickwidth': 1, 'tickcolor': 'white'},
+            'bar': {'color': score_color},
+            'bgcolor': '#1e1e1e',
+            'borderwidth': 2,
+            'bordercolor': '#333',
+            'steps': [
+                {'range': [0, 25],   'color': '#1a3a1a'},
+                {'range': [25, 45],  'color': '#2a2a2a'},
+                {'range': [45, 60],  'color': '#3a3a1a'},
+                {'range': [60, 75],  'color': '#3a2a1a'},
+                {'range': [75, 100], 'color': '#3a1a1a'},
+            ],
+            'threshold': {
+                'line': {'color': '#ffffff', 'width': 3},
+                'thickness': 0.75,
+                'value': curr_score,
+            },
+        },
+    ))
     fig_bb_gauge.update_layout(height=280, template='plotly_dark', paper_bgcolor='#0e1117', font={'color': 'white'})
     bg_c1, bg_c2 = st.columns([1, 1])
     with bg_c1:
@@ -282,7 +384,15 @@ def render(btc, chart_df, tvl_hist, stable_hist, fund_hist, curr, dxy, funding_r
         st.markdown(f'### {score_level}')
         st.markdown(f'**評分: {curr_score}/100**')
         st.info(f'📋 **操作建議**: {score_action}')
-        st.markdown('\n        | 分數區間 | 市場狀態 | 建議行動 |\n        |---------|---------|---------|\n        | 75-100  | 歷史極值底部 | 全力積累 |\n        | 60-75   | 明確底部區間 | 重倉布局 |\n        | 45-60   | 可能底部區  | 分批試探 |\n        | 25-45   | 震盪修正    | 觀望等待 |\n        | 0-25    | 牛市高估    | 持有/減倉 |\n        ')
+        st.markdown("""
+        | 分數區間 | 市場狀態 | 建議行動 |
+        |---------|---------|---------|
+        | 75-100  | 歷史極值底部 | 全力積累 |
+        | 60-75   | 明確底部區間 | 重倉布局 |
+        | 45-60   | 可能底部區  | 分批試探 |
+        | 25-45   | 震盪修正    | 觀望等待 |
+        | 0-25    | 牛市高估    | 持有/減倉 |
+        """)
     st.markdown('---')
     st.subheader('C1. 八大指標評分明細')
     st.caption('所有指標均由本地歷史 K 線計算，無需外部 API')
@@ -290,7 +400,19 @@ def render(btc, chart_df, tvl_hist, stable_hist, fund_hist, curr, dxy, funding_r
     for idx, (key, sig) in enumerate(curr_signals.items()):
         col = indicator_cols[idx % 4]
         bar_pct = sig['score'] / sig['max'] * 100
-        col.markdown(f'\n        <div class="metric-card">\n            <div class="metric-title">{key.replace('_', ' ')}</div>\n            <div class="metric-value">{sig['value']}</div>\n            <div class="metric-delta">{sig['label']}</div>\n            <div style="background:#333;border-radius:4px;height:6px;margin-top:8px;">\n                <div style="background:{score_color};width:{bar_pct:.0f}%;height:6px;border-radius:4px;"></div>\n            </div>\n            <div style="color:#888;font-size:0.75rem;text-align:right;">{sig['score']}/{sig['max']} 分</div>\n            <div class="metric-source">來源：本地計算</div>\n        </div>\n        ', unsafe_allow_html=True)
+        _key_label = key.replace('_', ' ')
+        col.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-title">{_key_label}</div>
+            <div class="metric-value">{sig['value']}</div>
+            <div class="metric-delta">{sig['label']}</div>
+            <div style="background:#333;border-radius:4px;height:6px;margin-top:8px;">
+                <div style="background:{score_color};width:{bar_pct:.0f}%;height:6px;border-radius:4px;"></div>
+            </div>
+            <div style="color:#888;font-size:0.75rem;text-align:right;">{sig['score']}/{sig['max']} 分</div>
+            <div class="metric-source">來源：本地計算</div>
+        </div>
+        """, unsafe_allow_html=True)
     st.markdown('---')
     st.subheader('C2. 歷史熊市底部驗證 (Bear Market Bottoms Map)')
     st.caption('橙色區域 = 已知熊市底部 | 藍線 = 200週均線 | 紅線 = Pi Cycle | 黃線 = 冪律支撐 | 青線 = SMA50')
@@ -353,7 +475,26 @@ def render(btc, chart_df, tvl_hist, stable_hist, fund_hist, curr, dxy, funding_r
     st.markdown('---')
     st.subheader('C4. 當前關鍵底部指標一覽')
     curr_row = btc.iloc[-1]
-    summary_data = {'指標': ['AHR999 囤幣指標', 'MVRV Z-Score (Proxy)', 'Pi Cycle Gap', '200週均線比值', 'Puell Multiple (Proxy)', '月線 RSI', '冪律支撐倍數', 'Mayer Multiple'], '當前值': [f'{curr_row.get('AHR999', float('nan')):.3f}', f'{curr_row.get('MVRV_Z_Proxy', float('nan')):.2f}', f'{curr_row.get('PiCycle_Gap', float('nan')):.1f}%', f'{curr_row.get('SMA200W_Ratio', float('nan')):.2f}x', f'{curr_row.get('Puell_Proxy', float('nan')):.2f}', f'{curr_row.get('RSI_Monthly', float('nan')):.1f}', f'{curr_row.get('PowerLaw_Ratio', float('nan')):.1f}x', f'{curr_row.get('Mayer_Multiple', float('nan')):.2f}x'], '底部閾值': ['< 0.45', '< 0', '< -5%', '< 1.0x', '< 0.5', '< 30', '< 2x', '< 0.8x'], '頂部閾值': ['> 1.2', '> 3.5', '> 10%', '> 4x', '> 4.0', '> 75', '> 10x', '> 2.4x']}
+    _nan = float('nan')
+    summary_data = {
+        '指標': [
+            'AHR999 囤幣指標', 'MVRV Z-Score (Proxy)', 'Pi Cycle Gap',
+            '200週均線比值', 'Puell Multiple (Proxy)', '月線 RSI',
+            '冪律支撐倍數', 'Mayer Multiple',
+        ],
+        '當前值': [
+            f"{curr_row.get('AHR999', _nan):.3f}",
+            f"{curr_row.get('MVRV_Z_Proxy', _nan):.2f}",
+            f"{curr_row.get('PiCycle_Gap', _nan):.1f}%",
+            f"{curr_row.get('SMA200W_Ratio', _nan):.2f}x",
+            f"{curr_row.get('Puell_Proxy', _nan):.2f}",
+            f"{curr_row.get('RSI_Monthly', _nan):.1f}",
+            f"{curr_row.get('PowerLaw_Ratio', _nan):.1f}x",
+            f"{curr_row.get('Mayer_Multiple', _nan):.2f}x",
+        ],
+        '底部閾值': ['< 0.45', '< 0', '< -5%', '< 1.0x', '< 0.5', '< 30', '< 2x', '< 0.8x'],
+        '頂部閾值': ['> 1.2', '> 3.5', '> 10%', '> 4x', '> 4.0', '> 75', '> 10x', '> 2.4x'],
+    }
     st.dataframe(pd.DataFrame(summary_data), use_container_width=True, hide_index=True)
     st.markdown('---')
     st.subheader('D. 🗓️ 四季理論目標價預測 (Halving Cycle Forecast)')
@@ -374,10 +515,50 @@ def render(btc, chart_df, tvl_hist, stable_hist, fund_hist, curr, dxy, funding_r
         sma200_val = ms['sma200']
         above_str = '✅ 站上' if ms['is_above_sma200'] else '❌ 跌破'
         if is_corrected:
-            season_header = f'\n            <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">\n                <div style="opacity:0.45;text-decoration:line-through;font-size:1.1rem;color:{time_color};">\n                    {si['emoji']} {si['season_zh']} (時間)\n                </div>\n                <div style="font-size:1.3rem;color:#888;">→</div>\n                <div style="font-size:2rem;font-weight:800;color:{eff_color};">\n                    {eff['emoji']} {eff['season_zh']} (市場實際)\n                </div>\n            </div>'
+            season_header = f"""
+            <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+                <div style="opacity:0.45;text-decoration:line-through;font-size:1.1rem;color:{time_color};">
+                    {si['emoji']} {si['season_zh']} (時間)
+                </div>
+                <div style="font-size:1.3rem;color:#888;">→</div>
+                <div style="font-size:2rem;font-weight:800;color:{eff_color};">
+                    {eff['emoji']} {eff['season_zh']} (市場實際)
+                </div>
+            </div>"""
         else:
-            season_header = f'\n            <div style="font-size:2rem;font-weight:700;color:{eff_color};">\n                {eff['emoji']} {eff['season_zh']}\n            </div>'
-        st.markdown(f'\n            <div style="\n                background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);\n                border: 2px solid {eff_color};\n                border-radius: 12px;\n                padding: 20px 28px;\n                margin-bottom: 16px;\n            ">\n                {season_header}\n                <div style="color:#ccc; margin-top:10px; font-size:0.95rem;">\n                    第 <b style="color:white">{fc['current_cycle_idx'] + 1}</b> 次減半週期\n                    &nbsp;｜&nbsp;\n                    減半日: <b style="color:white">{si['halving_date'].strftime('%Y-%m-%d')}</b>\n                    &nbsp;｜&nbsp;\n                    已過 <b style="color:white">{si['days_since']}</b> 天 /\n                    距下次減半還有 <b style="color:white">{si['days_to_next']}</b> 天\n                </div>\n                <div style="color:#aaa; margin-top:6px; font-size:0.88rem; display:flex; gap:24px; flex-wrap:wrap;">\n                    <span>週期月份: <b style="color:white">第 {si['month_in_cycle']} 個月</b></span>\n                    <span>週期進度: <b style="color:white">{si['cycle_progress'] * 100:.1f}%</b></span>\n                    <span>距ATH跌幅: <b style="color:{('#ff6b6b' if drawdown_pct > 15 else '#ffd93d')}">\n                        -{drawdown_pct:.1f}%</b> (ATH ${ms['cycle_ath']:,.0f})</span>\n                    <span>200日均線: <b style="color:white">{above_str} ${sma200_val:,.0f}</b></span>\n                </div>\n            </div>\n            ', unsafe_allow_html=True)
+            season_header = f"""
+            <div style="font-size:2rem;font-weight:700;color:{eff_color};">
+                {eff['emoji']} {eff['season_zh']}
+            </div>"""
+        _cycle_idx_1based = fc['current_cycle_idx'] + 1
+        _halving_str = si['halving_date'].strftime('%Y-%m-%d')
+        _drawdown_color = '#ff6b6b' if drawdown_pct > 15 else '#ffd93d'
+        st.markdown(f"""
+            <div style="
+                background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+                border: 2px solid {eff_color};
+                border-radius: 12px;
+                padding: 20px 28px;
+                margin-bottom: 16px;
+            ">
+                {season_header}
+                <div style="color:#ccc; margin-top:10px; font-size:0.95rem;">
+                    第 <b style="color:white">{_cycle_idx_1based}</b> 次減半週期
+                    &nbsp;｜&nbsp;
+                    減半日: <b style="color:white">{_halving_str}</b>
+                    &nbsp;｜&nbsp;
+                    已過 <b style="color:white">{si['days_since']}</b> 天 /
+                    距下次減半還有 <b style="color:white">{si['days_to_next']}</b> 天
+                </div>
+                <div style="color:#aaa; margin-top:6px; font-size:0.88rem; display:flex; gap:24px; flex-wrap:wrap;">
+                    <span>週期月份: <b style="color:white">第 {si['month_in_cycle']} 個月</b></span>
+                    <span>週期進度: <b style="color:white">{si['cycle_progress'] * 100:.1f}%</b></span>
+                    <span>距ATH跌幅: <b style="color:{_drawdown_color}">
+                        -{drawdown_pct:.1f}%</b> (ATH ${ms['cycle_ath']:,.0f})</span>
+                    <span>200日均線: <b style="color:white">{above_str} ${sma200_val:,.0f}</b></span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
         if is_corrected and fc.get('correction_reason'):
             st.warning(fc['correction_reason'])
         st.plotly_chart(_render_season_timeline(si, effective_season=eff['season']), use_container_width=True)
@@ -393,15 +574,43 @@ def render(btc, chart_df, tvl_hist, stable_hist, fund_hist, curr, dxy, funding_r
         col_a, col_b, col_c = st.columns(3)
         with col_a:
             side_title = '最深目標 ↓' if not is_bull else '保守目標 ↑'
-            st.markdown(f'<div style="background:#1e2a1e;border:1px solid {target_color};border-radius:10px;padding:18px;text-align:center;">\n                    <div style="color:#888;font-size:0.8rem;">{side_title}</div>\n                    <div style="color:{target_color};font-size:1.6rem;font-weight:700;">${fc['target_low']:,.0f}</div>\n                    <div style="color:#666;font-size:0.75rem;">{lbl_low}</div>\n                    {ath_ref_hint}</div>', unsafe_allow_html=True)
+            st.markdown(f"""
+                <div style="background:#1e2a1e;border:1px solid {target_color};border-radius:10px;padding:18px;text-align:center;">
+                    <div style="color:#888;font-size:0.8rem;">{side_title}</div>
+                    <div style="color:{target_color};font-size:1.6rem;font-weight:700;">${fc['target_low']:,.0f}</div>
+                    <div style="color:#666;font-size:0.75rem;">{lbl_low}</div>
+                    {ath_ref_hint}
+                </div>""", unsafe_allow_html=True)
         with col_b:
-            st.markdown(f'<div style="background:#1e2a1e;border:2px solid {target_color};border-radius:10px;padding:18px;text-align:center;box-shadow:0 0 12px {target_color}44;">\n                    <div style="color:#aaa;font-size:0.85rem;">{fc_type_zh}</div>\n                    <div style="color:{target_color};font-size:2.2rem;font-weight:800;">${fc['target_median']:,.0f}</div>\n                    <div style="color:#999;font-size:0.8rem;">歷史中位數目標</div>\n                    <div style="color:#666;font-size:0.75rem;margin-top:4px;">預計達標: {fc['estimated_date'].strftime('%Y-%m-%d')}</div>\n                    {ath_ref_hint}</div>', unsafe_allow_html=True)
+            _est_date_str = fc['estimated_date'].strftime('%Y-%m-%d')
+            st.markdown(f"""
+                <div style="background:#1e2a1e;border:2px solid {target_color};border-radius:10px;padding:18px;text-align:center;box-shadow:0 0 12px {target_color}44;">
+                    <div style="color:#aaa;font-size:0.85rem;">{fc_type_zh}</div>
+                    <div style="color:{target_color};font-size:2.2rem;font-weight:800;">${fc['target_median']:,.0f}</div>
+                    <div style="color:#999;font-size:0.8rem;">歷史中位數目標</div>
+                    <div style="color:#666;font-size:0.75rem;margin-top:4px;">預計達標: {_est_date_str}</div>
+                    {ath_ref_hint}
+                </div>""", unsafe_allow_html=True)
         with col_c:
             side_title = '最淺目標 ↑' if not is_bull else '樂觀目標 ↑'
-            st.markdown(f'<div style="background:#1e2a1e;border:1px solid {target_color};border-radius:10px;padding:18px;text-align:center;">\n                    <div style="color:#888;font-size:0.8rem;">{side_title}</div>\n                    <div style="color:{target_color};font-size:1.6rem;font-weight:700;">${fc['target_high']:,.0f}</div>\n                    <div style="color:#666;font-size:0.75rem;">{lbl_high}</div>\n                    {ath_ref_hint}</div>', unsafe_allow_html=True)
+            st.markdown(f"""
+                <div style="background:#1e2a1e;border:1px solid {target_color};border-radius:10px;padding:18px;text-align:center;">
+                    <div style="color:#888;font-size:0.8rem;">{side_title}</div>
+                    <div style="color:{target_color};font-size:1.6rem;font-weight:700;">${fc['target_high']:,.0f}</div>
+                    <div style="color:#666;font-size:0.75rem;">{lbl_high}</div>
+                    {ath_ref_hint}
+                </div>""", unsafe_allow_html=True)
         st.markdown('<br>', unsafe_allow_html=True)
         conf_color = '#00e676' if conf_bar >= 65 else '#ffeb3b' if conf_bar >= 45 else '#ff9800'
-        st.markdown(f'<div style="margin:8px 0 16px 0;">\n                <div style="color:#aaa;font-size:0.85rem;margin-bottom:4px;">\n                    預測信心分數: <b style="color:{conf_color};">{conf_bar}/100</b>\n                </div>\n                <div style="background:#333;border-radius:6px;height:10px;">\n                    <div style="background:{conf_color};width:{conf_bar}%;height:10px;border-radius:6px;"></div>\n                </div></div>', unsafe_allow_html=True)
+        st.markdown(f"""
+            <div style="margin:8px 0 16px 0;">
+                <div style="color:#aaa;font-size:0.85rem;margin-bottom:4px;">
+                    預測信心分數: <b style="color:{conf_color};">{conf_bar}/100</b>
+                </div>
+                <div style="background:#333;border-radius:6px;height:10px;">
+                    <div style="background:{conf_color};width:{conf_bar}%;height:10px;border-radius:6px;"></div>
+                </div>
+            </div>""", unsafe_allow_html=True)
         with st.expander('📖 預測邏輯說明', expanded=False):
             st.info(fc['rationale'])
         st.markdown('#### D3. 目標價走勢圖（過去2年 + 未來12個月）')
@@ -424,10 +633,27 @@ def render(btc, chart_df, tvl_hist, stable_hist, fund_hist, curr, dxy, funding_r
         st.markdown('---')
         st.markdown('#### D5. 四季操作策略')
         strat_cols = st.columns(4)
-        strategies = [('🌱', '春季 (月0-11)', '#1b5e20', '減半後復甦期。市場情緒由恐懼轉向觀望，適合**分批建倉**，重點佈局主流幣。'), ('☀️', '夏季 (月12-23)', '#f57f17', '牛市加速期。FOMO情緒蔓延，適合**持有並設置移動止盈**，避免頂部加倉。'), ('🍂', '秋季 (月24-35)', '#e65100', '泡沫破裂期。高點已過，空頭確立，適合**逐步減倉**，轉向穩定資產。'), ('❄️', '冬季 (月36-47)', '#0d47a1', '熊市底部期。恐慌拋售為主，適合**定期定額囤幣**，等待下一個春天。')]
+        strategies = [
+            ('🌱', '春季 (月0-11)',  '#1b5e20', '減半後復甦期。市場情緒由恐懼轉向觀望，適合**分批建倉**，重點佈局主流幣。'),
+            ('☀️', '夏季 (月12-23)', '#f57f17', '牛市加速期。FOMO情緒蔓延，適合**持有並設置移動止盈**，避免頂部加倉。'),
+            ('🍂', '秋季 (月24-35)', '#e65100', '泡沫破裂期。高點已過，空頭確立，適合**逐步減倉**，轉向穩定資產。'),
+            ('❄️', '冬季 (月36-47)', '#0d47a1', '熊市底部期。恐慌拋售為主，適合**定期定額囤幣**，等待下一個春天。'),
+        ]
         for col, (emoji, name, bg, desc) in zip(strat_cols, strategies):
             is_current = name.startswith(eff['emoji']) or name.startswith(si['emoji'])
             border = f'2px solid {eff_color}' if is_current else '1px solid #333'
             cur_tag = f"<div style='color:{eff_color};font-size:0.8rem;margin-top:8px;font-weight:600;'>← 當前季節</div>" if is_current else ''
-            col.markdown(f'<div style="background:{bg}22;border:{border};border-radius:10px;padding:14px;min-height:160px;">\n                    <div style="font-size:1.6rem;">{emoji}</div>\n                    <div style="color:white;font-weight:600;margin:4px 0;">{name}</div>\n                    <div style="color:#ccc;font-size:0.82rem;">{desc}</div>\n                    {cur_tag}\n                </div>', unsafe_allow_html=True)
-    st.markdown('\n    ---\n    > **免責聲明**: 以上指標均為技術分析工具，不構成投資建議。\n    > 歷史數據不代表未來表現。加密貨幣市場波動劇烈，請嚴格控制倉位風險。\n    > Pi Cycle 冪律模型參數來源: Giovanni Santostasi 比特幣冪律理論。\n    > 四季理論基於歷史減半週期規律，每個週期漲幅遞減為已知趨勢，實際結果可能顯著偏離。\n    ')
+            col.markdown(f"""
+                <div style="background:{bg}22;border:{border};border-radius:10px;padding:14px;min-height:160px;">
+                    <div style="font-size:1.6rem;">{emoji}</div>
+                    <div style="color:white;font-weight:600;margin:4px 0;">{name}</div>
+                    <div style="color:#ccc;font-size:0.82rem;">{desc}</div>
+                    {cur_tag}
+                </div>""", unsafe_allow_html=True)
+    st.markdown("""
+    ---
+    > **免責聲明**: 以上指標均為技術分析工具，不構成投資建議。
+    > 歷史數據不代表未來表現。加密貨幣市場波動劇烈，請嚴格控制倉位風險。
+    > Pi Cycle 冪律模型參數來源: Giovanni Santostasi 比特幣冪律理論。
+    > 四季理論基於歷史減半週期規律，每個週期漲幅遞減為已知趨勢，實際結果可能顯著偏離。
+    """)
