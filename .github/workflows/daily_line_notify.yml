@@ -2,13 +2,14 @@ name: Daily LINE Notifier
 
 on:
   schedule:
-    # GitHub Actions 使用 UTC 時間 (台灣時間 - 8小時)
-    # 台灣時間早上 09:23 -> UTC 01:23
-    - cron: '23 1 * * *'
-    # 台灣時間下午 15:39 -> UTC 07:39
-    - cron: '39 7 * * *'
-    # 台灣時間晚上 21:27 -> UTC 13:27
-    - cron: '27 13 * * *'
+    # GitHub Actions 使用 UTC 時間 (台灣時間 = UTC + 8小時)
+    # 註：Actions 免費排程常延遲 5~60 分鐘（高負載更久），故刻意調早避免最後一則拖到深夜
+    # 台灣時間早上 08:00 -> UTC 00:00
+    - cron: '0 0 * * *'
+    # 台灣時間中午 12:30 -> UTC 04:30
+    - cron: '30 4 * * *'
+    # 台灣時間傍晚 18:00 -> UTC 10:00
+    - cron: '0 10 * * *'
   # 允許在 GitHub Actions 頁面上手動觸發測試
   workflow_dispatch: 
 

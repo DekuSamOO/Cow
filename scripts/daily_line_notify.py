@@ -301,7 +301,7 @@ def get_decision_data():
     except Exception as e: print(f"Data error: {e}")
     return summary
 
-def fetch_news_digest(limit: int = 6, top: int = 3) -> dict:
+def fetch_news_digest(limit: int = 8, top: int = 6) -> dict:
     """抓取新聞輿情摘要供推播：整體情緒燈號 + 前幾則重大新聞中文標題。
     任何失敗都回安全預設（推播照常，只是省略新聞區塊）。
     在 Actions（無 streamlit runtime）用 .__wrapped__ 繞過 @st.cache_data。
@@ -310,15 +310,15 @@ def fetch_news_digest(limit: int = 6, top: int = 3) -> dict:
     try:
         from service.news import fetch_crypto_news, summarize_sentiment, SENTIMENT_EMOJI
         feed = fetch_crypto_news.__wrapped__(limit)
-        items = feed.items or []
-        if not items:
+        shown = (feed.items or [])[:top]   # 只取要推播的前 top 則
+        if not shown:
             return out
 
-        sent = summarize_sentiment(items)
+        sent = summarize_sentiment(shown)  # 輿情計數與實際顯示則數一致
         if sent.mood:
             out["news_mood"] = f"{sent.mood}（多{sent.bull}／空{sent.bear}／中{sent.neutral}）"
 
-        for it in items[:top]:
+        for it in shown:
             out["news_items"].append({
                 "emoji": SENTIMENT_EMOJI.get(it.sentiment or "", "•"),
                 "title": it.title_zh or it.title,
