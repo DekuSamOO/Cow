@@ -301,6 +301,33 @@ def get_decision_data():
     except Exception as e: print(f"Data error: {e}")
     return summary
 
+def fetch_news_digest(limit: int = 6, top: int = 3) -> dict:
+    """抓取新聞輿情摘要供推播：整體情緒燈號 + 前幾則重大新聞中文標題。
+    任何失敗都回安全預設（推播照常，只是省略新聞區塊）。
+    在 Actions（無 streamlit runtime）用 .__wrapped__ 繞過 @st.cache_data。
+    """
+    out = {"news_mood": None, "news_items": []}
+    try:
+        from service.news import fetch_crypto_news, summarize_sentiment, SENTIMENT_EMOJI
+        feed = fetch_crypto_news.__wrapped__(limit)
+        items = feed.items or []
+        if not items:
+            return out
+
+        sent = summarize_sentiment(items)
+        if sent.mood:
+            out["news_mood"] = f"{sent.mood}（多{sent.bull}／空{sent.bear}／中{sent.neutral}）"
+
+        for it in items[:top]:
+            out["news_items"].append({
+                "emoji": SENTIMENT_EMOJI.get(it.sentiment or "", "•"),
+                "title": it.title_zh or it.title,
+            })
+    except Exception as e:
+        print(f"[WARN] news digest: {e}")
+    return out
+
+
 def send_line_message(flex_payload):
     from service.notification.core import _send_line_message
     _send_line_message([flex_payload])
@@ -310,4 +337,5 @@ if __name__ == "__main__":
     from service.notification.builders import build_flex_message
     load_dotenv()
     data = get_decision_data()
+    data.update(fetch_news_digest())
     send_line_message(build_flex_message(data))

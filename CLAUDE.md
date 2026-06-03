@@ -174,3 +174,31 @@ GitHub Actions 免費方案：私有 repo 2,000 分鐘/月，**公開 repo 無�
 
 Cow 是公開 repo，`price_alert.yml`（每小時）與 `daily_line_notify.yml`（每天 2 次）均不消耗配額。
 目前唯一消耗私有配額的是 `Notion_auto`（約 150 分鐘/月），距上限 2,000 分鐘仍有大量餘裕。
+
+### 16. Gemini 2.5 系列為 reasoning 模型，預設 thinking 吃光 output token
+
+根因：`gemini-2.5-flash` 預設開啟「思考」，會把 `maxOutputTokens` 消耗在 thinking 上，
+導致 `candidates` 無實際文字輸出（症狀：呼叫耗時很久 + 回傳空）。翻譯/摘要不需思考。
+修法：`generationConfig.thinkingConfig.thinkingBudget = 0` 關閉思考（見 `core/gemini_client.py`）。
+
+### 17. Gemini ListModels 會列出已下架模型
+
+`v1beta/models` 清單含 `gemini-2.0-flash`，但實際 `generateContent` 回 404
+「This model is no longer available」。**不要以 ListModels 有列出就當可用**，需實打驗證。
+目前可用：`gemini-2.5-flash`。
+
+### 18. 新聞來源：Reddit 免認證被 IP 封鎖、X 免費 API 已關閉
+
+- Reddit `hot.json` 對公司網路 IP 與雲端共享 IP 均回 403（IP 層級，換 User-Agent 無效），
+  需 OAuth 才穩定 → 改用 **CoinGecko `/search/trending`** 當社群熱度指標（免金鑰）。
+- X/Twitter 免費 API 已關閉，無穩定免費抓法 → 不納入。
+- 新聞媒體源：CryptoCompare News + Cointelegraph/CoinDesk/Decrypt RSS，聚合去重（`service/news.py`）。
+
+### 19. 新聞中文化的省 token 三層機制（`service/news_i18n.py`）
+
+Gemini 翻譯成本與「Streamlit Cloud 休眠/喚醒」脫鉤的關鍵：
+1. 批次：一次 prompt 處理整批（最多 8 則）回 JSON，避免逐則往返。
+2. 持久化快取 `db/news_i18n.json`：以 url 為 key，翻過的**永不重翻**（記憶體 `@st.cache_data`
+   在 cold start 會清空，故需落地檔案才能跨休眠續用）。
+3. 總開關 `NEWS_I18N_ENABLED=false` 可完全停用翻譯（0 API 呼叫）。
+   - 休眠時不執行 script → 0 token；真正成本 = 「新出現且沒翻過的新聞則數」。

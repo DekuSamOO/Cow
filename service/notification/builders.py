@@ -218,6 +218,34 @@ def _build_score_box(s, left_flex):
         ],
     }
 
+def _build_news_box(s):
+    """加密新聞輿情區塊：整體情緒燈號 + 數則重大新聞中文標題。
+    無新聞資料（無金鑰/抓取失敗）時回 None，整個區塊省略，不影響其餘推播。
+    """
+    mood = s.get("news_mood")
+    items = s.get("news_items") or []
+    if not mood and not items:
+        return None
+
+    contents = [
+        {"type": "text", "text": "📰 加密新聞輿情", "weight": "bold",
+         "color": "#2C3E50", "size": "sm"},
+    ]
+    if mood:
+        contents.append({"type": "text", "text": mood, "color": "#555555",
+                         "size": "xs", "margin": "xs", "wrap": True})
+    for it in items:
+        contents.append({"type": "text",
+                         "text": f"{it.get('emoji', '•')} {it.get('title', '')}",
+                         "color": "#666666", "size": "xxs", "margin": "xs", "wrap": True})
+
+    return {
+        "type": "box", "layout": "vertical", "margin": "lg",
+        "backgroundColor": "#F5F0FF", "cornerRadius": "8px", "paddingAll": "md",
+        "contents": contents,
+    }
+
+
 def build_flex_message(s):
     date_str = datetime.now().strftime('%Y-%m-%d %H:%M')
     left_flex = max(1, min(99, int((s["cycle_score"] + 100) / 2)))
@@ -238,6 +266,10 @@ def build_flex_message(s):
     floor_box = _build_floor_support_box(s)
     if floor_box:
         body_contents.append(floor_box)
+
+    news_box = _build_news_box(s)
+    if news_box:
+        body_contents.append(news_box)
 
     body_contents.append({
         "type": "box", "layout": "vertical", "margin": "lg",

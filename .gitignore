@@ -23,3 +23,6 @@ BTC_HISTORY.csv
  
 db/cache/
 
+# 新聞 Gemini 翻譯快取（執行時產生，勿追蹤）
+db/news_i18n.json
+

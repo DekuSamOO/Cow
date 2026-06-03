@@ -31,12 +31,11 @@ import handler.tab_backtest       as tab4_handler
 from service.market_data import fetch_market_data
 from service.onchain import fetch_aux_history
 from service.realtime import fetch_realtime_data, RealtimeData
-from service.mock import (
-    get_mock_funding_rate,
-    get_mock_tvl,
-    calculate_fear_greed_proxy,
-    get_realtime_proxies,
+from service.overview import resolve_overview_metrics
+from service.news import (
+    fetch_crypto_news, humanize_age, summarize_sentiment, SENTIMENT_EMOJI,
 )
+from service.mock import get_realtime_proxies
 
 # Core 層
 from core.indicators import calculate_technical_indicators, calculate_ahr999
@@ -67,31 +66,16 @@ def render_realtime_overview(
         except Exception:
             rt = RealtimeData(is_mocked=True)
 
-    _rt_price = rt.price
-    current_price = _rt_price or fallback_price
-    _price_source = rt.price_source or "歷史收盤"
-
-    _funding_rate = (
-        rt.funding_rate if rt.funding_rate is not None
-        else get_mock_funding_rate()
+    m = resolve_overview_metrics(
+        rt, fallback_price=fallback_price, rsi14=rsi14, sma50=sma50,
     )
-    _tvl_val = (
-        rt.tvl if rt.tvl is not None
-        else get_mock_tvl(current_price)
-    )
-
-    if rt.fng_value:
-        _fng_val   = rt.fng_value
-        _fng_state = rt.fng_class
-        if "Greed" in _fng_state:
-            _fng_state += " 🤑"
-        elif "Fear" in _fng_state:
-            _fng_state += " 😨"
-        _fng_source = "Alternative.me"
-    else:
-        _fng_val    = calculate_fear_greed_proxy(rsi14, current_price, sma50)
-        _fng_state  = "Proxy Mode"
-        _fng_source = "Antigravity Proxy"
+    current_price = m.price
+    _price_source = m.price_source
+    _funding_rate = m.funding_rate
+    _tvl_val      = m.tvl
+    _fng_val      = m.fng_val
+    _fng_state    = m.fng_state
+    _fng_source   = m.fng_source
 
     st.caption(
         f"數據更新時間: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | 核心版本: Antigravity v4"
@@ -116,25 +100,33 @@ def render_realtime_overview(
     )
     _c2.caption(f"來源：{_fng_source}")
 
-    _fr_delta = "🔥 多頭過熱" if _funding_rate > 0.03 else ("🟢 中性" if _funding_rate > 0 else "❄️ 空頭")
-    _c3.metric(
-        "💸 資金費率",
-        f"{_funding_rate:.4f}%",
-        _fr_delta,
-        delta_color="inverse" if _funding_rate > 0.03 else "normal",
-    )
-    _c3.caption(f"來源：{rt.funding_rate_source or '模擬值'}")
+    if m.funding_is_real:
+        _fr_delta = "🔥 多頭過熱" if _funding_rate > 0.03 else ("🟢 中性" if _funding_rate > 0 else "❄️ 空頭")
+        _c3.metric(
+            "💸 資金費率",
+            f"{_funding_rate:.4f}%",
+            _fr_delta,
+            delta_color="inverse" if _funding_rate > 0.03 else "normal",
+        )
+        _c3.caption(f"來源：{m.funding_source}")
+    else:
+        _c3.metric("💸 資金費率", "—", "⚠️ 資料暫缺")
+        _c3.caption("來源：即時 API 連線失敗")
 
-    _tvl_display = f"${_tvl_val/1e9:.2f}B" if _tvl_val > 1e9 else f"${_tvl_val:.2f}M"
-    _c4.metric("🏦 BTC 生態 TVL", _tvl_display, "↑ 鏈上活躍" if _tvl_val > 0 else "—")
-    _c4.caption(f"來源：{rt.tvl_source or '模擬值'}")
+    if m.tvl_is_real:
+        _tvl_display = f"${_tvl_val/1e9:.2f}B" if _tvl_val > 1e9 else f"${_tvl_val:.2f}M"
+        _c4.metric("🏦 BTC 生態 TVL", _tvl_display, "↑ 鏈上活躍" if _tvl_val > 0 else "—")
+        _c4.caption(f"來源：{m.tvl_source}")
+    else:
+        _c4.metric("🏦 BTC 生態 TVL", "—", "⚠️ 資料暫缺")
+        _c4.caption("來源：即時 API 連線失敗")
 
     if not math.isnan(ahr999):
         _ahr_state = "🟢 抄底區" if ahr999 < 0.45 else ("🟡 合理區" if ahr999 < 1.2 else "🔴 高估區")
         _c5.metric("📐 AHR999", f"{ahr999:.3f}", _ahr_state)
     else:
         _c5.metric("📐 AHR999", "—", "計算中")
-    _c5.caption("來源：歷史計算")
+    _c5.caption("來源：冪律模型 (Santostasi)")
 
     _stab_mcap = rt.stablecoin_mcap
     if _stab_mcap and _stab_mcap > 0:
@@ -147,6 +139,85 @@ def render_realtime_overview(
     else:
         _c6.metric("💵 穩定幣市值", "—", "連線中")
         _c6.caption("來源：連線失敗")
+
+    st.markdown("---")
+
+
+# ==============================================================================
+# 0b. 加密貨幣熱門新聞（4h 快取＋Gemini 中文化，不接 fragment — 避免 list 序列化靜默失效）
+# ==============================================================================
+# 分類 filter 關鍵字（比對標題/中文標題/小結/標籤）
+_NEWS_CATEGORIES = {
+    "全部": None,
+    "BTC":  ("bitcoin", "btc", "比特幣", "satoshi"),
+    "ETH":  ("ethereum", "eth", "以太", "vitalik"),
+    "DeFi": ("defi", "stablecoin", "穩定幣", "去中心", "yield", "tvl"),
+    "法規": ("regulat", "sec", "lawsuit", "court", "ban", "法規", "監管",
+             "congress", "senate", "government", "tax", " law"),
+}
+def _match_news_category(item, keys) -> bool:
+    if keys is None:
+        return True
+    hay = " ".join([
+        item.title or "", item.title_zh or "",
+        item.summary_zh or "", " ".join(item.tags or []),
+    ]).lower()
+    return any(k in hay for k in keys)
+
+
+def render_news_panel(limit: int = 8):
+    """社群熱門新聞區塊：多來源聚合、Gemini 中文化標題＋小結、情緒燈號、分類 filter。
+    走 @st.cache_data(ttl=14400) 隨整頁重整刷新（搭配持久化翻譯快取省 Gemini token）。
+    刻意不掛 @st.fragment（CLAUDE.md 陷阱 #1：list 傳入 fragment 會序列化失敗）。
+    """
+    feed = fetch_crypto_news(limit=limit)
+
+    _hdr_l, _hdr_r = st.columns([3, 1])
+    _hdr_l.markdown("### 📰 加密貨幣熱門新聞")
+    _src_note = "⚠️ 即時來源連線失敗，顯示備援連結" if feed.is_fallback else f"來源：{feed.source}"
+    _hdr_r.caption(_src_note)
+
+    if not feed.items:
+        st.info("目前無法取得新聞，請稍後重新整理。")
+        st.markdown("---")
+        return
+
+    # 情緒燈號彙總（A-1）：依各則 AI 情緒判定整體輿情（與每日推播共用 summarize_sentiment）
+    _sent = summarize_sentiment(feed.items)
+    if _sent.has_data:
+        _m_l, _m_r = st.columns([1, 2])
+        _m_l.markdown(f"**今日輿情：{_sent.mood}**")
+        _m_r.caption(
+            f"🟢 偏多 {_sent.bull}　🔴 偏空 {_sent.bear}　⚪ 中性 {_sent.neutral}"
+            "（AI 情緒判定，與恐懼貪婪指數互補）"
+        )
+
+    # 社群 24h 熱搜（CoinGecko Trending，取代被 IP 封鎖的 Reddit）
+    if feed.trending:
+        st.caption("🔥 社群 24h 熱搜：" + "　".join(f"`{s}`" for s in feed.trending))
+
+    # 分類 filter（A-3）
+    _cat = st.radio(
+        "新聞分類", list(_NEWS_CATEGORIES.keys()),
+        horizontal=True, label_visibility="collapsed", key="news_cat",
+    )
+    _filtered = [it for it in feed.items if _match_news_category(it, _NEWS_CATEGORIES[_cat])]
+    if not _filtered:
+        st.caption(f"「{_cat}」分類目前沒有相關新聞。")
+        st.markdown("---")
+        return
+
+    # 兩欄卡片：中文標題（無翻譯則 fallback 英文）＋中文小結＋情緒 emoji＋來源時間
+    _cols = st.columns(2)
+    for _i, _it in enumerate(_filtered):
+        with _cols[_i % 2]:
+            _emoji = SENTIMENT_EMOJI.get(_it.sentiment or "", "")
+            _title = _it.title_zh or _it.title
+            st.markdown(f"{_emoji} **[{_title}]({_it.url})**")
+            if _it.summary_zh:
+                st.caption(_it.summary_zh)
+            _meta = " · ".join(p for p in (_it.source, humanize_age(_it.published_at)) if p)
+            st.caption(f"🔗 {_meta}")
 
     st.markdown("---")
 
@@ -204,38 +275,21 @@ with st.spinner("正在連線至戰情室數據庫..."):
         realtime_data = RealtimeData(is_mocked=True)
         _data_warnings.append(f"即時數據載入失敗，使用模擬數據: {e}")
 
-    curr          = btc.iloc[-1]
-    current_price = float(realtime_data.price or curr['close'])
+    curr = btc.iloc[-1]
 
-    # Fallback 數值
-    funding_rate = (
-        realtime_data.funding_rate
-        if realtime_data.funding_rate is not None
-        else get_mock_funding_rate()
+    # 速覽指標降級解析（與 fragment 共用單一 helper，避免重複邏輯）
+    _ov = resolve_overview_metrics(
+        realtime_data,
+        fallback_price=float(curr['close']),
+        rsi14=float(curr['RSI_14']) if 'RSI_14' in curr.index else 50.0,
+        sma50=float(curr['SMA_50']) if 'SMA_50' in curr.index else float(curr['close']),
     )
-    tvl_val = (
-        realtime_data.tvl
-        if realtime_data.tvl is not None
-        else get_mock_tvl(current_price)
-    )
-
-    # 恐懼貪婪指數
-    if realtime_data.fng_value:
-        fng_val   = realtime_data.fng_value
-        fng_state = realtime_data.fng_class
-        if "Greed" in fng_state:
-            fng_state += " 🤑"
-        elif "Fear" in fng_state:
-            fng_state += " 😨"
-        fng_source = "Alternative.me"
-    else:
-        fng_val    = calculate_fear_greed_proxy(
-            float(curr['RSI_14']) if 'RSI_14' in curr.index else 50.0,
-            current_price,
-            float(curr['SMA_50']) if 'SMA_50' in curr.index else float(curr['close']),
-        )
-        fng_state  = "Proxy Mode"
-        fng_source = "Antigravity Proxy"
+    current_price = _ov.price
+    funding_rate  = _ov.funding_rate
+    tvl_val       = _ov.tvl
+    fng_val       = _ov.fng_val
+    fng_state     = _ov.fng_state
+    fng_source    = _ov.fng_source
 
     proxies = get_realtime_proxies(current_price, curr['close'])
 
@@ -268,6 +322,11 @@ render_realtime_overview(
     sma50=float(curr['SMA_50']) if 'SMA_50' in curr.index else float(curr['close']),
     ahr999=float(curr['AHR999']) if 'AHR999' in curr.index else math.nan,
 )
+
+# ==============================================================================
+# 4b. 加密貨幣熱門新聞（速覽下方，全頁共用）
+# ==============================================================================
+render_news_panel()
 
 # ==============================================================================
 # 5. Tabs
