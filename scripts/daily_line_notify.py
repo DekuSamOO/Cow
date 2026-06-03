@@ -301,7 +301,7 @@ def get_decision_data():
     except Exception as e: print(f"Data error: {e}")
     return summary
 
-def fetch_news_digest(limit: int = 8, top: int = 6) -> dict:
+def fetch_news_digest(limit: int = 10, top: int = 8) -> dict:
     """抓取新聞輿情摘要供推播：整體情緒燈號 + 前幾則重大新聞中文標題。
     任何失敗都回安全預設（推播照常，只是省略新聞區塊）。
     在 Actions（無 streamlit runtime）用 .__wrapped__ 繞過 @st.cache_data。
