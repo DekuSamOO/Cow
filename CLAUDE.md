@@ -172,7 +172,7 @@ entry_mask = is_entry.shift(1)              # 已是 2 天前資料
 
 GitHub Actions 免費方案：私有 repo 2,000 分鐘/月，**公開 repo 無限制**。
 
-Cow 是公開 repo，`price_alert.yml`（每小時）與 `daily_line_notify.yml`（每天 2 次）均不消耗配額。
+Cow 是公開 repo，`price_alert.yml`（每小時）與 `daily_line_notify.yml`（每天 3 次：台灣 08:23 / 13:39 / 18:27）均不消耗配額。
 目前唯一消耗私有配額的是 `Notion_auto`（約 150 分鐘/月），距上限 2,000 分鐘仍有大量餘裕。
 
 ### 16. Gemini 2.5 系列為 reasoning 模型，預設 thinking 吃光 output token

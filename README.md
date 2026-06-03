@@ -1,4 +1,4 @@
-# Cow — 比特幣投資戰情室 v3.3
+# Cow — 比特幣投資戰情室 v3.5
 
 > 比特幣多週期量化分析工具，整合技術指標、鏈上數據、期權與波段策略。
 
@@ -14,7 +14,8 @@
 | 2 | 🌊 波段狙擊 | Antigravity v4.1 進出場信號（EMA20+SMA200+RSI+MACD+ADX 五合一過濾）、**2x3 條件監控儀表板**、動態策略建議、自訂防守線（SMA50/EMA20/SMA200）、OI 未平倉量、Kelly 倉位計算機 |
 | 3 | 💰 雙幣理財 | Black-Scholes APY 試算、行權價梯形視覺化、Delta 風險估算、動態無風險利率 |
 | 4 | ⏳ 時光機回測 | 自訂區間波段 PnL（可調參數滑桿 + 🔬 最佳參數搜尋，並行加速）、雙幣滾倉回測、牛市雷達準確度驗證（含 MA50 視覺化）、**📈 多週期回測（日線宏觀過濾 + 15m 精確進場，防先視偏誤）**、**🚀 Walk-Forward 無先視回測（逐日推進，可選簡化或六層進階出場機制）** |
-| 🤖 | 決策速報推播 | 透過 GitHub Actions 每日雙時段 (09:23, 15:39) 自動抓取大盤與指標數據，並發送高質感 Flex Message 視覺化決策面板至 LINE |
+| 📰 | 加密新聞輿情 | Dashboard 速覽下方：CryptoCompare/Cointelegraph/CoinDesk/Decrypt 多來源聚合去重、**Gemini 中文化標題＋小結**、AI 情緒燈號、分類 filter、CoinGecko 24h 熱搜 |
+| 🤖 | 決策速報推播 | 透過 GitHub Actions 每日三時段 (台灣 **08:23 / 13:39 / 18:27**) 自動抓取大盤與指標數據，發送高質感 Flex Message 決策面板至 LINE（含**新聞輿情區塊**）|
 
 ---
 
@@ -38,6 +39,7 @@ core/
                       AHR999 使用 Giovanni Santostasi 冪律：10^(-17.01467 + 5.84×log10(days))
   bear_bottom.py      熊市底部 8 大指標評分引擎 + -100~+100 牛熊複合評分（含 breakdown 分解）
   season_forecast.py  四季理論目標價預測引擎（減半週期判斷、歷史倍數遞減模型、冪律走廊）
+  gemini_client.py    Gemini REST API 輕量封裝（關閉 thinking budget 省 token、x-goog-api-key header，供新聞中文化）
 
 service/
   local_db_reader.py  讀取本地 SQLite（15m 原始 / 重採樣日線），TTL 快取，全面 UTC 時區
@@ -49,6 +51,9 @@ service/
                       各欄位追蹤 price_source / funding_rate_source / tvl_source
   macro_data.py       宏觀數據（FRED M2/CPI、Yahoo 日圓、量子威脅）+ 全面靜態備援 _FALLBACK 字典 (v1.1)
   mock.py             代理指標與模擬數據（API 失敗降級備援）
+  overview.py         今日大盤速覽指標降級解析（主流程與 fragment 共用 helper，含 funding/tvl is_real 旗標）
+  news.py             加密新聞多來源聚合去重（CryptoCompare/Cointelegraph/CoinDesk/Decrypt + CoinGecko 24h 熱搜）
+  news_i18n.py        Gemini 批次中文化（標題＋小結＋情緒）+ db/news_i18n.json 持久化快取（翻過不重翻）
 
 strategy/
   swing.py              Antigravity v4.1 波段策略引擎（防先視偏誤、日頻 Sharpe、多週期回測引擎）
@@ -57,7 +62,7 @@ strategy/
   notifier.py           LINE Bot 主動推播通知模組
 
 scripts/
-  daily_line_notify.py     GitHub Actions 雲端自動推播腳本（Kraken 備援，09:23 / 15:39 台灣時間）
+  daily_line_notify.py     GitHub Actions 雲端自動推播腳本（Kraken 備援，台灣 08:23 / 13:39 / 18:27 三時段，含新聞輿情）
   test_flex_message.py     本地端測試 LINE Flex Message 排版的除錯腳本
   test_compare_backtest.py 驗證腳本：對相同參數同時執行 swing.py 與 Walk-Forward，確認結果量級一致
 
@@ -72,6 +77,7 @@ tests/
   test_bear_bottom.py   熊市底部指標單元測試
   test_dual_invest.py   雙幣期權策略單元測試
   test_market_data.py   數據來源與備援鏈單元測試
+  test_news.py          新聞聚合/去重/情緒彙總/中文化降級單元測試（monkeypatch 不打真 API）
 ```
 
 ---
@@ -228,11 +234,12 @@ tests/
 # 1. Fork 本 Repo 並在 GitHub 設定 Secrets
 #    LINE_CHANNEL_ACCESS_TOKEN=<你的 Token>
 #    LINE_USER_ID=<你的 User ID>
+#    GOOGLE_API_KEY=<Gemini 金鑰，供新聞中文化；不設則推播新聞顯示英文>
 
 # 2. 本地測試 Flex Message 排版
 python scripts/test_flex_message.py
 
-# 3. 推送後 GitHub Actions 將在每日 09:23 / 15:39（台灣時間）自動發送
+# 3. 推送後 GitHub Actions 將在每日 08:23 / 13:39 / 18:27（台灣時間）三時段自動發送
 ```
 
 ---
@@ -269,15 +276,16 @@ streamlit run app.py
 
 本功能將每日市場快照升級為「決策輔助面板」，透過 GitHub Actions 定時觸發，無需本機常駐即可自動發送高質感 LINE Flex Message。
 
-**三時段排程：** 已在 `.github/workflows/daily_line_notify.yml` 中設定每日自動執行：
-- UTC 01:23（台灣時間 **09:23**）— 早盤決策參考
-- UTC 07:39（台灣時間 **15:39**）— 午後盤勢確認
-- UTC 13:27（台灣時間 **21:27**）— 晚間收盤總結
+**三時段排程：** 已在 `.github/workflows/daily_line_notify.yml` 中設定每日自動執行（沿用畸零分鐘避開免費版 Actions 整點壅塞、調早避免延遲拖到深夜）：
+- UTC 00:23（台灣時間 **08:23**）— 早盤決策參考
+- UTC 05:39（台灣時間 **13:39**）— 午後盤勢確認
+- UTC 10:27（台灣時間 **18:27**）— 傍晚收盤總結
 
 **設定步驟：**
 1. GitHub Repo → **Settings → Secrets and variables → Actions**
-2. 新增 `LINE_CHANNEL_ACCESS_TOKEN` 與 `LINE_USER_ID`。
+2. 新增 `LINE_CHANNEL_ACCESS_TOKEN`、`LINE_USER_ID`，以及 `GOOGLE_API_KEY`（新聞中文化；未設則推播新聞顯示英文標題）。
 3. 推送後 Actions 將依排程自動執行，亦可手動觸發 `workflow_dispatch` 測試。
+4. **Streamlit Cloud** 網頁版若要中文新聞，另需在 App settings → Secrets 加 `GOOGLE_API_KEY = "..."`。
 
 **本地端除錯：**
 ```bash
@@ -317,6 +325,14 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 ---
 
 ## 版本紀錄
+
+### v3.5 (2026-06-03)
+- **feat(news)**: Dashboard 速覽下方新增「📰 加密貨幣熱門新聞」區塊：`service/news.py` 多來源聚合去重（CryptoCompare News + Cointelegraph/CoinDesk/Decrypt RSS），CoinGecko `/search/trending` 24h 熱搜取代被 IP 封鎖的 Reddit。
+- **feat(news_i18n)**: `service/news_i18n.py` + `core/gemini_client.py` 以 Gemini 2.5-flash（關閉 thinking budget）批次翻譯標題、產生中文小結與情緒判定；`db/news_i18n.json` 持久化快取（翻過不重翻）+ `@st.cache_data(ttl=14400)` 4h + `NEWS_I18N_ENABLED` 總開關三層省 token（估約 US$0.3/月）。
+- **feat(app)**: 新聞區塊含情緒燈號（多空中性彙總）、分類 filter（BTC/ETH/DeFi/法規）、社群熱搜；情緒彙總抽 `summarize_sentiment` 供 UI 與推播共用。
+- **feat(notify)**: 每日 LINE 推播 Flex 新增「📰 加密新聞輿情」區塊（情緒燈號 + 8 則中文標題）；排程調早為台灣 **08:23 / 13:39 / 18:27**（沿用畸零分鐘避開整點壅塞）。
+- **refactor(overview)**: 速覽降級邏輯抽 `service/overview.py::resolve_overview_metrics`，主流程與 fragment 共用；新增 funding/tvl `is_real` 旗標，資料暫缺時顯示「—」不再給假數字。AHR999 標註冪律 (Santostasi) 來源。
+- **test**: 新增 `tests/test_news.py`（9 passed，全 monkeypatch 不打真 API）。
 
 ### v3.4 (2026-05-04)
 - **fix(notify)**: `scripts/daily_line_notify.py` 修復礦工電費指標靜默消失問題：廢棄的 `blockchain.info/q/hashrate`（404）改用 `api.blockchain.info/stats` 的 `hash_rate` 欄位，並新增 `mempool.space/api/v1/mining/hashrate/1d` 為備援來源（H/s → TH/s 換算）。
