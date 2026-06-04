@@ -7,18 +7,10 @@ v2: 整合原 JustVibe 四季日報內容（季節徽章 + 底部支撐三指標
 
 import os
 import sys
-import math
 import urllib3
 import requests
 from core.http_client import safe_get, safe_post
-import pandas as pd
 from datetime import datetime, timezone
-
-# ── 底部支撐參考的常數（自原 JustVibe btc_seasons.py 移植）─────────────────
-BTC_GENESIS          = datetime(2009, 1, 3, tzinfo=timezone.utc)
-MINER_EFFICIENCY_JTH = 30      # J/TH，全網平均效率（含舊機台保守估計）
-ELECTRICITY_RATE     = 0.055   # USD/kWh
-BTC_PER_DAY          = 450     # 2024 減半後每日礦獎（3.125 × 144 blocks）
 
 SEASON_BG_COLOR = {
     "spring": "#27AE60",
@@ -70,64 +62,8 @@ from service.onchain import _fetch_funding_rate_history
 from core.indicators import calculate_technical_indicators, calculate_ahr999
 from core.bear_bottom import calculate_bear_bottom_indicators, calculate_market_cycle_score
 from core.season_forecast import forecast_price, STATS as _SEASON_STATS
-
-
-def _miner_cost_from_ths(hashrate_ths: float) -> float:
-    """將算力（TH/s）換算成礦工電費盈虧平衡價（USD/BTC）。"""
-    cost_per_day = hashrate_ths * MINER_EFFICIENCY_JTH / 1000 * 24 * ELECTRICITY_RATE
-    return cost_per_day / BTC_PER_DAY
-
-
-def fetch_floor_indicators(now: datetime, btc_df: pd.DataFrame) -> dict:
-    """
-    計算三項底部支撐參考指標（任一失敗均不影響其他）。
-      1. power_law_floor : Giovanni Santostasi 冪律下界（純數學）
-      2. ma200w          : 200 週均線（從 btc_df 日線重採樣為週收盤後 SMA200）
-      3. miner_cost      : 礦工電費盈虧平衡價（blockchain.info 即時算力）
-    """
-    result = {"ma200w": None, "power_law_floor": None, "miner_cost": None}
-
-    # ── 1. 冪律模型下界（中位數 × 10^-0.45，對應 1σ 下方）
-    days_genesis = (now - BTC_GENESIS).days
-    if days_genesis > 0:
-        pl_median = 10 ** (-17.01467 + 5.84 * math.log10(days_genesis))
-        result["power_law_floor"] = pl_median * (10 ** -0.45)
-
-    # ── 2. 200 週均線（直接由日線 btc_df 重採樣）
-    try:
-        if btc_df is not None and not btc_df.empty and "close" in btc_df.columns:
-            df_w = btc_df.copy()
-            if df_w.index.tz is not None:
-                df_w.index = df_w.index.tz_localize(None)
-            weekly = df_w["close"].resample("W").last().dropna()
-            if len(weekly) >= 200:
-                result["ma200w"] = float(weekly.tail(200).mean())
-    except Exception as e:
-        print(f"[WARN] 200w MA: {e}")
-
-    # ── 3. 礦工電費盈虧平衡價（blockchain.info stats → mempool.space 備援）
-    try:
-        resp = safe_get(
-            "https://api.blockchain.info/stats",
-            timeout=10, verify=SSL_VERIFY,
-        )
-        resp.raise_for_status()
-        hashrate_ghs = float(resp.json()["hash_rate"])  # GH/s
-        result["miner_cost"] = _miner_cost_from_ths(hashrate_ghs / 1000)
-    except Exception as e:
-        print(f"[WARN] Miner cost (blockchain.info): {e}")
-        try:
-            resp = safe_get(
-                "https://mempool.space/api/v1/mining/hashrate/1d",
-                timeout=10, verify=SSL_VERIFY,
-            )
-            resp.raise_for_status()
-            hashrate_ths = float(resp.json()["currentHashrate"]) / 1e12  # H/s → TH/s
-            result["miner_cost"] = _miner_cost_from_ths(hashrate_ths)
-        except Exception as e2:
-            print(f"[WARN] Miner cost (mempool.space): {e2}")
-
-    return result
+from core.bottom_floors import compute_all_bottom_estimates
+from service.bottom_metrics import get_latest_bottom_metrics, fetch_hashrate_history_ths
 
 
 def _get_cycle_meta(score: int):
@@ -244,12 +180,21 @@ def get_decision_data():
                 if cycle_ath > 0:
                     summary["from_high_pct"] = (current_price - cycle_ath) / cycle_ath * 100
 
-            # 底部支撐三指標
+            # ── 最低價綜合評估（單一真實來源 core/bottom_floors，dashboard 共用）──
             now_utc = datetime.now(timezone.utc)
-            floor_data = fetch_floor_indicators(now_utc, btc_df)
-            summary["floor_ma200w"]    = floor_data["ma200w"]
-            summary["floor_power_law"] = floor_data["power_law_floor"]
-            summary["floor_miner_cost"] = floor_data["miner_cost"]
+            hr_hist = fetch_hashrate_history_ths()
+            latest_hash = hr_hist[max(hr_hist)] if hr_hist else None
+            bottom_eval = compute_all_bottom_estimates(
+                current_price, df=btc_df, now=now_utc,
+                hashrate_ths=latest_hash,
+                onchain=get_latest_bottom_metrics(),
+            )
+            summary["bottom_eval"] = bottom_eval
+            # 舊 floor 欄位由同源 bottom_eval 回填（向後相容，避免兩邊漂移）
+            _by = {e["key"]: e["value"] for e in bottom_eval["estimates"]}
+            summary["floor_ma200w"]    = _by.get("ma200w")
+            summary["floor_power_law"] = _by.get("power_law")
+            summary["floor_miner_cost"] = bottom_eval.get("miner_elec")
 
             # 分數計算
             score = calculate_market_cycle_score(curr)

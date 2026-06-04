@@ -114,6 +114,40 @@ def _parse_rss(content: bytes, source_name: str, limit: int) -> List[NewsItem]:
 
 
 # ──────────────────────────────────────────────────────────────────────────
+# 比特幣 / 泛加密 過濾（使用者只要 BTC 或加密貨幣大盤新聞，不要山寨幣個別新聞）
+# ──────────────────────────────────────────────────────────────────────────
+# 比特幣關鍵字（含則保留，前提是未提任何山寨幣）
+_BTC_TERMS = ("bitcoin", "btc", "satoshi", "₿", "比特幣", "中本聰")
+# 泛加密/總經關鍵字（與大盤相關、非單一山寨幣 → 保留）
+_GENERAL_CRYPTO_TERMS = (
+    "crypto", "cryptocurrenc", "digital asset", "blockchain", "stablecoin",
+    "regulat", "securities", "u.s. sec", "etf", "federal reserve", " fed ", "macro",
+    "interest rate", "treasury", "spot etf", "加密", "虛擬貨幣", "穩定幣", "監管",
+    "升息", "降息", "聯準會", "比特幣現貨", "數位資產", "區塊鏈",
+)
+# 山寨幣關鍵字（**只要提到就剔除**，即使同時提 BTC）——使用者只要純比特幣/泛加密大盤新聞。
+# 注意：Bitcoin Cash / BCH 為山寨幣，須先歸類於此，且其 "bitcoin" 字串不得誤判為比特幣。
+_ALTCOIN_TERMS = (
+    "bitcoin cash", "bch", "ethereum", "ether ", "solana", "xrp", "ripple",
+    "cardano", "dogecoin", "shiba", "bnb", "binance coin", "tron", "polkadot",
+    "avalanche", "avax", "litecoin", "chainlink", "polygon", "toncoin", "pepe",
+    "aptos", "sui ", "near protocol", "uniswap", "比特幣現金", "以太坊", "以太幣",
+    "瑞波", "狗狗幣", "萊特幣", "索拉納",
+)
+
+
+def _is_btc_crypto(item: "NewsItem") -> bool:
+    """嚴格過濾：只要提到任一山寨幣即剔除（含 Bitcoin Cash）；其餘保留 BTC / 泛加密大盤新聞。"""
+    text = f"{item.title} {item.raw_summary} {' '.join(item.tags)}".lower()
+    if any(t in text for t in _ALTCOIN_TERMS):
+        return False            # 提到山寨幣 → 一律剔除（即使也提 BTC）
+    # 把 "bitcoin cash" 已在上面剔除；此處 bitcoin 必為真比特幣
+    if any(t in text for t in _BTC_TERMS):
+        return True
+    return any(t in text for t in _GENERAL_CRYPTO_TERMS)
+
+
+# ──────────────────────────────────────────────────────────────────────────
 # 各來源 fetcher
 # ──────────────────────────────────────────────────────────────────────────
 def _fetch_cryptocompare(limit: int) -> List[NewsItem]:
@@ -230,7 +264,8 @@ def fetch_crypto_news(limit: int = 8) -> NewsFeed:
     buckets: List[List[NewsItem]] = []
     for fetch in _SOURCES:
         try:
-            got = [it for it in fetch() if it.title and it.url]
+            # 只保留 BTC / 泛加密大盤新聞，剔除山寨幣個別新聞
+            got = [it for it in fetch() if it.title and it.url and _is_btc_crypto(it)]
             if got:
                 buckets.append(got)
         except Exception:

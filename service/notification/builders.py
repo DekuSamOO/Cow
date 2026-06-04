@@ -246,6 +246,65 @@ def _build_news_box(s):
     }
 
 
+_KIND_COLOR = {
+    "season":  "#8E44AD",   # 四季論趨勢底（紫）
+    "floor":   "#2980B9",   # 硬地板（藍）
+    "anchor":  "#16A085",   # 錨點（青）
+    "warning": "#E67E22",   # 警示線（橙）
+}
+
+
+def _build_bottom_eval_box(s):
+    """最低價綜合評估 — 單一 block，整合四季論趨勢底 + 4 floor + on-chain 錨 + 技術錨。
+    資料源 core/bottom_floors（與 dashboard 同源）。無 bottom_eval 時回 None。"""
+    be = s.get("bottom_eval")
+    if not be or not be.get("estimates"):
+        return None
+    cp = be.get("current_price") or s.get("current_price", 0)
+
+    header = [
+        {"type": "text", "text": "📉 最低價綜合評估", "color": "#2C3E50", "size": "sm", "weight": "bold"},
+    ]
+    if be.get("final_low"):
+        header.append({
+            "type": "box", "layout": "horizontal", "margin": "sm", "contents": [
+                {"type": "text", "text": "最終最低價估計", "color": "#555555", "size": "xs", "flex": 5},
+                {"type": "text", "text": f"${be['final_low']:,.0f}", "color": "#C0392B",
+                 "size": "md", "weight": "bold", "align": "end", "flex": 5},
+            ],
+        })
+        basis = be.get("final_low_basis") or ""
+        ens = be.get("ensemble_low")
+        sub = f"依據 {basis}" + (f"｜多錨中位數 ${ens:,.0f}" if ens else "")
+        header.append({"type": "text", "text": sub, "color": "#888888", "size": "xxs", "margin": "xs", "wrap": True})
+
+    rows = []
+    for e in sorted(be["estimates"], key=lambda x: -x["value"]):
+        v = e["value"]
+        buf = (cp - v) / v * 100 if v else 0
+        bcolor = "#27AE60" if buf >= 0 else "#E74C3C"
+        rows.append({
+            "type": "box", "layout": "horizontal", "margin": "xs", "contents": [
+                {"type": "text", "text": e["label"], "color": _KIND_COLOR.get(e["kind"], "#555555"),
+                 "size": "xxs", "flex": 5},
+                {"type": "text", "text": f"${v:,.0f}", "color": "#2C3E50", "size": "xxs",
+                 "weight": "bold", "align": "end", "flex": 4},
+                {"type": "text", "text": f"{'+' if buf >= 0 else ''}{buf:.0f}%", "color": bcolor,
+                 "size": "xxs", "align": "end", "flex": 3},
+            ],
+        })
+
+    footer = {"type": "text",
+              "text": "藍=硬地板  紫=四季論趨勢底  青=鏈上/技術錨  橙=警示(常被跌破)　右欄=現價距該價",
+              "color": "#AAAAAA", "size": "xxs", "margin": "sm", "wrap": True}
+
+    return {
+        "type": "box", "layout": "vertical", "margin": "lg",
+        "backgroundColor": "#F0F4FF", "cornerRadius": "8px", "paddingAll": "md",
+        "contents": header + rows + [footer],
+    }
+
+
 def build_flex_message(s):
     date_str = datetime.now().strftime('%Y-%m-%d %H:%M')
     left_flex = max(1, min(99, int((s["cycle_score"] + 100) / 2)))
@@ -260,12 +319,18 @@ def build_flex_message(s):
         body_contents.append(season_box)
 
     body_contents.append(_build_score_box(s, left_flex))
-    body_contents.append(_build_forecast_box(s))
     body_contents.append(_build_radar_box(s))
 
-    floor_box = _build_floor_support_box(s)
-    if floor_box:
-        body_contents.append(floor_box)
+    # 最低價綜合評估（單一 block，整合四季論趨勢底 + 4 floor + on-chain/技術錨）
+    bottom_box = _build_bottom_eval_box(s)
+    if bottom_box:
+        body_contents.append(bottom_box)
+    else:
+        # 向後相容：無 bottom_eval（舊呼叫端）時退回原兩個分離 box
+        body_contents.append(_build_forecast_box(s))
+        floor_box = _build_floor_support_box(s)
+        if floor_box:
+            body_contents.append(floor_box)
 
     news_box = _build_news_box(s)
     if news_box:

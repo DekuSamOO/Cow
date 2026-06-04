@@ -36,6 +36,8 @@ from core.season_forecast import (
     get_power_law_forecast,
     CYCLE_HISTORY,
 )
+from core.bottom_floors import compute_all_bottom_estimates
+from service.bottom_metrics import get_latest_bottom_metrics, fetch_hashrate_history_ths
 from handler.components.macro_utils import (
     _score_meta,
     _bear_score_meta,
@@ -613,6 +615,53 @@ def render(btc, chart_df, tvl_hist, stable_hist, fund_hist, curr, dxy, funding_r
             </div>""", unsafe_allow_html=True)
         with st.expander('📖 預測邏輯說明', expanded=False):
             st.info(fc['rationale'])
+
+        # ── D2.5 底部支撐綜合評估（與每日 LINE 推播同源 core/bottom_floors）──
+        st.markdown('#### D2.5 🛡️ 底部支撐綜合評估')
+        st.caption('整合四季論趨勢底 + 200週均線/冪律/礦工成本 + 鏈上錨（Realized/Balanced/CVDD）+ 技術錨（Mayer/AHR999），與每日 LINE 推播同源。')
+        try:
+            _hr = fetch_hashrate_history_ths()
+            _lh = _hr[max(_hr)] if _hr else None
+            be = compute_all_bottom_estimates(current_price, df=btc, hashrate_ths=_lh,
+                                              onchain=get_latest_bottom_metrics())
+            _kc = {'season': '#b388ff', 'floor': '#42a5f5', 'anchor': '#26a69a', 'warning': '#ff9800'}
+            mcol1, mcol2 = st.columns(2)
+            with mcol1:
+                fl = be.get('final_low')
+                st.markdown(f"""<div style="background:#1a1a2e;border:2px solid #ef5350;border-radius:10px;padding:14px;text-align:center;">
+                    <div style="color:#888;font-size:0.8rem;">最終最低價估計</div>
+                    <div style="color:#ef5350;font-size:1.8rem;font-weight:800;">${fl:,.0f}</div>
+                    <div style="color:#666;font-size:0.72rem;">依據 {be.get('final_low_basis') or '—'}</div>
+                </div>""" if fl else '—', unsafe_allow_html=True)
+            with mcol2:
+                en = be.get('ensemble_low')
+                st.markdown(f"""<div style="background:#1a1a2e;border:1px solid #66bb6a;border-radius:10px;padding:14px;text-align:center;">
+                    <div style="color:#888;font-size:0.8rem;">多錨中位數（穩健中央）</div>
+                    <div style="color:#66bb6a;font-size:1.8rem;font-weight:800;">${en:,.0f}</div>
+                    <div style="color:#666;font-size:0.72rem;">強錨中位數</div>
+                </div>""" if en else '—', unsafe_allow_html=True)
+            _rows = ''
+            for e in sorted(be['estimates'], key=lambda x: -x['value']):
+                buf = (current_price - e['value']) / e['value'] * 100 if e['value'] else 0
+                bclr = '#66bb6a' if buf >= 0 else '#ef5350'
+                _rows += (f"<tr><td style='padding:4px 8px;color:{_kc.get(e['kind'],'#ccc')};'>{e['label']}</td>"
+                          f"<td style='padding:4px 8px;text-align:right;color:#fff;font-weight:600;'>${e['value']:,.0f}</td>"
+                          f"<td style='padding:4px 8px;text-align:right;color:{bclr};'>{'+' if buf>=0 else ''}{buf:.0f}%</td>"
+                          f"<td style='padding:4px 8px;color:#777;font-size:0.72rem;'>{e['note']}</td></tr>")
+            st.markdown(f"""<table style="width:100%;border-collapse:collapse;font-size:0.85rem;margin-top:8px;">
+                <tr style="color:#aaa;border-bottom:1px solid #444;">
+                  <th style="text-align:left;padding:4px 8px;">算法</th><th style="text-align:right;padding:4px 8px;">最低價</th>
+                  <th style="text-align:right;padding:4px 8px;">現價距此</th><th style="text-align:left;padding:4px 8px;">說明</th></tr>
+                {_rows}</table>
+                <div style="color:#777;font-size:0.72rem;margin-top:6px;">
+                紫=四季論趨勢底　藍=硬地板　青=鏈上/技術錨　橙=警示(牛末常被跌破至~0.67×)。
+                final_low = max(四季論趨勢底, 礦工電費硬地板)——歷史三輪熊底從未跌破純電費。</div>""",
+                unsafe_allow_html=True)
+            if be.get('asof'):
+                st.caption(f"鏈上資料 as of {be['asof']}（bitcoin-data.com）")
+        except Exception as e:
+            st.caption(f'底部綜合評估暫不可用：{type(e).__name__}: {e}')
+
         st.markdown('#### D3. 目標價走勢圖（過去2年 + 未來12個月）')
         ss_fc_key = f'tab_mc_fig_fc_{bb_cache_key}'
         if st.session_state.get('tab_mc_bb_key') == bb_cache_key and ss_fc_key in st.session_state:

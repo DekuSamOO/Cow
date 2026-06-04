@@ -1,8 +1,12 @@
 """
-core/season_forecast.py  ·  v1.3
+core/season_forecast.py  ·  v1.4
 四季理論目標價預測系統
 ─────────────────────────────────────────────────────────────────────
 版次記錄:
+  v1.4  熊底 bottom_mult 改「週期趨勢外插」(extrapolate_bottom_mult) 取代 median/p25——
+        bottom_mult 三輪 0.131→0.157→0.225 單調遞增（底部漸淺），舊 median 把當前輪
+        預測過深。線性迴歸外插（留一法誤差 -19% 優於 median -30%）。與峰值側
+        _apply_diminishing_returns 對稱。bottom_floors.py 再以礦工電費/on-chain 錨地板化。
   v1.0  初版，純時間季節（減半後月份判斷）
   v1.1  修正 add_vline 字串 x 座標 TypeError
   v1.2  新增市場狀態校正層（analyze_market_state / _derive_real_season）
@@ -122,6 +126,46 @@ STATS = {
     "peak_days_median":   int(np.median(_peak_days_list)),
     "bottom_days_median": int(np.median(_bottom_days_list)),
 }
+
+
+# ── bottom_mult 週期趨勢外插（v1.4）──────────────────────────────────
+# 背景：bottom_mult 三輪 [0.131, 0.157, 0.225] 單調遞增（每輪底部漸淺、市場成熟）。
+# 舊版用 median/p25（把三點當無序樣本）會把當前輪底部預測得「太深」——峰值側早有
+# _apply_diminishing_returns 做週期遞減，熊底側卻無對稱的趨勢修正。此處補上：對
+# cycle_index 做線性迴歸外插，得當前輪的 bottom_mult 點估與上下band。
+# n=3 樣本脆弱，band 用固定相對寬度涵蓋模型不確定。
+_BOTTOM_TREND_BAND_REL = 0.15   # 點估 ±15% 為深/淺目標
+_BOTTOM_MULT_FLOOR     = 0.08   # 外插下限保護（避免極端外插）
+_BOTTOM_MULT_CAP       = 0.50   # 外插上限保護
+
+
+def _fit_bottom_mult_trend():
+    """對已完成週期的 bottom_mult ~ cycle_idx 做最小平方線性迴歸。回傳 (slope, intercept)。"""
+    xs = list(range(len(_bottom_mults)))   # 0,1,2,...（已完成週期序）
+    ys = _bottom_mults
+    n  = len(xs)
+    mx = sum(xs) / n
+    my = sum(ys) / n
+    denom = sum((x - mx) ** 2 for x in xs) or 1.0
+    slope = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / denom
+    intercept = my - slope * mx
+    return slope, intercept
+
+
+_BM_SLOPE, _BM_INTERCEPT = _fit_bottom_mult_trend()
+
+
+def extrapolate_bottom_mult(cycle_idx: int):
+    """
+    回傳當前週期（cycle_idx，對齊 HALVING_DATES index）外插的 bottom_mult：
+      (point, deep, shallow) — 點估 / 最深(悲觀) / 最淺(樂觀)
+    cycle_idx 對應「第 N 個已完成週期序」用 idx 本身（第4輪 idx=3 即外插序 3）。
+    """
+    raw = _BM_INTERCEPT + _BM_SLOPE * cycle_idx
+    point = min(max(raw, _BOTTOM_MULT_FLOOR), _BOTTOM_MULT_CAP)
+    deep    = max(point * (1 - _BOTTOM_TREND_BAND_REL), _BOTTOM_MULT_FLOOR)
+    shallow = min(point * (1 + _BOTTOM_TREND_BAND_REL), _BOTTOM_MULT_CAP)
+    return point, deep, shallow
 
 
 def _tz_safe_timestamp(dt: datetime) -> pd.Timestamp:
@@ -278,6 +322,74 @@ def _apply_diminishing_returns(base_mult: float, cycle_index: int) -> float:
     return base_mult / (diminish_factor ** delta)
 
 
+def project_bear_bottom(current_price: float, df: Optional[pd.DataFrame] = None,
+                        as_of: Optional[datetime] = None) -> Optional[Dict[str, Any]]:
+    """
+    熊市底部「原始投影」——不受當前季節影響，永遠回傳「若形成熊底會落在哪」。
+    為 forecast_price（熊市分支）與 bottom_floors 的**單一真實來源**，杜絕兩邊漂移。
+
+    回傳 dict:
+      ath_ref / ath_ref_label
+      bottom_mult_point / _deep / _shallow
+      bottom_mid / bottom_low / bottom_high   （= ath_ref × mult，未對現價截斷的原始投影）
+      current_cycle_idx / drawdown_from_ath / is_above_sma200 / sma200
+    """
+    if as_of is None:
+        as_of = datetime.utcnow()
+    season_info = get_current_season(as_of)
+    if season_info is None:
+        return None
+
+    current_halving   = season_info["halving_date"]
+    current_cycle_idx = HALVING_DATES.index(current_halving)
+
+    prev_ath = None
+    if df is not None and not df.empty and "close" in df.columns:
+        df_naive   = _strip_tz(df)
+        halving_ts = pd.Timestamp(current_halving)
+        if current_cycle_idx > 0:
+            prev_halving = HALVING_DATES[current_cycle_idx - 1]
+            mask_prev = (df_naive.index >= pd.Timestamp(prev_halving)) & (df_naive.index < halving_ts)
+            if mask_prev.any():
+                prev_ath = float(df_naive.loc[mask_prev, "close"].max())
+
+    known_cycle = next((c for c in CYCLE_HISTORY if c["halving"] == current_halving), None)
+    known_cycle_ath = known_cycle["ath_price"] if known_cycle and known_cycle["ath_price"] else None
+    if prev_ath is None:
+        prev_ath = CYCLE_HISTORY[-2]["ath_price"] if len(CYCLE_HISTORY) >= 2 else 68789.0
+
+    market_state = analyze_market_state(current_price, df, current_halving)
+    cycle_ath_ms = market_state.get("cycle_ath", 0)
+    cycle_candidates = [v for v in (known_cycle_ath, cycle_ath_ms) if v]
+    best_cycle_ath = max(cycle_candidates) if cycle_candidates else 0
+
+    if best_cycle_ath and best_cycle_ath > current_price * 1.05:
+        ath_ref = best_cycle_ath
+        if cycle_ath_ms and cycle_ath_ms >= (known_cycle_ath or 0):
+            ath_ref_label = f"當前週期實算 ATH ${cycle_ath_ms:,.0f}"
+        else:
+            ath_ref_label = f"當前週期已知 ATH ${known_cycle_ath:,.0f}"
+    else:
+        ath_ref       = prev_ath
+        ath_ref_label = f"前一週期 ATH ${prev_ath:,.0f}（當前週期ATH尚不明確）"
+
+    bm_point, bm_deep, bm_shallow = extrapolate_bottom_mult(current_cycle_idx)
+    return {
+        "ath_ref":             ath_ref,
+        "ath_ref_label":       ath_ref_label,
+        "bottom_mult_point":   bm_point,
+        "bottom_mult_deep":    bm_deep,
+        "bottom_mult_shallow": bm_shallow,
+        "bottom_mid":          ath_ref * bm_point,
+        "bottom_low":          ath_ref * bm_deep,      # 跌更深（悲觀）
+        "bottom_high":         ath_ref * bm_shallow,   # 跌較淺（樂觀）
+        "current_cycle_idx":   current_cycle_idx,
+        "drawdown_from_ath":   market_state["drawdown_from_ath"],
+        "is_above_sma200":     market_state["is_above_sma200"],
+        "sma200":              market_state["sma200"],
+    }
+
+
 def forecast_price(current_price: float, df: Optional[pd.DataFrame] = None, as_of: Optional[datetime] = None):
     """
     主要預測函數。整合時間季節 + 真實市場狀態，預測未來12個月目標價。
@@ -320,11 +432,8 @@ def forecast_price(current_price: float, df: Optional[pd.DataFrame] = None, as_o
             if mask_prev.any():
                 prev_ath = float(df_naive.loc[mask_prev, "close"].max())
 
-    # 已知第4週期 ATH 備援：若 prev_ath 取到的是前一週期，但當前週期已有更高的 ATH
-    # cycle_history 中若有當前週期的已知 ATH，優先採用
-    known_cycle = next((c for c in CYCLE_HISTORY if c["halving"] == current_halving), None)
-    known_cycle_ath = known_cycle["ath_price"] if known_cycle and known_cycle["ath_price"] else None
-
+    # v1.4：當前週期 ATH 解析已內聚於 project_bear_bottom（熊市分支單一來源）；
+    # forecast_price 僅保留 prev_ath（牛市分支 halving_price + 回傳 prev_ath 用）。
     if prev_ath is None:
         prev_ath = CYCLE_HISTORY[-2]["ath_price"] if len(CYCLE_HISTORY) >= 2 else 68789.0
 
@@ -392,27 +501,15 @@ def forecast_price(current_price: float, df: Optional[pd.DataFrame] = None, as_o
         # ═══ 熊市預測 ═══
         forecast_type = "bear_bottom"
 
-        # ▸ 取「CYCLE_HISTORY 寫死值」與「df 實算 cycle_ath」兩者較大者
-        #   原本順序是先 CYCLE_HISTORY 再 df → 寫死值過時時會偏低（如本輪 2025-10-06
-        #   創高後，CYCLE_HISTORY 仍停在 2025-01-20 的 $108,268）。
-        # ▸ 兩者皆不顯著高於現價時，退回前一週期 ATH。
-        cycle_ath_ms = market_state.get("cycle_ath", 0)
-        cycle_candidates = [v for v in (known_cycle_ath, cycle_ath_ms) if v]
-        best_cycle_ath = max(cycle_candidates) if cycle_candidates else 0
-
-        if best_cycle_ath and best_cycle_ath > current_price * 1.05:
-            ath_ref = best_cycle_ath
-            if cycle_ath_ms and cycle_ath_ms >= (known_cycle_ath or 0):
-                ath_ref_label = f"當前週期實算 ATH ${cycle_ath_ms:,.0f}"
-            else:
-                ath_ref_label = f"當前週期已知 ATH ${known_cycle_ath:,.0f}"
-        else:
-            ath_ref       = prev_ath
-            ath_ref_label = f"前一週期 ATH ${prev_ath:,.0f}（當前週期ATH尚不明確）"
-
-        bottom_med = ath_ref * STATS["bottom_mult_median"]  # 中位數底部
-        bottom_p25 = ath_ref * STATS["bottom_mult_p25"]     # 跌更深（悲觀）
-        bottom_p75 = ath_ref * STATS["bottom_mult_p75"]     # 跌較淺（樂觀）
+        # v1.4：熊底投影改由 project_bear_bottom 單一真實來源產出（ath_ref 解析 +
+        #       bottom_mult 週期趨勢外插），forecast_price 與 bottom_floors 共用、杜絕漂移。
+        bb            = project_bear_bottom(current_price, df, as_of)
+        ath_ref       = bb["ath_ref"]
+        ath_ref_label = bb["ath_ref_label"]
+        bm_point      = bb["bottom_mult_point"]
+        bottom_med = bb["bottom_mid"]   # 趨勢點估
+        bottom_p25 = bb["bottom_low"]   # 跌更深（悲觀）
+        bottom_p75 = bb["bottom_high"]  # 跌較淺（樂觀）
 
         # 熊市：min 截斷（底部不可能高於現價）
         target_median = min(bottom_med, current_price)
@@ -431,7 +528,8 @@ def forecast_price(current_price: float, df: Optional[pd.DataFrame] = None, as_o
             f"{'跌破' if not market_state['is_above_sma200'] else '站上'} 200日均線 "
             f"(${market_state['sma200']:,.0f})\n"
             f"參考基準: {ath_ref_label}\n"
-            f"歷史底部跌幅中位數 {(1-STATS['bottom_mult_median'])*100:.0f}%（從ATH計）\n"
+            f"底部倍數（週期趨勢外插）: {bm_point:.3f}（跌 {(1-bm_point)*100:.0f}%）"
+            f"｜歷史三輪 13.1%→15.7%→22.5% 遞增（底部漸淺）\n"
             f"預計熊市底部區間: ${target_low:,.0f} ~ ${target_high:,.0f}"
         )
 

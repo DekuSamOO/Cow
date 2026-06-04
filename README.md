@@ -38,7 +38,9 @@ core/
   indicators.py       技術指標 + AHR999 計算（純函數，無 Streamlit 依賴）
                       AHR999 使用 Giovanni Santostasi 冪律：10^(-17.01467 + 5.84×log10(days))
   bear_bottom.py      熊市底部 8 大指標評分引擎 + -100~+100 牛熊複合評分（含 breakdown 分解）
-  season_forecast.py  四季理論目標價預測引擎（減半週期判斷、歷史倍數遞減模型、冪律走廊）
+  season_forecast.py  四季理論目標價預測引擎（v1.4：熊底 bottom_mult 改週期趨勢外插，抽 project_bear_bottom 為熊市分支單一來源）
+  bottom_floors.py    最低價綜合評估「單一真實來源」compute_all_bottom_estimates（四季論趨勢底 + 4 floor + 鏈上錨 + 技術錨；LINE 推播與 dashboard 共用）
+  miner_cost.py       礦工成本純數學模型（btc_per_day 依減半切換、eff_jth 分段插值、電費盈虧/all-in 成本，無 IO 依賴）
   gemini_client.py    Gemini REST API 輕量封裝（關閉 thinking budget 省 token、x-goog-api-key header，供新聞中文化）
 
 service/
@@ -52,8 +54,9 @@ service/
   macro_data.py       宏觀數據（FRED M2/CPI、Yahoo 日圓、量子威脅）+ 全面靜態備援 _FALLBACK 字典 (v1.1)
   mock.py             代理指標與模擬數據（API 失敗降級備援）
   overview.py         今日大盤速覽指標降級解析（主流程與 fragment 共用 helper，含 funding/tvl is_real 旗標）
-  news.py             加密新聞多來源聚合去重（CryptoCompare/Cointelegraph/CoinDesk/Decrypt + CoinGecko 24h 熱搜）
+  news.py             加密新聞多來源聚合去重（CryptoCompare/Cointelegraph/CoinDesk/Decrypt + CoinGecko 24h 熱搜）；_is_btc_crypto 嚴格過濾，只留比特幣/加密大盤、剔除山寨幣個別新聞
   news_i18n.py        Gemini 批次中文化（標題＋小結＋情緒）+ db/news_i18n.json 持久化快取（翻過不重翻）
+  bottom_metrics.py   鏈上底部錨指標（bitcoin-data.com：Realized/Balanced/CVDD/MVRV-Z）+ blockchain.info 歷史算力；429 長退避 + 12h json 快取，純資料層
 
 strategy/
   swing.py              Antigravity v4.1 波段策略引擎（防先視偏誤、日頻 Sharpe、多週期回測引擎）
@@ -68,7 +71,7 @@ scripts/
 
 handler/
   layout.py          頁面設置、側欄（只保留日期區間，策略參數移至各 Tab）
-  tab_macro_compass.py Tab 1：長週期羅盤（雙 Gauge + 評分公式 expander + 三層框架 + 底部 8 指標 + 四季預測）
+  tab_macro_compass.py Tab 1：長週期羅盤（雙 Gauge + 評分公式 expander + 三層框架 + 底部 8 指標 + 四季預測 + D2.5 底部支撐綜合評估，與 LINE 推播同源 core/bottom_floors）
   tab_swing.py       Tab 2：波段狙擊（3 行式 K 線子圖、2x3 條件儀表板、動態建議、倉位計算）
   tab_dual_invest.py Tab 3：雙幣理財（行權價梯形視覺化）
   tab_backtest.py    Tab 4：時光機回測（5 個子 Tab：波段 PnL、雙幣滾倉、牛市雷達、多週期回測、Walk-Forward 無先視）
@@ -78,6 +81,8 @@ tests/
   test_dual_invest.py   雙幣期權策略單元測試
   test_market_data.py   數據來源與備援鏈單元測試
   test_news.py          新聞聚合/去重/情緒彙總/中文化降級單元測試（monkeypatch 不打真 API）
+  core/test_bottom_floors.py  最低價綜合評估離線單元測試（礦工成本/趨勢外插/final_low/ensemble，注入 onchain/hashrate，7 passed）
+  bottom_floors_backtest.py   最低價地板回測（2015/2018/2022 熊底 vs 礦工電費/all-in 驗證）
 ```
 
 ---
@@ -325,6 +330,17 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 ---
 
 ## 版本紀錄
+
+### v3.6 (2026-06-05)
+- **feat(core)**: 新增 `core/bottom_floors.py` 作為最低價評估「單一真實來源」`compute_all_bottom_estimates`，整合四季論趨勢底 + 4 個 floor（200週均線/冪律/礦工電費/礦工 all-in）+ 鏈上錨（Realized/Balanced/CVDD）+ 技術錨（Mayer 底/AHR999）；`final_low = max(四季論趨勢底, 礦工電費硬地板)`、`ensemble = 強錨中位數`。
+- **feat(core)**: 新增 `core/miner_cost.py` 礦工成本純數學模型（btc_per_day 依減半切換、eff_jth 分段插值、電費盈虧/all-in），供回測與即時評估共用。
+- **feat(season)**: `core/season_forecast.py` 升 v1.4——熊底 `bottom_mult` 改「週期趨勢外插」(`extrapolate_bottom_mult`) 取代 median/p25（三輪 13.1%→15.7%→22.5% 遞增、底部漸淺，留一法誤差 -19% 優於 median -30%）；抽 `project_bear_bottom()` 為 forecast_price 熊市分支與 bottom_floors 共用底部來源，杜絕兩邊漂移。
+- **feat(service)**: 新增 `service/bottom_metrics.py` 鏈上底部錨指標（bitcoin-data.com）+ blockchain.info 歷史算力；429 長退避 + 12h json 快取（`db/bottom_metrics_cache.json` / `db/hashrate_history.json`，皆為執行快取不入版控）。
+- **refactor(notify)**: `scripts/daily_line_notify.py` 改用 `compute_all_bottom_estimates` 為單一來源、回填舊 floor 欄位（向後相容），移除已不再使用的 `fetch_floor_indicators()` / `_miner_cost_from_ths()`。
+- **feat(notify)**: `service/notification/builders.py` 新增 `_build_bottom_eval_box` 合併「最低價綜合評估」單一 block；無 `bottom_eval` 時自動 fallback 舊兩 box（保留 `_build_forecast_box`/`_build_floor_support_box`）。
+- **feat(dashboard)**: `handler/tab_macro_compass.py` Tab 1 新增 D2.5「底部支撐綜合評估」區塊，與每日 LINE 推播同源。
+- **feat(news)**: `service/news.py` 新增 `_is_btc_crypto` 嚴格過濾——只保留比特幣/加密大盤新聞，提到任何山寨幣（含 Bitcoin Cash/BCH）即剔除。
+- **test**: 新增 `tests/core/test_bottom_floors.py`（7 passed，離線注入）與 `tests/bottom_floors_backtest.py` 回測驗證。
 
 ### v3.5 (2026-06-03)
 - **feat(news)**: Dashboard 速覽下方新增「📰 加密貨幣熱門新聞」區塊：`service/news.py` 多來源聚合去重（CryptoCompare News + Cointelegraph/CoinDesk/Decrypt RSS），CoinGecko `/search/trending` 24h 熱搜取代被 IP 封鎖的 Reddit。

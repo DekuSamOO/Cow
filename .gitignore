@@ -26,3 +26,7 @@ db/cache/
 # 新聞 Gemini 翻譯快取（執行時產生，勿追蹤）
 db/news_i18n.json
 
+# 底部錨指標 / 算力歷史快取（執行時產生，勿追蹤）
+db/bottom_metrics_cache.json
+db/hashrate_history.json
+

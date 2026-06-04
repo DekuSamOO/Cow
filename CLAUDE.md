@@ -42,6 +42,43 @@ db/              btcusdt_15m_YYYY.db（年度分割，雲端直接讀 repo 內 d
 
 ---
 
+## 最低價綜合評估（四季論底部優化，2026-06-04 新增）
+
+**單一真實來源 `core/bottom_floors.py` → `compute_all_bottom_estimates()`**，LINE 推播與
+dashboard（tab D2.5）**共用同一函式**，杜絕兩邊算法漂移。整合：
+
+- **四季論趨勢底**（`season_forecast.project_bear_bottom`，v1.4）：bottom_mult 改「週期趨勢
+  外插」(`extrapolate_bottom_mult`) 取代舊 median/p25。三輪 0.131→0.157→0.225 單調遞增
+  （底部漸淺），舊 median 把當前輪預測過深；線性迴歸外插（留一法誤差 -19% 優於 median -30%）。
+  `project_bear_bottom` 為 forecast_price 熊市分支與 bottom_floors 的**共用底部來源**。
+- **4 個 floor**：200 週均線 / 冪律下界 / **礦工電費（硬地板）** / 礦工 all-in（警示線）
+- **on-chain 錨**：Realized Price / Balanced Price / CVDD（`service/bottom_metrics.py`，
+  資料源 bitcoin-data.com）
+- **技術錨**：Mayer 底（SMA730×0.6）/ AHR999 抄底頂（AHR999=0.45 對應價）
+- **final_low = max(四季論趨勢底, 礦工電費硬地板)**；ensemble = 強錨中位數
+
+**礦工成本模型 `core/miner_cost.py`**（純數學）：
+`電費盈虧 = hashrate_ths × eff_jth(date)/1000 × 24 × rate / btc_per_day(date)`；
+btc_per_day 依減半切換（3600→1800→900→450）、eff_jth 分段 era 插值（**最大不確定來源**）、
+all-in = 電費 × 1.6。
+
+**回測關鍵發現（2015/2018/2022 三輪熊底，`tests/bottom_floors_backtest.py`）**：
+- **熊底/純電費 = 1.98→1.10→1.06x**（收斂、**從未跌破** → 電費=硬地板）
+- **熊底/all-in = 1.24/0.69/0.67x**（2018/2022 牛末跌破 all-in 至 ~0.67×）
+- 2022 熊底 $15,476 落在 Balanced($11.4k)~Realized($20.5k) 之間
+- 現況（2026-06）電費 ~$53.5k／all-in ~$85.6k → 「1.06×電費」與「0.67×all-in」收斂於 ~$57k
+
+### 已知陷阱（本系統）
+- **bitcoin-data.com 429 burst 限流**：連續 ~6 次請求即冷卻數分鐘。`service/bottom_metrics.py`
+  端點間隔 4s + 遇 429 長退避（20s×n）+ **12h 持久化 json 快取**（`db/bottom_metrics_cache.json`、
+  `db/hashrate_history.json`）。**勿密集探測**，會觸發長時間限流。
+- on-chain 指標**僅約 4 年歷史**（bitcoin-data.com 免費層），只能驗證 2022 輪；2015/2018 靠礦工成本回測。
+- mvrv-zscore 端點末筆偶為 nan（次要指標，已 graceful 過濾）。
+- `compute_all_bottom_estimates(now=...)` 須傳 **naive datetime**（內部已 strip tz；但傳 tz-aware
+  進 `project_bear_bottom`/`get_current_season` 會與 naive HALVING_DATES 比較拋錯——已在 bottom_floors 統一去 tz）。
+
+---
+
 ## 已知陷阱
 
 ### 1. `@st.fragment` 靜默失效（現價停止自動更新）
