@@ -73,19 +73,26 @@ def test_estimates_filter_none_and_zero():
     assert all(e["value"] > 0 for e in res["estimates"])
 
 
-def test_ensemble_is_median_of_strong_anchors():
-    import statistics
+def test_ensemble_is_reliability_weighted_median():
+    from core.bottom_floors import _weighted_median
     df = _synthetic_df()
     price = float(df["close"].iloc[-1])
     onchain = {"realized_price": 50000, "balanced_price": 30000, "cvdd": 15000, "asof": "x"}
     res = compute_all_bottom_estimates(price, df=df, hashrate_ths=7.6e8,
                                        now=datetime(2026, 6, 1), onchain=onchain)
-    s = res["season_bottom"]
-    # 重建強錨集合
-    by = {e["key"]: e["value"] for e in res["estimates"]}
-    strong = [v for v in (s["bottom_mid"], by.get("ma200w"), res["miner_elec"],
-                          50000, 30000, 15000) if v]
-    assert abs(res["ensemble_low"] - statistics.median(strong)) < 1e-6
+    # ensemble = 可靠度加權中位數（排除 all-in 警示線）
+    pairs = [(e["value"], e["reliability"]) for e in res["estimates"] if e["key"] != "miner_allin"]
+    assert abs(res["ensemble_low"] - _weighted_median(pairs)) < 1e-6
+    # 每個 estimate 都帶 reliability
+    assert all("reliability" in e and 0 < e["reliability"] <= 100 for e in res["estimates"])
+
+
+def test_weighted_median_basic():
+    from core.bottom_floors import _weighted_median
+    # 權重全相等 → 一般中位數行為
+    assert _weighted_median([(10, 1), (20, 1), (30, 1)]) == 20
+    # 高權重拉向該值
+    assert _weighted_median([(10, 1), (20, 1), (30, 100)]) == 30
 
 
 if __name__ == "__main__":

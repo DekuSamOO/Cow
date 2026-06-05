@@ -247,9 +247,9 @@ def _build_news_box(s):
 
 
 _KIND_COLOR = {
-    "season":  "#8E44AD",   # 四季論趨勢底（紫）
+    "season":  "#E74C3C",   # 四季論趨勢底 / 模型（紅）
     "floor":   "#2980B9",   # 硬地板（藍）
-    "anchor":  "#16A085",   # 錨點（青）
+    "anchor":  "#F1C40F",   # 錨點（黃）
     "warning": "#E67E22",   # 警示線（橙）
 }
 
@@ -278,8 +278,24 @@ def _build_bottom_eval_box(s):
         sub = f"依據 {basis}" + (f"｜多錨中位數 ${ens:,.0f}" if ens else "")
         header.append({"type": "text", "text": sub, "color": "#888888", "size": "xxs", "margin": "xs", "wrap": True})
 
+    # LINE 版精簡：只取代表性幾項 = 最高估計 + 3 硬地板 + 最低估計（去重後依價排序）
+    # 完整 10 項在 dashboard D2.5 顯示。
+    ests = be["estimates"]
+    non_warn = [e for e in ests if e["kind"] != "warning"]
+    floors   = [e for e in ests if e["kind"] == "floor"]            # 3 硬地板
+    season_e = next((e for e in ests if e["kind"] == "season"), None)  # 四季論趨勢底
+    pick = {}
+    if non_warn:
+        hi = max(non_warn, key=lambda x: x["value"])               # 最高估計
+        lo = min(non_warn, key=lambda x: x["value"])               # 最低估計
+        picks = [hi, *floors, lo]
+        if season_e:
+            picks.append(season_e)                                 # 永遠含四季論趨勢底
+        for e in picks:
+            pick[e["key"]] = e
+
     rows = []
-    for e in sorted(be["estimates"], key=lambda x: -x["value"]):
+    for e in sorted(pick.values(), key=lambda x: -x["value"]):
         v = e["value"]
         buf = (cp - v) / v * 100 if v else 0
         bcolor = "#27AE60" if buf >= 0 else "#E74C3C"
@@ -295,7 +311,7 @@ def _build_bottom_eval_box(s):
         })
 
     footer = {"type": "text",
-              "text": "藍=硬地板  紫=四季論趨勢底  青=鏈上/技術錨  橙=警示(常被跌破)　右欄=現價距該價",
+              "text": "藍=硬地板　紅=四季論趨勢底　黃=鏈上/技術錨　右欄=現價距該價（完整 10 項見 App）",
               "color": "#AAAAAA", "size": "xxs", "margin": "sm", "wrap": True}
 
     return {

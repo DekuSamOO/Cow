@@ -81,7 +81,7 @@ tests/
   test_dual_invest.py   雙幣期權策略單元測試
   test_market_data.py   數據來源與備援鏈單元測試
   test_news.py          新聞聚合/去重/情緒彙總/中文化降級單元測試（monkeypatch 不打真 API）
-  core/test_bottom_floors.py  最低價綜合評估離線單元測試（礦工成本/趨勢外插/final_low/ensemble，注入 onchain/hashrate，7 passed）
+  core/test_bottom_floors.py  最低價綜合評估離線單元測試（礦工成本/趨勢外插/final_low/可靠度加權中位數 ensemble/_weighted_median，注入 onchain/hashrate，8 passed）
   bottom_floors_backtest.py   最低價地板回測（2015/2018/2022 熊底 vs 礦工電費/all-in 驗證）
 ```
 
@@ -332,7 +332,9 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 ## 版本紀錄
 
 ### v3.6 (2026-06-05)
-- **feat(core)**: 新增 `core/bottom_floors.py` 作為最低價評估「單一真實來源」`compute_all_bottom_estimates`，整合四季論趨勢底 + 4 個 floor（200週均線/冪律/礦工電費/礦工 all-in）+ 鏈上錨（Realized/Balanced/CVDD）+ 技術錨（Mayer 底/AHR999）；`final_low = max(四季論趨勢底, 礦工電費硬地板)`、`ensemble = 強錨中位數`。
+- **feat(core)**: 新增 `core/bottom_floors.py` 作為最低價評估「單一真實來源」`compute_all_bottom_estimates`，整合四季論趨勢底 + 4 個 floor（200週均線/冪律/礦工電費/礦工 all-in）+ 鏈上錨（Realized/Balanced/CVDD）+ 技術錨（Mayer 底/AHR999）；`final_low = max(四季論趨勢底, 礦工電費硬地板)`、`ensemble = 可靠度加權中位數`。
+- **feat(core)**: `bottom_floors.py` ensemble 由「等權強錨中位數」升級為「可靠度加權中位數」——新增 `_RELIABILITY` 各算法可靠度權重表（realized 82 ~ miner_allin 50）與 `_weighted_median()`，每個 estimate 帶 `reliability` 欄、排除 all-in 警示線，使綜合估計落進高可靠度叢集。
+- **feat(notify/dashboard)**: 配色統一——四季論趨勢底改紅、鏈上/技術錨改黃（floor 藍/warning 橙不變）；LINE 推播精簡為代表性 6 項（最高估計 + 3 硬地板 + 最低估計 + 四季論趨勢底，去重），完整 10 項移至 dashboard D2.5（新增「可靠度」欄，綠≥75/黃≥62/橙<62）。
 - **feat(core)**: 新增 `core/miner_cost.py` 礦工成本純數學模型（btc_per_day 依減半切換、eff_jth 分段插值、電費盈虧/all-in），供回測與即時評估共用。
 - **feat(season)**: `core/season_forecast.py` 升 v1.4——熊底 `bottom_mult` 改「週期趨勢外插」(`extrapolate_bottom_mult`) 取代 median/p25（三輪 13.1%→15.7%→22.5% 遞增、底部漸淺，留一法誤差 -19% 優於 median -30%）；抽 `project_bear_bottom()` 為 forecast_price 熊市分支與 bottom_floors 共用底部來源，杜絕兩邊漂移。
 - **feat(service)**: 新增 `service/bottom_metrics.py` 鏈上底部錨指標（bitcoin-data.com）+ blockchain.info 歷史算力；429 長退避 + 12h json 快取（`db/bottom_metrics_cache.json` / `db/hashrate_history.json`，皆為執行快取不入版控）。
@@ -340,7 +342,7 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 - **feat(notify)**: `service/notification/builders.py` 新增 `_build_bottom_eval_box` 合併「最低價綜合評估」單一 block；無 `bottom_eval` 時自動 fallback 舊兩 box（保留 `_build_forecast_box`/`_build_floor_support_box`）。
 - **feat(dashboard)**: `handler/tab_macro_compass.py` Tab 1 新增 D2.5「底部支撐綜合評估」區塊，與每日 LINE 推播同源。
 - **feat(news)**: `service/news.py` 新增 `_is_btc_crypto` 嚴格過濾——只保留比特幣/加密大盤新聞，提到任何山寨幣（含 Bitcoin Cash/BCH）即剔除。
-- **test**: 新增 `tests/core/test_bottom_floors.py`（7 passed，離線注入）與 `tests/bottom_floors_backtest.py` 回測驗證。
+- **test**: 新增 `tests/core/test_bottom_floors.py`（8 passed，離線注入，含 `_weighted_median` 與可靠度加權 ensemble）與 `tests/bottom_floors_backtest.py` 回測驗證。
 
 ### v3.5 (2026-06-03)
 - **feat(news)**: Dashboard 速覽下方新增「📰 加密貨幣熱門新聞」區塊：`service/news.py` 多來源聚合去重（CryptoCompare News + Cointelegraph/CoinDesk/Decrypt RSS），CoinGecko `/search/trending` 24h 熱搜取代被 IP 封鎖的 Reddit。

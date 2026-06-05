@@ -624,7 +624,7 @@ def render(btc, chart_df, tvl_hist, stable_hist, fund_hist, curr, dxy, funding_r
             _lh = _hr[max(_hr)] if _hr else None
             be = compute_all_bottom_estimates(current_price, df=btc, hashrate_ths=_lh,
                                               onchain=get_latest_bottom_metrics())
-            _kc = {'season': '#b388ff', 'floor': '#42a5f5', 'anchor': '#26a69a', 'warning': '#ff9800'}
+            _kc = {'season': '#ef5350', 'floor': '#42a5f5', 'anchor': '#ffd54f', 'warning': '#ff9800'}
             mcol1, mcol2 = st.columns(2)
             with mcol1:
                 fl = be.get('final_low')
@@ -636,25 +636,29 @@ def render(btc, chart_df, tvl_hist, stable_hist, fund_hist, curr, dxy, funding_r
             with mcol2:
                 en = be.get('ensemble_low')
                 st.markdown(f"""<div style="background:#1a1a2e;border:1px solid #66bb6a;border-radius:10px;padding:14px;text-align:center;">
-                    <div style="color:#888;font-size:0.8rem;">多錨中位數（穩健中央）</div>
+                    <div style="color:#888;font-size:0.8rem;">可靠度加權中位數</div>
                     <div style="color:#66bb6a;font-size:1.8rem;font-weight:800;">${en:,.0f}</div>
-                    <div style="color:#666;font-size:0.72rem;">強錨中位數</div>
+                    <div style="color:#666;font-size:0.72rem;">可靠度加權中位數</div>
                 </div>""" if en else '—', unsafe_allow_html=True)
             _rows = ''
             for e in sorted(be['estimates'], key=lambda x: -x['value']):
                 buf = (current_price - e['value']) / e['value'] * 100 if e['value'] else 0
                 bclr = '#66bb6a' if buf >= 0 else '#ef5350'
+                rel = e.get('reliability', 50)
+                rclr = '#66bb6a' if rel >= 75 else '#ffd54f' if rel >= 62 else '#ff8a65'
                 _rows += (f"<tr><td style='padding:4px 8px;color:{_kc.get(e['kind'],'#ccc')};'>{e['label']}</td>"
                           f"<td style='padding:4px 8px;text-align:right;color:#fff;font-weight:600;'>${e['value']:,.0f}</td>"
                           f"<td style='padding:4px 8px;text-align:right;color:{bclr};'>{'+' if buf>=0 else ''}{buf:.0f}%</td>"
+                          f"<td style='padding:4px 8px;text-align:right;color:{rclr};'>{rel}</td>"
                           f"<td style='padding:4px 8px;color:#777;font-size:0.72rem;'>{e['note']}</td></tr>")
             st.markdown(f"""<table style="width:100%;border-collapse:collapse;font-size:0.85rem;margin-top:8px;">
                 <tr style="color:#aaa;border-bottom:1px solid #444;">
                   <th style="text-align:left;padding:4px 8px;">算法</th><th style="text-align:right;padding:4px 8px;">最低價</th>
-                  <th style="text-align:right;padding:4px 8px;">現價距此</th><th style="text-align:left;padding:4px 8px;">說明</th></tr>
+                  <th style="text-align:right;padding:4px 8px;">現價距此</th><th style="text-align:right;padding:4px 8px;">可靠度</th>
+                  <th style="text-align:left;padding:4px 8px;">說明</th></tr>
                 {_rows}</table>
                 <div style="color:#777;font-size:0.72rem;margin-top:6px;">
-                紫=四季論趨勢底　藍=硬地板　青=鏈上/技術錨　橙=警示(牛末常被跌破至~0.67×)。
+                紅=四季論趨勢底　藍=硬地板　黃=鏈上/技術錨　橙=警示(牛末常被跌破至~0.67×)。
                 final_low = max(四季論趨勢底, 礦工電費硬地板)——歷史三輪熊底從未跌破純電費。</div>""",
                 unsafe_allow_html=True)
             if be.get('asof'):
