@@ -509,7 +509,6 @@ def render(btc, chart_df, tvl_hist, stable_hist, fund_hist, curr, dxy, funding_r
         si = fc['season_info']
         eff = fc['effective_season']
         ms = fc['market_state']
-        is_bull = fc['forecast_type'] == 'bull_peak'
         is_corrected = fc.get('is_season_corrected', False)
         eff_color = _season_css_color(eff['season'])
         time_color = _season_css_color(si['season'])
@@ -565,59 +564,8 @@ def render(btc, chart_df, tvl_hist, stable_hist, fund_hist, curr, dxy, funding_r
             st.warning(fc['correction_reason'])
         st.plotly_chart(_render_season_timeline(si, effective_season=eff['season']), use_container_width=True)
         st.markdown('---')
-        fc_type_zh = '📈 牛市最高價預測' if is_bull else '📉 熊市最低價預測'
-        target_color = '#ffeb3b' if is_bull else '#42a5f5'
-        conf_bar = fc['confidence']
-        lbl_low = fc.get('bear_label_low', '25th 百分位')
-        lbl_high = fc.get('bear_label_high', '75th 百分位')
-        ath_ref_hint = ''
-        if not is_bull and fc.get('ath_ref'):
-            ath_ref_hint = f"<div style='color:#666;font-size:0.7rem;margin-top:2px;'>基準ATH: ${fc['ath_ref']:,.0f}</div>"
-        col_a, col_b, col_c = st.columns(3)
-        with col_a:
-            side_title = '最深目標 ↓' if not is_bull else '保守目標 ↑'
-            st.markdown(f"""
-                <div style="background:#1e2a1e;border:1px solid {target_color};border-radius:10px;padding:18px;text-align:center;">
-                    <div style="color:#888;font-size:0.8rem;">{side_title}</div>
-                    <div style="color:{target_color};font-size:1.6rem;font-weight:700;">${fc['target_low']:,.0f}</div>
-                    <div style="color:#666;font-size:0.75rem;">{lbl_low}</div>
-                    {ath_ref_hint}
-                </div>""", unsafe_allow_html=True)
-        with col_b:
-            _est_date_str = fc['estimated_date'].strftime('%Y-%m-%d')
-            st.markdown(f"""
-                <div style="background:#1e2a1e;border:2px solid {target_color};border-radius:10px;padding:18px;text-align:center;box-shadow:0 0 12px {target_color}44;">
-                    <div style="color:#aaa;font-size:0.85rem;">{fc_type_zh}</div>
-                    <div style="color:{target_color};font-size:2.2rem;font-weight:800;">${fc['target_median']:,.0f}</div>
-                    <div style="color:#999;font-size:0.8rem;">歷史中位數目標</div>
-                    <div style="color:#666;font-size:0.75rem;margin-top:4px;">預計達標: {_est_date_str}</div>
-                    {ath_ref_hint}
-                </div>""", unsafe_allow_html=True)
-        with col_c:
-            side_title = '最淺目標 ↑' if not is_bull else '樂觀目標 ↑'
-            st.markdown(f"""
-                <div style="background:#1e2a1e;border:1px solid {target_color};border-radius:10px;padding:18px;text-align:center;">
-                    <div style="color:#888;font-size:0.8rem;">{side_title}</div>
-                    <div style="color:{target_color};font-size:1.6rem;font-weight:700;">${fc['target_high']:,.0f}</div>
-                    <div style="color:#666;font-size:0.75rem;">{lbl_high}</div>
-                    {ath_ref_hint}
-                </div>""", unsafe_allow_html=True)
-        st.markdown('<br>', unsafe_allow_html=True)
-        conf_color = '#00e676' if conf_bar >= 65 else '#ffeb3b' if conf_bar >= 45 else '#ff9800'
-        st.markdown(f"""
-            <div style="margin:8px 0 16px 0;">
-                <div style="color:#aaa;font-size:0.85rem;margin-bottom:4px;">
-                    預測信心分數: <b style="color:{conf_color};">{conf_bar}/100</b>
-                </div>
-                <div style="background:#333;border-radius:6px;height:10px;">
-                    <div style="background:{conf_color};width:{conf_bar}%;height:10px;border-radius:6px;"></div>
-                </div>
-            </div>""", unsafe_allow_html=True)
-        with st.expander('📖 預測邏輯說明', expanded=False):
-            st.info(fc['rationale'])
-
-        # ── D2.5 底部支撐綜合評估（與每日 LINE 推播同源 core/bottom_floors）──
-        st.markdown('#### D2.5 🛡️ 底部支撐綜合評估')
+        # ── D2 底部支撐綜合評估（與每日 LINE 推播同源 core/bottom_floors）──
+        st.markdown('#### D2. 🛡️ 底部支撐綜合評估')
         st.caption('整合四季論趨勢底 + 200週均線/冪律/礦工成本 + 鏈上錨（Realized/Balanced/CVDD）+ 技術錨（Mayer/AHR999），與每日 LINE 推播同源。')
         try:
             _hr = fetch_hashrate_history_ths()

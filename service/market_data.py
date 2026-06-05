@@ -357,6 +357,20 @@ def fetch_market_data():
         print("[Market] ❌ 所有備援均失敗（本地DB / Yahoo / Binance / Kraken / CryptoCompare）")
         return pd.DataFrame(), pd.DataFrame()
 
+    # ── 壞時間戳防護：縫合備援偶爾回傳單位解析錯誤的時間戳（落到 ~1969/1970 epoch 0），
+    #    會把圖表 X 軸從 1969 拉到今天、擠爆熊市區塊，並污染滾動指標。
+    #    濾掉早於創世日（2009-01-03）的列，並回寫乾淨 CSV 以清除已落地的污染。
+    _genesis = pd.Timestamp("2009-01-03")
+    _bad = btc_final.index.isna() | (btc_final.index < _genesis)
+    if _bad.any():
+        n_bad = int(_bad.sum())
+        btc_final = btc_final[~_bad].sort_index()
+        print(f"[Market] ⚠️ 移除 {n_bad} 筆壞時間戳（< 創世日，疑縫合單位錯誤），回寫 CSV")
+        try:
+            btc_final.to_csv(BTC_CSV)
+        except Exception as e:
+            print(f"[Market] 清理後 CSV 回寫失敗: {e}")
+
     # 4. DXY (美元指數)
     try:
         # DXY 同樣套用自訂 session 避開 SSL 問題

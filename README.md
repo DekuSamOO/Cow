@@ -71,7 +71,7 @@ scripts/
 
 handler/
   layout.py          頁面設置、側欄（只保留日期區間，策略參數移至各 Tab）
-  tab_macro_compass.py Tab 1：長週期羅盤（雙 Gauge + 評分公式 expander + 三層框架 + 底部 8 指標 + 四季預測 + D2.5 底部支撐綜合評估，與 LINE 推播同源 core/bottom_floors）
+  tab_macro_compass.py Tab 1：長週期羅盤（雙 Gauge + 評分公式 expander + 三層框架 + 底部 8 指標 + 四季季節徽章/時間軸 + D2 底部支撐綜合評估 + D3 目標價走勢圖，與 LINE 推播同源 core/bottom_floors）
   tab_swing.py       Tab 2：波段狙擊（3 行式 K 線子圖、2x3 條件儀表板、動態建議、倉位計算）
   tab_dual_invest.py Tab 3：雙幣理財（行權價梯形視覺化）
   tab_backtest.py    Tab 4：時光機回測（5 個子 Tab：波段 PnL、雙幣滾倉、牛市雷達、多週期回測、Walk-Forward 無先視）
@@ -343,6 +343,8 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 - **feat(dashboard)**: `handler/tab_macro_compass.py` Tab 1 新增 D2.5「底部支撐綜合評估」區塊，與每日 LINE 推播同源。
 - **feat(news)**: `service/news.py` 新增 `_is_btc_crypto` 嚴格過濾——只保留比特幣/加密大盤新聞，提到任何山寨幣（含 Bitcoin Cash/BCH）即剔除。
 - **test**: 新增 `tests/core/test_bottom_floors.py`（8 passed，離線注入，含 `_weighted_median` 與可靠度加權 ensemble）與 `tests/bottom_floors_backtest.py` 回測驗證。
+- **refactor(dashboard)**: `handler/tab_macro_compass.py` Tab 1 精簡 D 區段——移除四季論預測卡片（最深/熊市最低/最淺目標 3 欄）、預測信心分數 bar 與「📖 預測邏輯說明」expander（資訊已與 D2 底部支撐綜合評估重疊）；季節徽章/時間軸保留，原 D2.5 改名為 D2。
+- **fix(market_data)**: `service/market_data.py` `fetch_market_data()` 回傳前新增壞時間戳安全網——濾掉早於創世日（2009-01-03）的列並回寫乾淨 CSV，自我修復縫合備援偶發的單位解析錯誤時間戳（落到 ~1969/epoch0、會把圖表 X 軸從 1969 拉到今天、擠爆熊市區塊），保護所有消費端。
 
 ### v3.5 (2026-06-03)
 - **feat(news)**: Dashboard 速覽下方新增「📰 加密貨幣熱門新聞」區塊：`service/news.py` 多來源聚合去重（CryptoCompare News + Cointelegraph/CoinDesk/Decrypt RSS），CoinGecko `/search/trending` 24h 熱搜取代被 IP 封鎖的 Reddit。
