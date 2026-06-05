@@ -8,8 +8,11 @@ data_manager.py
 [Task #8] 環境變數：CCXT API Key 改由 .env 讀取
 """
 import pandas as pd
+import logging
 import requests
 from core.http_client import safe_get, safe_post
+
+logger = logging.getLogger(__name__)
 import urllib3          # [Task #1] SSL 警告靜默
 import os
 import time             # [Task #3] 指數退避 sleep
@@ -60,20 +63,20 @@ def _retry_request(url: str, params: dict = None, max_retries: int = 3,
             resp.raise_for_status()   # 非 2xx 狀態碼拋出例外
             return resp
         except requests.exceptions.Timeout:
-            print(f"[Retry {attempt+1}/{max_retries}] Timeout: {url}")
+            logger.warning(f"[Retry {attempt+1}/{max_retries}] Timeout: {url}")
         except requests.exceptions.ConnectionError as e:
-            print(f"[Retry {attempt+1}/{max_retries}] ConnError: {e}")
+            logger.warning(f"[Retry {attempt+1}/{max_retries}] ConnError: {e}")
         except requests.exceptions.HTTPError as e:
-            print(f"[Retry {attempt+1}/{max_retries}] HTTPError {e.response.status_code}: {url}")
+            logger.warning(f"[Retry {attempt+1}/{max_retries}] HTTPError {e.response.status_code}: {url}")
         except Exception as e:
-            print(f"[Retry {attempt+1}/{max_retries}] Unknown error: {e}")
+            logger.warning(f"[Retry {attempt+1}/{max_retries}] Unknown error: {e}")
 
         if attempt < max_retries:
             wait = 2 ** attempt  # 指數退避：1s, 2s, 4s
-            print(f"  → 等待 {wait}s 後重試...")
+            logger.warning(f"  → 等待 {wait}s 後重試...")
             time.sleep(wait)
 
-    print(f"[Failed] 所有重試均失敗: {url}")
+    logger.warning(f"[Failed] 所有重試均失敗: {url}")
     return None
 
 
@@ -143,7 +146,7 @@ def _df_from_sqlite(table_name: str, index_col: str = 'date') -> pd.DataFrame:
         finally:
             conn.close()
     except Exception as e:
-        print(f"[SQLite] 讀取 {table_name} 失敗: {e}")
+        logger.warning(f"[SQLite] 讀取 {table_name} 失敗: {e}")
         return pd.DataFrame()
 
 # --- 1. DeFiLlama TVL History ---
@@ -174,15 +177,15 @@ def update_tvl_history() -> pd.DataFrame:
 
             # [Task #4] 寫入 SQLite，取代 CSV
             _df_to_sqlite(new_df, 'tvl_history')
-            print(f"[TVL] 已更新 {len(new_df)} 筆至 SQLite")
+            logger.info(f"[TVL] 已更新 {len(new_df)} 筆至 SQLite")
             return new_df
         except Exception as e:
-            print(f"[TVL] 解析失敗: {e}")
+            logger.warning(f"[TVL] 解析失敗: {e}")
 
     # 所有重試失敗 → 從 SQLite 讀取舊緩存（降級模式）
     cached = _df_from_sqlite('tvl_history')
     if not cached.empty:
-        print("[TVL] 使用 SQLite 緩存數據（降級模式）")
+        logger.warning("[TVL] 使用 SQLite 緩存數據（降級模式）")
     return cached
 
 # --- 2. Global Stablecoin Market Cap History ---
@@ -217,7 +220,7 @@ def update_stablecoin_history() -> pd.DataFrame:
                 processed.append({'date': dt_obj, 'mcap': mcap})
 
             if not processed:
-                print("[Stablecoin] 警告：無有效數據，檢查 API 回傳格式")
+                logger.warning("[Stablecoin] 警告：無有效數據，檢查 API 回傳格式")
 
             new_df = pd.DataFrame(processed)
             if not new_df.empty:
@@ -227,15 +230,15 @@ def update_stablecoin_history() -> pd.DataFrame:
 
                 # [Task #4] 寫入 SQLite
                 _df_to_sqlite(new_df, 'stablecoin_history')
-                print(f"[Stablecoin] 已更新 {len(new_df)} 筆至 SQLite")
+                logger.info(f"[Stablecoin] 已更新 {len(new_df)} 筆至 SQLite")
                 return new_df
         except Exception as e:
-            print(f"[Stablecoin] 解析失敗: {e}")
+            logger.warning(f"[Stablecoin] 解析失敗: {e}")
 
     # 所有重試失敗 → 從 SQLite 讀取舊緩存
     cached = _df_from_sqlite('stablecoin_history')
     if not cached.empty:
-        print("[Stablecoin] 使用 SQLite 緩存數據（降級模式）")
+        logger.warning("[Stablecoin] 使用 SQLite 緩存數據（降級模式）")
     return cached
 
 # --- 3. Binance Funding Rate History (Incremental) ---
@@ -262,9 +265,9 @@ def update_funding_history(symbol: str = 'BTC/USDT', limit: int = 1000) -> pd.Da
         # 計算上次最新時間戳（+1ms 避免重複抓同一筆）
         last_dt  = existing_df.index[-1]
         since_ts = int(last_dt.timestamp() * 1000) + 1
-        print(f"[Funding] 增量模式，從 {last_dt} 開始抓取")
+        logger.info(f"[Funding] 增量模式，從 {last_dt} 開始抓取")
     else:
-        print("[Funding] 首次抓取，獲取最近 1000 筆")
+        logger.info("[Funding] 首次抓取，獲取最近 1000 筆")
 
     # [Task #8] 從環境變數讀取 API Key（若未設定則使用公開 API，不影響資金費率查詢）
     api_key    = os.getenv("BINANCE_API_KEY", "")
@@ -273,7 +276,7 @@ def update_funding_history(symbol: str = 'BTC/USDT', limit: int = 1000) -> pd.Da
     try:
         import ccxt  # 延遲導入，避免 Python 3.13 相容性問題造成整個模組載入失敗
     except ImportError as e:
-        print(f"[Funding] ccxt 導入失敗（Python 版本相容問題）: {e}，使用 SQLite 緩存")
+        logger.warning(f"[Funding] ccxt 導入失敗（Python 版本相容問題）: {e}，使用 SQLite 緩存")
         return existing_df
 
     exchange_cfg = {'options': {'defaultType': 'future'}}
@@ -295,20 +298,20 @@ def update_funding_history(symbol: str = 'BTC/USDT', limit: int = 1000) -> pd.Da
                 rates = exchange.fetch_funding_rate_history(symbol, limit=limit)
             break  # 成功則跳出重試迴圈
         except ccxt.NetworkError as e:
-            print(f"[Funding][Retry {attempt+1}/3] 網路錯誤: {e}")
+            logger.warning(f"[Funding][Retry {attempt+1}/3] 網路錯誤: {e}")
         except ccxt.ExchangeError as e:
-            print(f"[Funding][Retry {attempt+1}/3] 交易所錯誤: {e}")
+            logger.warning(f"[Funding][Retry {attempt+1}/3] 交易所錯誤: {e}")
             break  # 交易所錯誤（如 API 權限問題）不需重試
         except Exception as e:
-            print(f"[Funding][Retry {attempt+1}/3] 未知錯誤: {e}")
+            logger.warning(f"[Funding][Retry {attempt+1}/3] 未知錯誤: {e}")
 
         if attempt < 2:
             wait = 2 ** attempt  # 指數退避：1s, 2s
-            print(f"  → 等待 {wait}s 後重試...")
+            logger.warning(f"  → 等待 {wait}s 後重試...")
             time.sleep(wait)
 
     if not rates:
-        print("[Funding] 抓取失敗，使用 SQLite 緩存數據（降級模式）")
+        logger.warning("[Funding] 抓取失敗，使用 SQLite 緩存數據（降級模式）")
         return existing_df
 
     # 解析 CCXT 返回數據
@@ -335,7 +338,7 @@ def update_funding_history(symbol: str = 'BTC/USDT', limit: int = 1000) -> pd.Da
 
     # [Task #4] 寫入 SQLite（取代 CSV 覆寫）
     _df_to_sqlite(full_df, 'funding_history')
-    print(f"[Funding] 已更新，SQLite 現有 {len(full_df)} 筆")
+    logger.info(f"[Funding] 已更新，SQLite 現有 {len(full_df)} 筆")
     return full_df
 
 

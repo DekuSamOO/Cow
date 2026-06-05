@@ -33,8 +33,11 @@ FRED 公開 CSV API 說明:
 """
 import io
 import math
+import logging
 import requests
 from core.http_client import safe_get, safe_post
+
+logger = logging.getLogger(__name__)
 import pandas as pd
 import numpy as np
 import yfinance as yf
@@ -151,7 +154,7 @@ def fetch_m2_series() -> pd.DataFrame:
         df.is_fallback = False  # 明確標記：非備援（供 UI 判斷）
         return df
     except Exception as e:
-        print(f"[M2] FRED WM2NS 抓取失敗: {e}，使用靜態備援值")
+        logger.warning(f"[M2] FRED WM2NS 抓取失敗: {e}，使用靜態備援值")
         return _make_fallback_df("m2", "m2_billions")
 
 
@@ -208,7 +211,7 @@ def fetch_usdjpy() -> dict:
             "is_fallback": False,  # [v1.1] 明確標記非備援
         }
     except Exception as e:
-        print(f"[JPY] Yahoo Finance 抓取失敗: {e}")
+        logger.warning(f"[JPY] Yahoo Finance 抓取失敗: {e}")
 
     # ── 第二層：FRED DEXJPUS（日頻，無地理封鎖）─────────────────────────────
     try:
@@ -228,13 +231,13 @@ def fetch_usdjpy() -> dict:
             "is_fallback": False,  # [v1.1] 明確標記非備援
         }
     except Exception as e:
-        print(f"[JPY] FRED DEXJPUS 也失敗: {e}")
+        logger.warning(f"[JPY] FRED DEXJPUS 也失敗: {e}")
 
     # ── 第三層：靜態備援 ─────────────────────────────────────────────────────
     # [v1.1 新增] v1.0 在這裡直接 return {"rate": None, ...}
     # 改為回傳最近已知靜態值，UI 顯示值 + ⚠️(備援) 標記
     fb = _FALLBACK["usdjpy"]
-    print(f"[JPY] 使用靜態備援值 {fb['value']} ({fb['date']})")
+    logger.info(f"[JPY] 使用靜態備援值 {fb['value']} ({fb['date']})")
     return {
         "rate":        fb["value"],
         "prev_close":  fb["value"],
@@ -300,7 +303,7 @@ def fetch_us_cpi_yoy() -> dict:
             "is_fallback": False,  # [v1.1] 明確標記非備援
         }
     except Exception as e:
-        print(f"[CPI] FRED CPIAUCSL 抓取失敗: {e}，使用靜態備援值")
+        logger.warning(f"[CPI] FRED CPIAUCSL 抓取失敗: {e}，使用靜態備援值")
 
         # [v1.1 新增] v1.0 在這裡 return {"yoy_pct": None, ...}
         # 改為回傳靜態備援值，UI 顯示值 + ⚠️(備援) 標記

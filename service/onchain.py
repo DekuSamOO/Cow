@@ -8,7 +8,8 @@ service/onchain.py
 [Task #3] Geo-block 備援：Binance 遭遇 451 時，直接抓取 Bybit/OKX 最新數據，避開舊時間戳限制
 """
 import time
-import asyncio          
+import asyncio
+import logging
 import requests
 from core.http_client import safe_get, safe_post
 import urllib3          
@@ -21,6 +22,8 @@ import service.historical_data_manager as data_manager
 
 # 從集中設定檔讀取 SSL 動態驗證旗標
 from config import SSL_VERIFY
+
+logger = logging.getLogger(__name__)
 
 # [Task #1] 動態 SSL：本地開發環境才關閉警告
 if not SSL_VERIFY:
@@ -79,7 +82,7 @@ def _fetch_stablecoin_history():
         if recs:
             return pd.DataFrame(recs).set_index('date')
     except Exception as e:
-        print(f"Stablecoin fetch error: {e}")
+        logger.warning(f"Stablecoin fetch error: {e}")
     return pd.DataFrame()
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -139,7 +142,7 @@ async def _fetch_binance_funding_rate_async() -> pd.DataFrame:
     df = pd.DataFrame(recs).set_index('date')
     df = df[~df.index.duplicated(keep='first')]
     df.sort_index(inplace=True)
-    print(f"[Market] 成功使用 Binance 抓取資金費率歷史: {len(df)} 筆")
+    logger.info(f"[Market] 成功使用 Binance 抓取資金費率歷史: {len(df)} 筆")
     return df
 
 async def _fetch_fallback_funding_rate_async() -> pd.DataFrame:
@@ -171,11 +174,11 @@ async def _fetch_fallback_funding_rate_async() -> pd.DataFrame:
                             continue
                     source = "Bybit"
         except Exception as e:
-            print(f"[Bybit] 備援請求失敗: {e}")
+            logger.warning(f"[Bybit] 備援請求失敗: {e}")
 
         # 第二備援：如果 Bybit 失敗，嘗試 OKX (抓取最新 100 筆)
         if not recs:
-            print("[Market] Bybit 失敗，切換 OKX 資金費率備援機制...")
+            logger.warning("[Market] Bybit 失敗，切換 OKX 資金費率備援機制...")
             try:
                 resp = await client.get(
                     "https://www.okx.com/api/v5/public/funding-rate-history",
@@ -195,16 +198,16 @@ async def _fetch_fallback_funding_rate_async() -> pd.DataFrame:
                                 continue
                         source = "OKX"
             except Exception as e:
-                print(f"[OKX] 備援請求失敗: {e}")
+                logger.warning(f"[OKX] 備援請求失敗: {e}")
 
     if not recs:
-        print("[Market] ❌ 所有資金費率來源 (Binance/Bybit/OKX) 均抓取失敗")
+        logger.error("[Market] ❌ 所有資金費率來源 (Binance/Bybit/OKX) 均抓取失敗")
         return pd.DataFrame()
 
     df = pd.DataFrame(recs).set_index('date')
     df = df[~df.index.duplicated(keep='first')]
     df.sort_index(inplace=True)
-    print(f"[Market] 成功使用 {source} 抓取最新資金費率: {len(df)} 筆")
+    logger.info(f"[Market] 成功使用 {source} 抓取最新資金費率: {len(df)} 筆")
     return df
 
 async def _fetch_funding_rate_async() -> pd.DataFrame:
@@ -213,7 +216,7 @@ async def _fetch_funding_rate_async() -> pd.DataFrame:
     if not df.empty:
         return df
     
-    print("[Market] Binance 資金費率抓取失敗 (可能遇到 451 封鎖)，啟動備援機制...")
+    logger.warning("[Market] Binance 資金費率抓取失敗 (可能遇到 451 封鎖)，啟動備援機制...")
     return await _fetch_fallback_funding_rate_async()
 
 def _fetch_funding_rate_history() -> pd.DataFrame:
@@ -231,7 +234,7 @@ def _fetch_funding_rate_history() -> pd.DataFrame:
             try:
                 return future.result(timeout=60)
             except Exception as exc:
-                print(f"Async funding rate fallback error: {exc}")
+                logger.warning(f"Async funding rate fallback error: {exc}")
                 return pd.DataFrame()
 
 def _clean(df, name="data"):
@@ -248,5 +251,5 @@ def _clean(df, name="data"):
         df.sort_index(inplace=True)
         return df
     except Exception as e:
-        print(f"Error cleaning {name}: {e}")
+        logger.warning(f"Error cleaning {name}: {e}")
         return pd.DataFrame()

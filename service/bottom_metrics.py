@@ -14,11 +14,14 @@ service/bottom_metrics.py
 import json
 import os
 import time
+import logging
 import urllib3
-import requests
 import pandas as pd
 
 from config import SSL_VERIFY
+from core.http_client import safe_get
+
+logger = logging.getLogger(__name__)
 
 if not SSL_VERIFY:
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -55,22 +58,17 @@ def _save_json(path: str, obj: dict) -> None:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(obj, f)
     except Exception as e:
-        print(f"[bottom_metrics] 快取寫入失敗（{path}）：{e}")
+        logger.warning(f"[bottom_metrics] 快取寫入失敗（{path}）：{e}")
 
 
 def _fetch_one(endpoint: str, val_key: str) -> dict:
-    """抓單一端點 → {date_str: value}；429 長退避重試，失敗拋例外交由外層回退快取。"""
+    """抓單一端點 → {date_str: value}。
+    改用 core.http_client.safe_get（統一 UA／重試）；backoff_factor 設為 429 長退避秒數，
+    對限流／連線失敗做 20→40→80s 指數退避，最終失敗拋例外交由外層回退快取。"""
     url = f"{_BASE}/{endpoint}"
-    r = None
-    for attempt in range(_MAX_429_RETRY):
-        r = requests.get(url, headers=_UA, timeout=25, verify=SSL_VERIFY)
-        if r.status_code == 429:
-            wait = _RATE_LIMIT_WAIT * (attempt + 1)
-            print(f"[bottom_metrics] {endpoint} 429 限流，等 {wait:.0f}s 重試（{attempt+1}/{_MAX_429_RETRY}）")
-            time.sleep(wait)
-            continue
-        break
-    r.raise_for_status()
+    r = safe_get(url, headers=_UA, timeout=25,
+                 retries=_MAX_429_RETRY, backoff_factor=_RATE_LIMIT_WAIT,
+                 verify=SSL_VERIFY)
     out = {}
     for row in r.json():
         d = row.get("d")
@@ -109,7 +107,7 @@ def fetch_bottom_metrics(force: bool = False) -> dict:
             result[key] = _fetch_one(ep, vk)
             updated = True
         except Exception as e:
-            print(f"[bottom_metrics] {ep} 抓取失敗（{type(e).__name__}），回退快取")
+            logger.warning(f"[bottom_metrics] {ep} 抓取失敗（{type(e).__name__}），回退快取")
             if key in cache:
                 result[key] = cache[key]
 
@@ -157,23 +155,22 @@ def fetch_hashrate_history_ths(force: bool = False) -> dict:
         return cache["data"]
 
     try:
-        r = requests.get(
+        r = safe_get(
             _HASHRATE_URL,
             params={"timespan": "all", "format": "json", "sampled": "true"},
             headers=_UA, timeout=30, verify=SSL_VERIFY,
         )
-        r.raise_for_status()
-        from datetime import datetime as _dt
+        from datetime import datetime as _dt, timezone as _tz
         data = {}
         for pt in r.json().get("values", []):
-            d = _dt.utcfromtimestamp(pt["x"]).strftime("%Y-%m-%d")
+            d = _dt.fromtimestamp(pt["x"], tz=_tz.utc).strftime("%Y-%m-%d")
             data[d] = float(pt["y"])   # 已是 TH/s
         if not data:
             raise ValueError("hash-rate 回傳空資料")
         _save_json(_HASHRATE_CACHE, {"_ts": time.time(), "data": data})
         return data
     except Exception as e:
-        print(f"[bottom_metrics] 算力歷史抓取失敗（{type(e).__name__}），回退快取")
+        logger.warning(f"[bottom_metrics] 算力歷史抓取失敗（{type(e).__name__}），回退快取")
         return cache.get("data", {})
 
 

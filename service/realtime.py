@@ -17,6 +17,7 @@ TTL=60s，每分鐘刷新
   - OI 下降           → 持倉平倉，趨勢動能衰竭
 """
 import random
+import logging
 import requests
 from core.http_client import safe_get, safe_post
 import urllib3   # [Task #1] 引入 urllib3 以關閉 SSL 警告
@@ -27,6 +28,8 @@ from typing import Optional
 # 從集中設定檔讀取環境參數（SSL 驗證旗標）
 from config import SSL_VERIFY
 from service.local_db_reader import get_latest_local_price
+
+logger = logging.getLogger(__name__)
 
 # [Task #1] 動態 SSL：本地開發環境才關閉警告；雲端 SSL_VERIFY=True 保持正常
 if not SSL_VERIFY:
@@ -117,10 +120,10 @@ def fetch_realtime_data() -> RealtimeData:
                     pass
 
         except Exception as e:
-            print(f"Binance futures direct API error (OI/funding): {e}")
+            logger.warning(f"Binance futures direct API error (OI/funding): {e}")
 
     except Exception as e:
-        print(f"Binance spot direct API error: {e}")
+        logger.warning(f"Binance spot direct API error: {e}")
 
     # 1d. Bybit 資金費率備援（Binance fapi 遭封鎖時）
     if data.funding_rate is None:
@@ -139,10 +142,10 @@ def fetch_realtime_data() -> RealtimeData:
                         if item.get("symbol") == "BTCUSDT":
                             data.funding_rate = float(item['fundingRate']) * 100
                             data.funding_rate_source = "Bybit"
-                            print("[Realtime] Bybit 備援資金費率成功")
+                            logger.info("[Realtime] Bybit 備援資金費率成功")
                             break
         except Exception as e:
-            print(f"Bybit funding rate error: {e}")
+            logger.warning(f"Bybit funding rate error: {e}")
 
     # 1e. OKX 資金費率備援（Bybit 也失敗時）
     if data.funding_rate is None:
@@ -159,9 +162,9 @@ def fetch_realtime_data() -> RealtimeData:
                 if okx_data.get("code") == "0" and okx_data.get("data"):
                     data.funding_rate = float(okx_data['data'][0]['fundingRate']) * 100
                     data.funding_rate_source = "OKX"
-                    print("[Realtime] OKX 備援資金費率成功")
+                    logger.info("[Realtime] OKX 備援資金費率成功")
         except Exception as e:
-            print(f"OKX funding rate error: {e}")
+            logger.warning(f"OKX funding rate error: {e}")
 
     # 1b. Kraken 現貨備援（與 market_data.py 同源，企業防火牆較少封鎖）
     if data.price is None:
@@ -178,9 +181,9 @@ def fetch_realtime_data() -> RealtimeData:
                 if pair_data:
                     data.price = float(pair_data['c'][0])
                     data.price_source = "Kraken"
-                    print("[Realtime] Kraken 備援價格成功")
+                    logger.info("[Realtime] Kraken 備援價格成功")
         except Exception as e:
-            print(f"Kraken realtime price error: {e}")
+            logger.warning(f"Kraken realtime price error: {e}")
 
     # 1c. 本地 15m DB 備援（完全離線，collector 有在跑時最新至 15 分鐘內）
     if data.price is None:
@@ -189,9 +192,9 @@ def fetch_realtime_data() -> RealtimeData:
             if local_p:
                 data.price = local_p
                 data.price_source = "本地DB"
-                print("[Realtime] 本地 DB 備援價格成功")
+                logger.info("[Realtime] 本地 DB 備援價格成功")
         except Exception as e:
-            print(f"Local DB price error: {e}")
+            logger.warning(f"Local DB price error: {e}")
 
     # 2. DeFiLlama
     try:
@@ -225,7 +228,7 @@ def fetch_realtime_data() -> RealtimeData:
         data.defi_yield = 5.0 + random.uniform(-0.5, 0.5)  # 模擬值（無公開即時 API）
 
     except Exception as e:
-        print(f"DeFiLlama error: {e}")
+        logger.warning(f"DeFiLlama error: {e}")
 
     # 3. Fear & Greed
     try:
@@ -240,6 +243,6 @@ def fetch_realtime_data() -> RealtimeData:
             data.fng_value = int(item['value'])
             data.fng_class = item['value_classification']
     except Exception as e:
-        print(f"F&G error: {e}")
+        logger.warning(f"F&G error: {e}")
 
     return data

@@ -45,6 +45,12 @@ import numpy as np
 import pandas as pd
 
 
+def _utcnow_naive() -> datetime:
+    """UTC 現在時刻的 naive datetime。本檔全程以 naive 與 HALVING_DATES 比較，
+    故統一去 tz（取代 Python 3.12 已棄用的 datetime.utcnow()）。"""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 HALVING_DATES = [
     datetime(2012, 11, 28),
     datetime(2016, 7,   9),
@@ -202,7 +208,7 @@ def analyze_market_state(current_price: float, df: pd.DataFrame, current_halving
     """
     result = {
         "cycle_ath":         current_price,
-        "cycle_ath_date":    datetime.utcnow(),
+        "cycle_ath_date":    _utcnow_naive(),
         "drawdown_from_ath": 0.0,
         "price_vs_sma200":   1.0,
         "sma200":            current_price,
@@ -274,7 +280,7 @@ def _derive_real_season(time_season, drawdown, is_above_sma200, month_in_cycle):
 def get_current_season(as_of: Optional[datetime] = None):
     """計算「時間季節」（純減半週期時間位置，不含市場校正）。"""
     if as_of is None:
-        as_of = datetime.utcnow()
+        as_of = _utcnow_naive()
 
     past_halvings = [h for h in HALVING_DATES if h <= as_of]
     if not past_halvings:
@@ -323,10 +329,14 @@ def _apply_diminishing_returns(base_mult: float, cycle_index: int) -> float:
 
 
 def project_bear_bottom(current_price: float, df: Optional[pd.DataFrame] = None,
-                        as_of: Optional[datetime] = None) -> Optional[Dict[str, Any]]:
+                        as_of: Optional[datetime] = None,
+                        market_state: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """
     熊市底部「原始投影」——不受當前季節影響，永遠回傳「若形成熊底會落在哪」。
     為 forecast_price（熊市分支）與 bottom_floors 的**單一真實來源**，杜絕兩邊漂移。
+
+    market_state 可由呼叫端（如 forecast_price）傳入已算好的結果以複用，避免重複
+    跑 analyze_market_state（含 rolling(200)）；為 None 時內部自算。
 
     回傳 dict:
       ath_ref / ath_ref_label
@@ -335,7 +345,7 @@ def project_bear_bottom(current_price: float, df: Optional[pd.DataFrame] = None,
       current_cycle_idx / drawdown_from_ath / is_above_sma200 / sma200
     """
     if as_of is None:
-        as_of = datetime.utcnow()
+        as_of = _utcnow_naive()
     season_info = get_current_season(as_of)
     if season_info is None:
         return None
@@ -358,7 +368,8 @@ def project_bear_bottom(current_price: float, df: Optional[pd.DataFrame] = None,
     if prev_ath is None:
         prev_ath = CYCLE_HISTORY[-2]["ath_price"] if len(CYCLE_HISTORY) >= 2 else 68789.0
 
-    market_state = analyze_market_state(current_price, df, current_halving)
+    if market_state is None:
+        market_state = analyze_market_state(current_price, df, current_halving)
     cycle_ath_ms = market_state.get("cycle_ath", 0)
     cycle_candidates = [v for v in (known_cycle_ath, cycle_ath_ms) if v]
     best_cycle_ath = max(cycle_candidates) if cycle_candidates else 0
@@ -405,7 +416,7 @@ def forecast_price(current_price: float, df: Optional[pd.DataFrame] = None, as_o
       bear_label_high   : 熊市最淺標籤
     """
     if as_of is None:
-        as_of = datetime.utcnow()
+        as_of = _utcnow_naive()
 
     season_info = get_current_season(as_of)
     if season_info is None:
@@ -503,7 +514,7 @@ def forecast_price(current_price: float, df: Optional[pd.DataFrame] = None, as_o
 
         # v1.4：熊底投影改由 project_bear_bottom 單一真實來源產出（ath_ref 解析 +
         #       bottom_mult 週期趨勢外插），forecast_price 與 bottom_floors 共用、杜絕漂移。
-        bb            = project_bear_bottom(current_price, df, as_of)
+        bb            = project_bear_bottom(current_price, df, as_of, market_state=market_state)
         ath_ref       = bb["ath_ref"]
         ath_ref_label = bb["ath_ref_label"]
         bm_point      = bb["bottom_mult_point"]
@@ -626,7 +637,7 @@ def get_power_law_forecast(df: pd.DataFrame, months_ahead: int = 12):
     """
     genesis      = datetime(2009, 1, 3)
     future_dates = pd.date_range(
-        start   = datetime.utcnow() + timedelta(days=1),
+        start   = _utcnow_naive() + timedelta(days=1),
         periods = months_ahead * 30,
         freq    = "D",
     )

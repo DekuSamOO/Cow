@@ -1,5 +1,6 @@
 import os
 import json
+import logging
 import requests
 from core.http_client import safe_get, safe_post
 import urllib3
@@ -8,6 +9,8 @@ from dotenv import load_dotenv
 
 # 從集中設定檔讀取 SSL 旗標
 from config import SSL_VERIFY
+
+logger = logging.getLogger(__name__)
 
 if not SSL_VERIFY:
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -32,7 +35,7 @@ def _is_telegram_configured() -> bool:
 
 def _send_line_message(messages: list[dict]) -> bool:
     if not _is_line_configured():
-        print("[LINE Notifier] 未設定，跳過（請在 .env 設定 LINE_CHANNEL_ACCESS_TOKEN）")
+        logger.warning("[LINE Notifier] 未設定，跳過（請在 .env 設定 LINE_CHANNEL_ACCESS_TOKEN）")
         return False
 
     headers = {
@@ -52,21 +55,21 @@ def _send_line_message(messages: list[dict]) -> bool:
             verify=SSL_VERIFY,
         )
         if resp.status_code == 200:
-            print(f"[LINE Notifier] 推播成功: HTTP {resp.status_code}")
+            logger.info(f"[LINE Notifier] 推播成功: HTTP {resp.status_code}")
             return True
         else:
-            print(f"[LINE Notifier] 推播失敗: HTTP {resp.status_code} - {resp.text[:200]}")
+            logger.warning(f"[LINE Notifier] 推播失敗: HTTP {resp.status_code} - {resp.text[:200]}")
             return False
     except requests.exceptions.Timeout:
-        print("[LINE Notifier] 推播逾時")
+        logger.warning("[LINE Notifier] 推播逾時")
         return False
     except Exception as e:
-        print(f"[LINE Notifier] 推播例外: {e}")
+        logger.info(f"[LINE Notifier] 推播例外: {e}")
         return False
 
 def _send_telegram_message(text: str, parse_mode: str = "HTML") -> bool:
     if not _is_telegram_configured():
-        print("[Telegram Notifier] 未設定，跳過（請在 .env 設定 TELEGRAM_BOT_TOKEN & TELEGRAM_CHAT_ID）")
+        logger.warning("[Telegram Notifier] 未設定，跳過（請在 .env 設定 TELEGRAM_BOT_TOKEN & TELEGRAM_CHAT_ID）")
         return False
 
     url = _TELEGRAM_API_URL.format(token=TELEGRAM_BOT_TOKEN)
@@ -85,15 +88,15 @@ def _send_telegram_message(text: str, parse_mode: str = "HTML") -> bool:
             verify=SSL_VERIFY,
         )
         if resp.status_code == 200:
-            print(f"[Telegram Notifier] 推播成功: HTTP {resp.status_code}")
+            logger.info(f"[Telegram Notifier] 推播成功: HTTP {resp.status_code}")
             return True
         else:
             err_desc = resp.json().get('description', resp.text[:200])
-            print(f"[Telegram Notifier] 推播失敗: HTTP {resp.status_code} - {err_desc}")
+            logger.warning(f"[Telegram Notifier] 推播失敗: HTTP {resp.status_code} - {err_desc}")
             return False
     except requests.exceptions.Timeout:
-        print("[Telegram Notifier] 推播逾時")
+        logger.warning("[Telegram Notifier] 推播逾時")
         return False
     except Exception as e:
-        print(f"[Telegram Notifier] 推播例外: {e}")
+        logger.info(f"[Telegram Notifier] 推播例外: {e}")
         return False

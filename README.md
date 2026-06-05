@@ -331,6 +331,13 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 
 ## 版本紀錄
 
+### v3.7 (2026-06-05)
+- **chore(deps)**: `requirements.txt` / `pyproject.toml` 全面鎖版本並對齊（單一真相為 requirements.txt）。關鍵約束 `numpy>=1.26,<2`——pandas-ta 0.3.x 仍 `from numpy import NaN`，numpy 2.x 會在 import 階段崩潰（本地測不出、雲端重建才爆）；`streamlit==1.37.1` 鎖雲端實跑版本避免行為漂移；其餘套件補 `>=` 下界。`pyproject.toml` 補齊 pandas-ta/yfinance/httpx/line-bot-sdk/urllib3、version 升 3.5.0、新增 `[tool.pytest.ini_options] testpaths=["tests"]`（只收集正規單元測試，排除 `scripts/test_*.py` 手動除錯工具）。
+- **refactor(season)**: `core/season_forecast.py` 新增 `_utcnow_naive()` helper 取代 5 處 Python 3.12 已棄用的 `datetime.utcnow()`；`project_bear_bottom()` 新增 `market_state` 可選參數，讓 `forecast_price` 熊市分支複用已算好的 market_state，省一次 `rolling(200)`。`core/bottom_floors.py`、`handler/tab_macro_compass.py` 同步將 `utcnow()` 改 `datetime.now(timezone.utc).replace(tzinfo=None)`。
+- **refactor(service)**: `service/bottom_metrics.py` 移除唯一繞過統一封裝的 `requests.get` 與自寫 429 重試迴圈，改用 `core.http_client.safe_get`（統一 UA／重試）；`utcfromtimestamp` → `fromtimestamp(tz=utc)`。
+- **chore(logging)**: service 層 7 檔（bottom_metrics/notification.core/onchain/realtime/macro_data/market_data/historical_data_manager）77 處 `print` 改 `logging`，各檔加 `logger = logging.getLogger(__name__)`；僅保留 historical_data_manager 的 3 個 `__main__` banner print。
+- **fix(scripts/test)**: `scripts/test_flex_message.py` 補上未定義的 `_REPO_ROOT`（既有 NameError，曾使 pytest collection 中斷）；`tests/core/test_season_forecast.py` 過時的 tuple 斷言改寫為現行 dict API。
+
 ### v3.6 (2026-06-05)
 - **feat(core)**: 新增 `core/bottom_floors.py` 作為最低價評估「單一真實來源」`compute_all_bottom_estimates`，整合四季論趨勢底 + 4 個 floor（200週均線/冪律/礦工電費/礦工 all-in）+ 鏈上錨（Realized/Balanced/CVDD）+ 技術錨（Mayer 底/AHR999）；`final_low = max(四季論趨勢底, 礦工電費硬地板)`、`ensemble = 可靠度加權中位數`。
 - **feat(core)**: `bottom_floors.py` ensemble 由「等權強錨中位數」升級為「可靠度加權中位數」——新增 `_RELIABILITY` 各算法可靠度權重表（realized 82 ~ miner_allin 50）與 `_weighted_median()`，每個 estimate 帶 `reliability` 欄、排除 all-in 警示線，使綜合估計落進高可靠度叢集。

@@ -11,6 +11,7 @@ service/market_data.py
 """
 import os
 import time
+import logging
 import pandas as pd
 import yfinance as yf
 import streamlit as st
@@ -21,6 +22,8 @@ import urllib3
 
 # 從集中設定檔讀取 SSL 動態驗證旗標
 from config import SSL_VERIFY
+
+logger = logging.getLogger(__name__)
 
 # 本地 SQLite DB 讀取（由 collector/btc_price_collector.py 生成）
 from service.local_db_reader import has_local_data, read_btc_daily
@@ -86,7 +89,7 @@ def fetch_binance_daily(start_date_str):
             resp.raise_for_status()
             batch = resp.json()
         except Exception as e:
-            print(f"[Binance REST] 請求失敗 (since={since}): {e}")
+            logger.warning(f"[Binance REST] 請求失敗 (since={since}): {e}")
             raise  # 由外層 try/except 處理並切換備援
 
         if not batch:
@@ -143,7 +146,7 @@ def fetch_kraken_daily(start_date_str):
             data = resp.json()
 
             if data.get('error'):
-                print(f"[Kraken] API 錯誤: {data['error']}")
+                logger.warning(f"[Kraken] API 錯誤: {data['error']}")
                 break
 
             candles = data.get('result', {}).get('XXBTZUSD', [])
@@ -160,7 +163,7 @@ def fetch_kraken_daily(start_date_str):
             time.sleep(0.5)  # 遵守 Kraken 速率限制（每秒 1 請求）
 
         except Exception as e:
-            print(f"[Kraken] 分頁請求失敗: {e}")
+            logger.warning(f"[Kraken] 分頁請求失敗: {e}")
             break
 
     if not all_candles:
@@ -211,7 +214,7 @@ def fetch_cryptocompare_daily(start_date_str):
             data = resp.json()
 
             if data.get("Response") != "Success":
-                print(f"[CryptoCompare] API 返回錯誤: {data.get('Message', '未知')}")
+                logger.warning(f"[CryptoCompare] API 返回錯誤: {data.get('Message', '未知')}")
                 break
 
             rows = data.get("Data", {}).get("Data", [])
@@ -232,7 +235,7 @@ def fetch_cryptocompare_daily(start_date_str):
             time.sleep(0.3)
 
         except Exception as e:
-            print(f"[CryptoCompare] 分頁請求失敗: {e}")
+            logger.warning(f"[CryptoCompare] 分頁請求失敗: {e}")
             break
 
     if not all_rows:
@@ -297,7 +300,7 @@ def fetch_market_data():
         result = chain.fetch(start_fetch_date)
         if result.data is not None and not result.data.empty:
             btc_new = result.data
-            print(f"[Market] {result.source_used} 成功，取得 {len(btc_new)} 筆")
+            logger.info(f"[Market] {result.source_used} 成功，取得 {len(btc_new)} 筆")
 
     # 3. 合併並存檔
     if not btc_new.empty:
@@ -307,7 +310,7 @@ def fetch_market_data():
         try:
             full_df.to_csv(BTC_CSV)
         except Exception as e:
-            print(f"[Market] CSV 快取寫入失敗（不影響運行）: {e}")
+            logger.warning(f"[Market] CSV 快取寫入失敗（不影響運行）: {e}")
         btc_final = full_df
     else:
         btc_final = local_df
@@ -331,7 +334,7 @@ def fetch_market_data():
         
         if stitch_result.data is not None and not stitch_result.data.empty:
             _tday_df = stitch_result.data
-            print(f"[Market] 縫合區塊：成功使用 {stitch_result.source_used} 補齊缺漏資料")
+            logger.info(f"[Market] 縫合區塊：成功使用 {stitch_result.source_used} 補齊缺漏資料")
 
         # 縫合：把補齊的數據 Concat 到歷史末端，並寫回 CSV 避免下次重複抓取
         if not _tday_df.empty:
@@ -343,18 +346,18 @@ def fetch_market_data():
             try:
                 btc_final.to_csv(BTC_CSV)
             except Exception as e:
-                print(f"[Market] CSV 快取寫入失敗（不影響運行）: {e}")
+                logger.warning(f"[Market] CSV 快取寫入失敗（不影響運行）: {e}")
 
     # ── 安全網：若上述所有途徑都失敗，直接嘗試本地 SQLite（跳過 FallbackChain）──
     if btc_final.empty and has_local_data():
         try:
             btc_final = read_btc_daily()
-            print(f"[Market] ✅ 安全網觸發：直接從本地 SQLite 讀取 {len(btc_final)} 筆")
+            logger.info(f"[Market] ✅ 安全網觸發：直接從本地 SQLite 讀取 {len(btc_final)} 筆")
         except Exception as e:
-            print(f"[Market] 安全網也失敗: {e}")
+            logger.warning(f"[Market] 安全網也失敗: {e}")
 
     if btc_final.empty:
-        print("[Market] ❌ 所有備援均失敗（本地DB / Yahoo / Binance / Kraken / CryptoCompare）")
+        logger.error("[Market] ❌ 所有備援均失敗（本地DB / Yahoo / Binance / Kraken / CryptoCompare）")
         return pd.DataFrame(), pd.DataFrame()
 
     # ── 壞時間戳防護：縫合備援偶爾回傳單位解析錯誤的時間戳（落到 ~1969/1970 epoch 0），
@@ -365,11 +368,11 @@ def fetch_market_data():
     if _bad.any():
         n_bad = int(_bad.sum())
         btc_final = btc_final[~_bad].sort_index()
-        print(f"[Market] ⚠️ 移除 {n_bad} 筆壞時間戳（< 創世日，疑縫合單位錯誤），回寫 CSV")
+        logger.warning(f"[Market] ⚠️ 移除 {n_bad} 筆壞時間戳（< 創世日，疑縫合單位錯誤），回寫 CSV")
         try:
             btc_final.to_csv(BTC_CSV)
         except Exception as e:
-            print(f"[Market] 清理後 CSV 回寫失敗: {e}")
+            logger.warning(f"[Market] 清理後 CSV 回寫失敗: {e}")
 
     # 4. DXY (美元指數)
     try:

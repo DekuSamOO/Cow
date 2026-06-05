@@ -19,7 +19,7 @@ core/bottom_floors.py
 
 純資料/計算層，無 Streamlit 依賴。
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 import math
 import numpy as np
@@ -116,7 +116,7 @@ def compute_all_bottom_estimates(
     回傳見模組 docstring。
     """
     if now is None:
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
     elif now.tzinfo is not None:
         now = now.replace(tzinfo=None)   # 對齊 season_forecast 的 naive datetime（HALVING_DATES）
     df = _strip_tz(df)

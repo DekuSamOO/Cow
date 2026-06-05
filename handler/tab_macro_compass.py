@@ -22,7 +22,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timezone
 
 from service.macro_data import fetch_m2_series, fetch_usdjpy, fetch_us_cpi_yoy
 from core.bear_bottom import (
@@ -85,7 +85,7 @@ def _render_forecast_chart(btc: pd.DataFrame, fc: dict):
     fig.add_trace(go.Scatter(x=future_pl.index, y=future_pl['median'], mode='lines', line=dict(color='#ffcc00', width=1, dash='dot'), name='冪律中線'))
     fig.add_trace(go.Scatter(x=hist_2y.index, y=hist_2y['close'], mode='lines', name='BTC 歷史收盤', line=dict(color='#ffffff', width=2)))
     est_date = fc['estimated_date']
-    today = datetime.utcnow()
+    today = datetime.now(timezone.utc).replace(tzinfo=None)
     ribbon_x = [today, est_date, est_date, today]
     ribbon_y = [fc['target_high']] * 2 + [fc['target_low']] * 2
     fig.add_trace(go.Scatter(x=ribbon_x + [today], y=ribbon_y + [fc['target_high']], fill='toself', fillcolor=ribbon_color, line=dict(color='rgba(0,0,0,0)'), name='目標價區間'))
