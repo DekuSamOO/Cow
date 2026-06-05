@@ -1,17 +1,22 @@
-streamlit
-pandas
-numpy
+# ── 核心 ─────────────────────────────────────────────
+# streamlit 鎖定雲端實跑版本，避免 Cloud 重建環境時行為漂移
+streamlit==1.37.1
+# ⚠️ numpy 必須 <2：pandas-ta 0.3.x 仍用 `from numpy import NaN`，
+#    numpy 2.x 會在 import 階段直接崩潰（本地測不出、雲端重建才爆）
+numpy>=1.26,<2
+pandas>=2.2,<2.3
 pandas-ta
-plotly
-yfinance
-ccxt
-requests
-urllib3
+plotly>=5.0
+# ── 資料源 ───────────────────────────────────────────
+yfinance>=0.2.52
+ccxt>=4.5.10
+requests>=2.31.0
+urllib3>=2.0
 # [Task #2] 非同步 HTTP 客戶端，用於並行抓取資金費率分頁
-httpx
+httpx>=0.27
 # [Task #8] 環境變數管理，從 .env 讀取 API Key
-python-dotenv
+python-dotenv>=1.0
 # [Task #9] LINE Bot 推播通知
-line-bot-sdk
+line-bot-sdk>=3.22.0
 # [Task #10] 單元測試框架
-pytest
+pytest>=7.0

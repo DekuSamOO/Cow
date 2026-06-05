@@ -4,22 +4,32 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cow"
-version = "3.2.0"
+version = "3.5.0"
 description = "BTC 投資戰情室"
 authors = [
     {name = "Antigravity", email = "no-reply@example.com"}
 ]
+# 部署單一真相為 requirements.txt（含版本約束）；此處與其對齊，勿各自漂移。
 dependencies = [
-    "streamlit",
-    "pandas",
-    "numpy",
-    "plotly",
-    "requests",
-    "python-dotenv",
-    "ccxt"
+    "streamlit==1.37.1",
+    "pandas>=2.2,<2.3",
+    "numpy>=1.26,<2",
+    "pandas-ta",
+    "plotly>=5.0",
+    "yfinance>=0.2.52",
+    "ccxt>=4.5.10",
+    "requests>=2.31.0",
+    "urllib3>=2.0",
+    "httpx>=0.27",
+    "python-dotenv>=1.0",
+    "line-bot-sdk>=3.22.0",
 ]
 requires-python = ">=3.9"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["core*", "handler*", "service*", "strategy*", "config*"]
+
+[tool.pytest.ini_options]
+# 只收集正規單元測試；scripts/test_*.py 是手動除錯工具（含 __main__），非 pytest 測試
+testpaths = ["tests"]
