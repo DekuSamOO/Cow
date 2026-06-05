@@ -109,10 +109,13 @@ def _render_cycle_waterfall(fc: dict):
             colors.append('#ff9800')
             bar_texts.append(f'{c['peak_mult']:.1f}x')
         else:
+            # 進行中：用 forecast 的實算 cycle_ath 重算倍數（市場可能已創新高）
+            live_ath = (fc.get('market_state', {}) or {}).get('cycle_ath', 0)
+            live_mult = max(c['peak_mult'], live_ath / c['halving_price']) if c['halving_price'] else c['peak_mult']
             labels.append(f'第{i + 1}週期\n({yr}) 進行中')
-            values.append(c['peak_mult'])
+            values.append(live_mult)
             colors.append('#42a5f5')
-            bar_texts.append(f'{c['peak_mult']:.2f}x ✓\n(ATH已達)')
+            bar_texts.append(f'{live_mult:.2f}x ✓\n(ATH已達)')
     fig = go.Figure(go.Bar(x=labels, y=values, marker_color=colors, text=bar_texts, textposition='outside'))
     fig.add_trace(go.Scatter(x=labels, y=values, mode='lines+markers', line=dict(color='#ffffff', width=1.5, dash='dot'), showlegend=False))
     fig.update_layout(height=320, template='plotly_dark', title='歷史牛市漲幅遞減規律（相對減半時價格）', yaxis_title='倍數 (x)', paper_bgcolor='#0e1117', showlegend=False, annotations=[dict(text='🔵 進行中 = ATH倍數已確認，熊市底部尚未完成', xref='paper', yref='paper', x=0, y=-0.15, showarrow=False, font=dict(size=10, color='#42a5f5'), align='left')])
@@ -628,7 +631,7 @@ def render(btc, chart_df, tvl_hist, stable_hist, fund_hist, curr, dxy, funding_r
         st.caption('✅ = 完整週期 ｜ 🔄 = 進行中')
         col_tbl, col_bar = st.columns([1.3, 1])
         with col_tbl:
-            st.dataframe(get_cycle_comparison_table(), use_container_width=True, hide_index=True)
+            st.dataframe(get_cycle_comparison_table(df=btc), use_container_width=True, hide_index=True)
         with col_bar:
             st.plotly_chart(_render_cycle_waterfall(fc), use_container_width=True)
         st.markdown('---')

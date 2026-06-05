@@ -566,10 +566,12 @@ def forecast_price(current_price: float, df: Optional[pd.DataFrame] = None, as_o
     }
 
 
-def get_cycle_comparison_table():
+def get_cycle_comparison_table(df: pd.DataFrame = None):
     """
     返回歷史各週期比較表 (pd.DataFrame)。
     [v1.3] 第4週期標「進行中」，顯示已知ATH，底部欄位顯示「尚未完成」。
+    [v1.5] 進行中週期的 ATH/倍數/達ATH天數改用 df 實算（與寫死值取 max），
+           避免市場創新高後仍顯示舊高點（如 $108,268）而過時。
     """
     rows = []
     for i, c in enumerate(CYCLE_HISTORY):
@@ -587,14 +589,25 @@ def get_cycle_comparison_table():
                 "達底部天數":  f"{c['bottom_days']} 天",
             })
         else:
+            # 進行中：以 df 實算當前週期 ATH，與寫死值取 max（市場可能已創新高）
+            ath_price = c["ath_price"]
+            ath_date  = c["ath_date"]
+            if df is not None and not df.empty and "close" in df.columns:
+                d = _strip_tz(df)
+                cyc = d.loc[d.index >= pd.Timestamp(c["halving"]), "close"]
+                if not cyc.empty and float(cyc.max()) > ath_price:
+                    ath_price = float(cyc.max())
+                    ath_date  = cyc.idxmax().to_pydatetime()
+            peak_mult = ath_price / c["halving_price"] if c["halving_price"] else 0.0
+            peak_days = (ath_date - c["halving"]).days
             rows.append({
                 "週期":        f"第 {i+1} 次減半",
                 "狀態":        "🔄 進行中",
                 "減半日":      c["halving"].strftime("%Y-%m-%d"),
                 "減半時價格":  f"${c['halving_price']:,.0f}",
-                "牛市 ATH":    f"${c['ath_price']:,.0f} ✓",
-                "ATH 倍數":    f"{c['peak_mult']:.2f}x",
-                "達 ATH 天數": f"{c['peak_days']} 天",
+                "牛市 ATH":    f"${ath_price:,.0f} ✓",
+                "ATH 倍數":    f"{peak_mult:.2f}x",
+                "達 ATH 天數": f"{peak_days} 天",
                 "熊市最低點":  "—（尚未完成）",
                 "ATH 跌幅":    "—",
                 "達底部天數":  "—",
