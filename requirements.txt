@@ -1,11 +1,12 @@
 # ── 核心 ─────────────────────────────────────────────
-# streamlit 鎖定雲端實跑版本，避免 Cloud 重建環境時行為漂移
+# streamlit 鎖定雲端實跑版本，避免新版改動 @st.fragment 等行為（見 CLAUDE.md 陷阱）
 streamlit==1.37.1
-# ⚠️ numpy 必須 <2：pandas-ta 0.3.x 仍用 `from numpy import NaN`，
-#    numpy 2.x 會在 import 階段直接崩潰（本地測不出、雲端重建才爆）
-numpy>=1.26,<2
-pandas>=2.2,<2.3
-pandas-ta
+# pandas-ta 只有 pre-release 版本（0.4.x）；pin 確切版本同時讓 uv 願意解析其 pre-release。
+# ⚠️ 重要教訓：pandas-ta 0.4.x 依賴 pandas>=2.3.2，且早已無舊版 numpy<2 的 NaN import 問題。
+#   切勿替 numpy/pandas 加 <2 / <2.3 上限——會與 pandas-ta 硬衝突，雲端直接 No solution。
+pandas-ta==0.4.71b0
+numpy>=1.26
+pandas>=2.3.2
 plotly>=5.0
 # ── 資料源 ───────────────────────────────────────────
 yfinance>=0.2.52

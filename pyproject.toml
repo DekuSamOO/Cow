@@ -12,9 +12,9 @@ authors = [
 # 部署單一真相為 requirements.txt（含版本約束）；此處與其對齊，勿各自漂移。
 dependencies = [
     "streamlit==1.37.1",
-    "pandas>=2.2,<2.3",
-    "numpy>=1.26,<2",
-    "pandas-ta",
+    "pandas-ta==0.4.71b0",
+    "pandas>=2.3.2",
+    "numpy>=1.26",
     "plotly>=5.0",
     "yfinance>=0.2.52",
     "ccxt>=4.5.10",
