@@ -239,3 +239,19 @@ Gemini 翻譯成本與「Streamlit Cloud 休眠/喚醒」脫鉤的關鍵：
    在 cold start 會清空，故需落地檔案才能跨休眠續用）。
 3. 總開關 `NEWS_I18N_ENABLED=false` 可完全停用翻譯（0 API 呼叫）。
    - 休眠時不執行 script → 0 token；真正成本 = 「新出現且沒翻過的新聞則數」。
+
+### 20. requirements 鎖版本：勿替 numpy/pandas 加上限（pandas-ta 0.4.x 需 pandas>=2.3.2）
+
+pandas-ta 在 PyPI 只有 pre-release 版（0.4.67b0 / 0.4.71b0），且**依賴 `pandas>=2.3.2`**；
+新版早已無舊 0.3.x「`from numpy import NaN`」的 numpy<2 限制。
+
+**踩坑（已造成線上部署中斷）**：曾誤判 pandas-ta 仍為需 numpy<2 的舊版，鎖了 `numpy<2` +
+`pandas<2.3`，與 pandas-ta 0.4.x 的 `pandas>=2.3.2` 硬衝突 → Streamlit Cloud（Python 3.13
++ uv）報 `No solution`，pip fallback 後去 source-build pandas 2.2.2 卡死，app 起不來。
+**原本「全無 pin」反而能正常 build**。
+
+**正解**：
+- `pandas-ta==0.4.71b0`（pin 確切 pre-release 版本，uv 才願意解析其 pre-release）
+- `pandas>=2.3.2`、`numpy>=1.26`，**一律不加上限**
+- 雲端 build 走 uv（Python 3.13），uv 預設擋 pre-release，唯「明確 == 該 pre-release 版本」放行
+- 鎖版本前先看一次雲端 build log 確認現役版本，不可憑記憶臆測周邊套件需求
