@@ -32,8 +32,11 @@ FRED 公開 CSV API 說明:
   - DEXJPUS : 美元兌日圓（日頻）
 """
 import io
+import os
+import json
 import math
 import logging
+from datetime import datetime, timezone
 import requests
 from core.http_client import safe_get, safe_post
 
@@ -107,7 +110,25 @@ _FALLBACK = {
 }
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def _fred_reachable() -> bool:
+    """
+    FRED 可達性探針（快取 10 分鐘）。企業 proxy 常完全卡住 FRED，導致每個序列
+    timeout 30s×3=90s、多序列累計數分鐘卡死 dashboard。先用單次短探測（12s, retries=0）
+    判斷；不通則所有 _fred_fetch 立即拋例外走備援（本機快速結束）。
+    雲端 FRED 正常回應 <2s，探針通過，不影響真實抓取。
+    """
+    try:
+        safe_get(_FRED_CSV.format(sid="UNRATE"), timeout=12, retries=0, verify=SSL_VERIFY)
+        return True
+    except Exception:
+        logger.warning("[FRED] 可達性探針失敗（疑似企業 proxy 阻擋），本 session 改走靜態備援")
+        return False
+
+
 def _fred_fetch(series_id: str, timeout: int = 30) -> pd.DataFrame:
+    if not _fred_reachable():
+        raise RuntimeError(f"FRED 不可達（circuit open），略過 {series_id} 直接走備援")
     """
     從 FRED 公開 CSV 端點抓取時間序列，返回 DatetimeIndex DataFrame。
     FRED 以 '.' 代表缺失值，需先替換為 NaN。
@@ -501,6 +522,47 @@ def fetch_btc_dominance() -> dict:
         logger.warning(f"[BTC.D] CoinGecko 抓取失敗: {e}，使用靜態備援值")
         fb = _FALLBACK["btc_dominance"]
         return {"value": fb["value"], "source": "靜態備援", "is_fallback": True}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 總經事件行事曆（FOMC/CPI/PCE/非農）— 本地鏡像，與 Notion「BTC 總經事件」DB 同源
+# ──────────────────────────────────────────────────────────────────────────────
+
+_MACRO_EVENTS_PATH = os.path.join(os.path.dirname(__file__), "..", "db", "macro_events.json")
+
+
+def get_next_macro_event(now=None) -> dict:
+    """
+    讀 db/macro_events.json，回傳最近的「未來（含當日）」重大總經事件：
+      {days, date, type, importance}；無資料/無未來事件時 days=None。
+    供 core/relative_high「總經逆風」維度的 event_within_days（事件臨近風險）。
+    app 無 Notion 權限，故讀本地鏡像（每年底人工補下一年度）。
+    """
+    if now is None:
+        now = datetime.now(timezone.utc).date()
+    elif isinstance(now, datetime):
+        now = now.date()
+    try:
+        with open(_MACRO_EVENTS_PATH, "r", encoding="utf-8") as f:
+            events = json.load(f).get("events", [])
+    except Exception as e:
+        logger.warning(f"[macro_events] 讀取失敗：{e}")
+        return {"days": None, "date": None, "type": None, "importance": None}
+
+    future = []
+    for ev in events:
+        try:
+            d = datetime.strptime(ev["date"], "%Y-%m-%d").date()
+        except Exception:
+            continue
+        if d >= now:
+            future.append((d, ev))
+    if not future:
+        return {"days": None, "date": None, "type": None, "importance": None}
+    future.sort(key=lambda x: x[0])
+    d, ev = future[0]
+    return {"days": (d - now).days, "date": ev["date"],
+            "type": ev.get("type"), "importance": ev.get("importance")}
 
 
 # ──────────────────────────────────────────────────────────────────────────────

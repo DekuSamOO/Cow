@@ -103,7 +103,21 @@ def fetch_realtime_data() -> RealtimeData:
                 headers=headers  # 加入偽裝 Header
             )
             if r_oi.status_code == 200:
-                current_oi = float(r_oi.json()['openInterest'])
+                current_oi = float(r_oi.json()['openInterest'])   # U本位 (BTC)
+
+                # 加總幣本位 (COIN-M BTCUSD_PERP，張數×$100/價)，與 service/market_snapshot
+                # 同源算法，得 Binance BTC 永續總 OI（已對 CoinGecko derivatives 交叉驗證）
+                try:
+                    r_coin = safe_get(
+                        "https://dapi.binance.com/dapi/v1/openInterest?symbol=BTCUSD_PERP",
+                        timeout=5, verify=SSL_VERIFY, headers=headers
+                    )
+                    if r_coin.status_code == 200 and data.price:
+                        contracts = float(r_coin.json()['openInterest'])
+                        current_oi += (contracts * 100) / data.price
+                except Exception as e:
+                    logger.warning(f"COIN-M OI fetch error: {e}")
+
                 data.open_interest = current_oi
 
                 # 以美元計算（顆數 × 現價），單位：億 USD

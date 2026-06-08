@@ -37,7 +37,13 @@ from core.season_forecast import (
     CYCLE_HISTORY,
 )
 from core.bottom_floors import compute_all_bottom_estimates
+from core.relative_high import compute_relative_high
 from service.bottom_metrics import get_latest_bottom_metrics, fetch_hashrate_history_ths
+from service.etf_flow import get_etf_flow_summary
+from service.market_snapshot import get_oi_stats, get_btcd_trend
+from service.macro_data import (
+    fetch_us_cpi_yoy, fetch_us_pce_yoy, fetch_nfp, fetch_unrate, get_next_macro_event,
+)
 from handler.components.macro_utils import (
     _score_meta,
     _bear_score_meta,
@@ -120,6 +126,169 @@ def _render_cycle_waterfall(fc: dict):
     fig.add_trace(go.Scatter(x=labels, y=values, mode='lines+markers', line=dict(color='#ffffff', width=1.5, dash='dot'), showlegend=False))
     fig.update_layout(height=320, template='plotly_dark', title='歷史牛市漲幅遞減規律（相對減半時價格）', yaxis_title='倍數 (x)', paper_bgcolor='#0e1117', showlegend=False, annotations=[dict(text='🔵 進行中 = ATH倍數已確認，熊市底部尚未完成', xref='paper', yref='paper', x=0, y=-0.15, showarrow=False, font=dict(size=10, color='#42a5f5'), align='left')])
     return fig
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def _gather_escape_externals(cache_key: str) -> dict:
+    """
+    逃頂雷達的外部資料（ETF 流量 / SOPR / BTC.D 趨勢 / 總經）一次抓齊並快取 30 分鐘，
+    避免 Streamlit 每次 rerun 重打。各服務內部另有 json 快取，此層再省一次。
+    回傳純 dict（可序列化），失敗欄位為 None。
+    """
+    out = {"etf": None, "sopr": None, "btcd": None, "macro": None, "asof": None}
+    try:
+        out["etf"] = get_etf_flow_summary()
+    except Exception:
+        pass
+    try:
+        bm = get_latest_bottom_metrics()
+        out["sopr"] = bm.get("sopr")
+        out["asof"] = bm.get("asof")
+    except Exception:
+        pass
+    try:
+        out["btcd"] = get_btcd_trend()
+    except Exception:
+        pass
+    try:
+        cpi = fetch_us_cpi_yoy(); pce = fetch_us_pce_yoy()
+        nfp = fetch_nfp(); unrate = fetch_unrate()
+        jobs_strong = ((nfp.get("change_k") or 0) > 150) or ((unrate.get("change_pp") or 0) < 0)
+        nxt = get_next_macro_event()
+        out["macro"] = {
+            "cpi_hot": "升溫" in (cpi.get("trend") or ""),
+            "pce_hot": "升溫" in (pce.get("trend") or ""),
+            "jobs_strong": bool(jobs_strong),
+            "event_within_days": nxt.get("days"),   # db/macro_events.json（Notion 同源）
+            "next_event_type": nxt.get("type"),
+        }
+    except Exception:
+        pass
+    return out
+
+
+def _render_escape_radar(btc, curr, funding_rate, fng_val, realtime_data):
+    """C5. 逃頂雷達（相對高點）— 與 C 熊市底部獵人對稱。與 LINE 推播同源 core/relative_high。"""
+    st.markdown('---')
+    st.subheader('C5. 🚨 相對高點雷達 (Relative-High Radar)')
+    st.caption('分兩層看：**C5-A 波段逃頂** = 短中期相對高點（如 2026/5 $82k→$60k，給止盈/開空）；'
+               '**C5-B 週期大頂** = 整輪牛市大頂（四季論秋季）。兩者互補——可能 A 高 B 低（牛市途中回檔高點），'
+               '或 A、B 皆高（接近整輪大頂）。與每日 LINE 推播同源 core/relative_high。')
+    try:
+        price = float(curr['close'])
+        oi_total = getattr(realtime_data, 'open_interest', None)
+        oi_stats = get_oi_stats(oi_total) if oi_total else None
+        ext = _gather_escape_externals(str(btc.index[-1]))
+        rh = compute_relative_high(
+            price, btc.iloc[-1], btc,
+            funding_8h=funding_rate,
+            oi_stats=oi_stats,
+            etf_summary=ext.get('etf'),
+            sopr=ext.get('sopr'),
+            fng=float(fng_val) if fng_val is not None else None,
+            btc_d_trend=ext.get('btcd'),
+            macro=ext.get('macro'),
+        )
+    except Exception as e:
+        st.caption(f'相對高點雷達暫不可用：{type(e).__name__}: {e}')
+        return
+
+    score = rh['escape_score']
+    level, color = rh['escape_level'], rh['escape_color']
+    sig = rh['escape_signals']
+
+    # ══════════ C5-A 波段逃頂（短中期）══════════
+    st.markdown('#### C5-A · 波段逃頂訊號（短中期）')
+    st.caption('五維加權 0–100（合約過熱+技術衰竭+鏈上派發+情緒過熱+總經逆風），判斷「現在是否處於一個波段相對高點」。')
+    gauge = go.Figure(go.Indicator(
+        mode='gauge+number', value=score,
+        title={'text': "波段逃頂評分<br><span style='font-size:0.8em;color:gray'>Swing Escape-Top</span>",
+               'font': {'size': 16}},
+        gauge={'axis': {'range': [0, 100]}, 'bar': {'color': color}, 'bgcolor': '#1e1e1e',
+               'borderwidth': 2, 'bordercolor': '#333',
+               'steps': [{'range': [0, 25], 'color': '#1a3a1a'}, {'range': [25, 45], 'color': '#2a2a2a'},
+                         {'range': [45, 60], 'color': '#3a3a1a'}, {'range': [60, 75], 'color': '#3a2a1a'},
+                         {'range': [75, 100], 'color': '#3a1a1a'}],
+               'threshold': {'line': {'color': '#fff', 'width': 3}, 'thickness': 0.75, 'value': score}}))
+    gauge.update_layout(height=260, template='plotly_dark', paper_bgcolor='#0e1117', font={'color': 'white'})
+    eg1, eg2 = st.columns([1, 1])
+    with eg1:
+        st.plotly_chart(gauge, use_container_width=True)
+    with eg2:
+        st.markdown(f'### {level}')
+        st.markdown(f'**評分: {score}/100**')
+        st.info(f'📋 **操作建議**: {rh["escape_action"]}')
+        st.markdown("""
+        | 分數 | 狀態 | 行動 |
+        |------|------|------|
+        | 75-100 | 強烈逃頂 | 分批止盈/對沖 |
+        | 60-75 | 明確過熱 | 減倉、收緊止盈 |
+        | 45-60 | 偏熱警戒 | 停止加倉 |
+        | 25-45 | 中性 | 正常持有 |
+        | 0-25 | 無過熱 | — |
+        """)
+
+    # 五維卡片
+    dim_names = {'derivatives': '① 合約過熱', 'technical': '② 技術衰竭', 'onchain': '③ 鏈上派發',
+                 'sentiment': '④ 情緒過熱', 'macro': '⑤ 總經逆風'}
+    unfitted = set(rh.get('unfitted_dims', []))
+    cols = st.columns(5)
+    accumulating = []
+    for col, (key, name) in zip(cols, dim_names.items()):
+        s = sig[key]
+        bar_pct = (s['score'] / s['max'] * 100) if s['max'] else 0
+        tag = " <span style='color:#ff9800;font-size:0.7rem;'>(未擬合)</span>" if key in unfitted else ""
+        if '累積中' in s['label'] or '無資料' in s['label']:
+            accumulating.append(name.split(' ')[-1] if ' ' in name else name)
+        col.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-title">{name}{tag}</div>
+            <div class="metric-value" style="font-size:1.1rem;">{s['value']}</div>
+            <div class="metric-delta" style="font-size:0.72rem;">{s['label']}</div>
+            <div style="background:#333;border-radius:4px;height:6px;margin-top:8px;">
+                <div style="background:{color};width:{bar_pct:.0f}%;height:6px;border-radius:4px;"></div>
+            </div>
+            <div style="color:#888;font-size:0.72rem;text-align:right;">{s['score']}/{s['max']} 分</div>
+        </div>""", unsafe_allow_html=True)
+    if accumulating:
+        st.caption('ℹ️ 部分維度為 0 是「資料尚未到位」而非「無訊號」：'
+                   + '、'.join(accumulating)
+                   + '。OI/BTC.D 由本地每日快照自建歷史（剛起步，需數週累積）；'
+                     'SOPR/總經視來源可達性（FRED 在公司網路常被擋，雲端正常）。'
+                     '其餘為 0 則代表市場當下確實不過熱。')
+
+    # ══════════ C5-B 週期大頂（長期 · 四季論）══════════
+    st.markdown('#### C5-B · 週期大頂（長期 · 四季論）')
+    st.caption('用 8 大鏈上/技術指標的「牛頂分數」+ 四季論季節，判斷是否接近**整輪牛市大頂**（與 C 熊市底部獵人對稱）。')
+    ct = rh.get('cycle_top', {})
+    _season_zh = {'spring': '🌱 春季(復甦)', 'summer': '☀️ 夏季(主升)',
+                  'autumn': '🍂 秋季(泡沫破裂)', 'winter': '❄️ 冬季(築底)'}
+    eff = ct.get('effective_season')
+    _season_label = '🍂 秋季(泡沫破裂)' if ct.get('is_autumn') else _season_zh.get(eff, eff or '—')
+    bcol1, bcol2 = st.columns([1, 2])
+    with bcol1:
+        st.metric('牛頂分數 (0-100)', f"{ct.get('bull_total', 0)}/100",
+                  help='8 大指標的牛頂側合計，越高越接近整輪大頂')
+        st.metric('多空評分', f"{ct.get('market_score', 0):+d}",
+                  help='牛頂分 − 熊底分，+100 狂熱 / −100 深熊')
+        st.markdown(f"**有效季節**：{_season_label}")
+    with bcol2:
+        est = rh.get('top_estimates', [])
+        if est:
+            _rows = ''
+            for e in est:
+                dist = (e['value'] / price - 1) * 100
+                dclr = '#ef5350' if dist <= 0 else '#66bb6a'
+                _rows += (f"<tr><td style='padding:4px 8px;color:#ffd54f;'>{e['label']}</td>"
+                          f"<td style='padding:4px 8px;text-align:right;color:#fff;font-weight:600;'>${e['value']:,.0f}</td>"
+                          f"<td style='padding:4px 8px;text-align:right;color:{dclr};'>{'+' if dist>=0 else ''}{dist:.0f}%</td>"
+                          f"<td style='padding:4px 8px;color:#777;font-size:0.72rem;'>{e['note']}</td></tr>")
+            st.markdown(f"""<table style="width:100%;border-collapse:collapse;font-size:0.82rem;">
+                <tr style="color:#aaa;border-bottom:1px solid #444;">
+                  <th style="text-align:left;padding:4px 8px;">高點價位錨</th><th style="text-align:right;padding:4px 8px;">價位</th>
+                  <th style="text-align:right;padding:4px 8px;">現價距此</th><th style="text-align:left;padding:4px 8px;">說明</th></tr>
+                {_rows}</table>""", unsafe_allow_html=True)
+    st.caption('⚠️ 相對高點雷達為**風險量表**，非精準擇時工具（回測顯示可回測維度判別力偏弱，OI/ETF 等強訊號歷史不足無法驗證）。')
+
 
 def render(btc, chart_df, tvl_hist, stable_hist, fund_hist, curr, dxy, funding_rate, tvl_val, fng_val, fng_state, fng_source, proxies, realtime_data):
     """
@@ -501,6 +670,10 @@ def render(btc, chart_df, tvl_hist, stable_hist, fund_hist, curr, dxy, funding_r
         '頂部閾值': ['> 1.2', '> 3.5', '> 10%', '> 4x', '> 4.0', '> 75', '> 10x', '> 2.4x'],
     }
     st.dataframe(pd.DataFrame(summary_data), use_container_width=True, hide_index=True)
+
+    # ── C5. 逃頂雷達（相對高點，與 C 底部獵人對稱）──
+    _render_escape_radar(btc, curr, funding_rate, fng_val, realtime_data)
+
     st.markdown('---')
     st.subheader('D. 🗓️ 四季理論目標價預測 (Halving Cycle Forecast)')
     st.caption('依比特幣減半週期（約4年）劃分四季，整合歷史漲跌倍數與冪律模型，預測未來12個月牛市最高價或熊市最低價。')

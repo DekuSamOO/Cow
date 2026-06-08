@@ -30,6 +30,11 @@ def safe_get(
     _headers = headers or {}
     if "User-Agent" not in _headers:
         _headers["User-Agent"] = DEFAULT_USER_AGENT
+    # 不請求 brotli：部分環境 urllib3 的 br streaming 解碼器有 bug
+    # （"decoder process called with data when can_accept_more_data() is False"），
+    # 會讓 DeFiLlama 等回 br 的端點整包失敗。限定 gzip/deflate 從源頭避開。
+    if "Accept-Encoding" not in _headers:
+        _headers["Accept-Encoding"] = "gzip, deflate"
 
     last_exception = None
     for attempt in range(retries + 1):
