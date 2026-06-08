@@ -321,6 +321,54 @@ def collect_year(year: int) -> int:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# 市場快照（OI / 資金費率 / BTC.D）— 供相對高點累積歷史
+# ══════════════════════════════════════════════════════════════════════════════
+
+def snapshot_market_state():
+    """
+    快照當前 OI（U本位+幣本位加總）+ 資金費率 + BTC.D 到 db/market_snapshot.json，
+    供 core/relative_high 的 OI 分位 / BTC.D 趨勢累積真實歷史。
+
+    為何放在本地 collector：GitHub Actions（美國 IP）對 Binance OI 端點 geo-block（451），
+    抓不到 OI；本機（公司/家用網路）的 fapi/dapi 可用。隨 collector 每次執行累積一筆，
+    git_push 的 `git add db/` 會一併提交 market_snapshot.json。
+    """
+    try:
+        from service.market_snapshot import append_daily_snapshot
+    except Exception as e:
+        print(f"  ⚠ 無法載入 market_snapshot：{e}")
+        return
+
+    fr = None
+    try:
+        r = safe_get("https://fapi.binance.com/fapi/v1/premiumIndex?symbol=BTCUSDT",
+                     timeout=10, verify=False)
+        if r.status_code == 200:
+            fr = float(r.json()["lastFundingRate"]) * 100   # % / 8h
+    except Exception as e:
+        print(f"  ⚠ 資金費率抓取失敗：{e}")
+
+    btcd = None
+    try:
+        r = safe_get("https://api.coingecko.com/api/v3/global", timeout=10, verify=False)
+        if r.status_code == 200:
+            btcd = r.json().get("data", {}).get("market_cap_percentage", {}).get("btc")
+    except Exception as e:
+        print(f"  ⚠ BTC.D 抓取失敗：{e}")
+
+    try:
+        snap = append_daily_snapshot(price=None, funding_rate=fr, btc_dominance=btcd)
+    except Exception as e:
+        print(f"  ✗ OI 快照寫入失敗：{e}")
+        return
+
+    if snap.get("oi_btc"):
+        print(f"  ✓ OI 快照：{snap['oi_btc']:,.0f} BTC｜資費 {fr}%/8h｜BTC.D {btcd}")
+    else:
+        print(f"  ⚠ OI 快照未取得 OI（可能 Binance 封鎖此環境）")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Git Push
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -426,6 +474,10 @@ def main():
     print("\n" + "=" * 55)
     print(f"  完成！本次新增 {total_new:,} 筆 15m K 線")
     print("=" * 55)
+
+    # 市場快照（OI / 資金費率 / BTC.D）— 隨 collector 累積相對高點歷史
+    print("\n【市場快照】OI / 資金費率 / BTC.D")
+    snapshot_market_state()
 
     if args.push:
         git_push()
