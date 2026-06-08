@@ -334,10 +334,18 @@ def snapshot_market_state():
     git_push 的 `git add db/` 會一併提交 market_snapshot.json。
     """
     try:
-        from service.market_snapshot import append_daily_snapshot
+        from service.market_snapshot import append_daily_snapshot, backfill_oi_history
     except Exception as e:
         print(f"  ⚠ 無法載入 market_snapshot：{e}")
         return
+
+    # 先回補缺漏日（週末關機沒跑 / 首次啟用）— Binance openInterestHist 近 30 天每日
+    try:
+        n = backfill_oi_history(30)
+        if n:
+            print(f"  ✓ 回補 {n} 天缺漏 OI 歷史（Binance 30 天每日）")
+    except Exception as e:
+        print(f"  ⚠ OI 回補失敗：{e}")
 
     fr = None
     try:

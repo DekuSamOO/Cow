@@ -1,10 +1,271 @@
 {
 "2026-06-08": {
-"price": 63763.84,
-"oi_btc": 114626.91777890416,
-"oi_usd": 7309052444.9472,
-"funding_rate": 0.000709,
-"btc_dominance": 56.27925486282068,
-"ts": 1780928730.622622
+"price": 63830.71,
+"oi_btc": 114670.1641487143,
+"oi_usd": 7319477993.42898,
+"funding_rate": 0.000665,
+"btc_dominance": 56.300639654190775,
+"ts": 1780929115.057095
+},
+"2026-05-10": {
+"price": null,
+"oi_btc": 115396.77892479,
+"oi_usd": null,
+"funding_rate": null,
+"btc_dominance": null,
+"source": "backfill",
+"ts": 1780929088.4741278
+},
+"2026-05-11": {
+"price": null,
+"oi_btc": 115319.06929883,
+"oi_usd": null,
+"funding_rate": null,
+"btc_dominance": null,
+"source": "backfill",
+"ts": 1780929088.4741278
+},
+"2026-05-12": {
+"price": null,
+"oi_btc": 115569.66387834,
+"oi_usd": null,
+"funding_rate": null,
+"btc_dominance": null,
+"source": "backfill",
+"ts": 1780929088.4741278
+},
+"2026-05-13": {
+"price": null,
+"oi_btc": 120486.0716301,
+"oi_usd": null,
+"funding_rate": null,
+"btc_dominance": null,
+"source": "backfill",
+"ts": 1780929088.4741278
+},
+"2026-05-14": {
+"price": null,
+"oi_btc": 119419.68733904,
+"oi_usd": null,
+"funding_rate": null,
+"btc_dominance": null,
+"source": "backfill",
+"ts": 1780929088.4741278
+},
+"2026-05-15": {
+"price": null,
+"oi_btc": 125492.76565824001,
+"oi_usd": null,
+"funding_rate": null,
+"btc_dominance": null,
+"source": "backfill",
+"ts": 1780929088.4741278
+},
+"2026-05-16": {
+"price": null,
+"oi_btc": 116960.58506363,
+"oi_usd": null,
+"funding_rate": null,
+"btc_dominance": null,
+"source": "backfill",
+"ts": 1780929088.4741278
+},
+"2026-05-17": {
+"price": null,
+"oi_btc": 116859.61943443,
+"oi_usd": null,
+"funding_rate": null,
+"btc_dominance": null,
+"source": "backfill",
+"ts": 1780929088.4741278
+},
+"2026-05-18": {
+"price": null,
+"oi_btc": 115824.18149279,
+"oi_usd": null,
+"funding_rate": null,
+"btc_dominance": null,
+"source": "backfill",
+"ts": 1780929088.4741278
+},
+"2026-05-19": {
+"price": null,
+"oi_btc": 119613.95666302,
+"oi_usd": null,
+"funding_rate": null,
+"btc_dominance": null,
+"source": "backfill",
+"ts": 1780929088.4741278
+},
+"2026-05-20": {
+"price": null,
+"oi_btc": 118725.62375482,
+"oi_usd": null,
+"funding_rate": null,
+"btc_dominance": null,
+"source": "backfill",
+"ts": 1780929088.4741278
+},
+"2026-05-21": {
+"price": null,
+"oi_btc": 116504.00505433,
+"oi_usd": null,
+"funding_rate": null,
+"btc_dominance": null,
+"source": "backfill",
+"ts": 1780929088.4741278
+},
+"2026-05-22": {
+"price": null,
+"oi_btc": 115287.36327125,
+"oi_usd": null,
+"funding_rate": null,
+"btc_dominance": null,
+"source": "backfill",
+"ts": 1780929088.4741278
+},
+"2026-05-23": {
+"price": null,
+"oi_btc": 120115.23763989001,
+"oi_usd": null,
+"funding_rate": null,
+"btc_dominance": null,
+"source": "backfill",
+"ts": 1780929088.4741278
+},
+"2026-05-24": {
+"price": null,
+"oi_btc": 118637.53024136,
+"oi_usd": null,
+"funding_rate": null,
+"btc_dominance": null,
+"source": "backfill",
+"ts": 1780929088.4741278
+},
+"2026-05-25": {
+"price": null,
+"oi_btc": 114702.36286357,
+"oi_usd": null,
+"funding_rate": null,
+"btc_dominance": null,
+"source": "backfill",
+"ts": 1780929088.4741278
+},
+"2026-05-26": {
+"price": null,
+"oi_btc": 115126.0641868,
+"oi_usd": null,
+"funding_rate": null,
+"btc_dominance": null,
+"source": "backfill",
+"ts": 1780929088.4741278
+},
+"2026-05-27": {
+"price": null,
+"oi_btc": 114417.48241652,
+"oi_usd": null,
+"funding_rate": null,
+"btc_dominance": null,
+"source": "backfill",
+"ts": 1780929088.4741278
+},
+"2026-05-28": {
+"price": null,
+"oi_btc": 117008.49327451,
+"oi_usd": null,
+"funding_rate": null,
+"btc_dominance": null,
+"source": "backfill",
+"ts": 1780929088.4741278
+},
+"2026-05-29": {
+"price": null,
+"oi_btc": 122321.07183974,
+"oi_usd": null,
+"funding_rate": null,
+"btc_dominance": null,
+"source": "backfill",
+"ts": 1780929088.4741278
+},
+"2026-05-30": {
+"price": null,
+"oi_btc": 119989.10609678,
+"oi_usd": null,
+"funding_rate": null,
+"btc_dominance": null,
+"source": "backfill",
+"ts": 1780929088.4741278
+},
+"2026-05-31": {
+"price": null,
+"oi_btc": 119651.5615411,
+"oi_usd": null,
+"funding_rate": null,
+"btc_dominance": null,
+"source": "backfill",
+"ts": 1780929088.4741278
+},
+"2026-06-01": {
+"price": null,
+"oi_btc": 120715.06856926999,
+"oi_usd": null,
+"funding_rate": null,
+"btc_dominance": null,
+"source": "backfill",
+"ts": 1780929088.4741278
+},
+"2026-06-02": {
+"price": null,
+"oi_btc": 121414.47111145999,
+"oi_usd": null,
+"funding_rate": null,
+"btc_dominance": null,
+"source": "backfill",
+"ts": 1780929088.4741278
+},
+"2026-06-03": {
+"price": null,
+"oi_btc": 124255.06452005,
+"oi_usd": null,
+"funding_rate": null,
+"btc_dominance": null,
+"source": "backfill",
+"ts": 1780929088.4741278
+},
+"2026-06-04": {
+"price": null,
+"oi_btc": 121941.96827632,
+"oi_usd": null,
+"funding_rate": null,
+"btc_dominance": null,
+"source": "backfill",
+"ts": 1780929088.4741278
+},
+"2026-06-05": {
+"price": null,
+"oi_btc": 116146.75438347,
+"oi_usd": null,
+"funding_rate": null,
+"btc_dominance": null,
+"source": "backfill",
+"ts": 1780929088.4741278
+},
+"2026-06-06": {
+"price": null,
+"oi_btc": 119502.40670679,
+"oi_usd": null,
+"funding_rate": null,
+"btc_dominance": null,
+"source": "backfill",
+"ts": 1780929088.4741278
+},
+"2026-06-07": {
+"price": null,
+"oi_btc": 119487.68829975,
+"oi_usd": null,
+"funding_rate": null,
+"btc_dominance": null,
+"source": "backfill",
+"ts": 1780929088.4741278
 }
 }

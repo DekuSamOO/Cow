@@ -129,6 +129,53 @@ def append_daily_snapshot(price: float = None, funding_rate: float = None,
 # 歷史讀取與統計
 # ──────────────────────────────────────────────────────────────────────────────
 
+def backfill_oi_history(days: int = 30) -> int:
+    """
+    用 Binance openInterestHist（fapi U本位 + dapi 幣本位，皆保留近 ~30 天每日）回補
+    market_snapshot.json 中缺漏的日期——例如週末關機沒跑、或首次啟用時一次補滿近 30 天。
+
+    只填「不存在」的日期，不覆蓋既有 live 快照，也不碰今日（今日交給 append_daily_snapshot）。
+    回補口徑與 live fetch_total_oi 一致（已交叉驗證）：
+      oi_btc = U sumOpenInterest(BTC) + COIN sumOpenInterestValue(BTC)
+    funding_rate / btc_dominance 留 None（無免費回溯源），source 標 'backfill'。
+    回傳新增筆數。
+    """
+    store = _load()
+    existing = {k for k in store if not k.startswith("_")}
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    try:
+        ru = safe_get("https://fapi.binance.com/futures/data/openInterestHist",
+                      params={"symbol": "BTCUSDT", "period": "1d", "limit": days},
+                      timeout=10, verify=SSL_VERIFY, headers=_UA)
+        rc = safe_get("https://dapi.binance.com/futures/data/openInterestHist",
+                      params={"pair": "BTCUSD", "contractType": "PERPETUAL", "period": "1d", "limit": days},
+                      timeout=10, verify=SSL_VERIFY, headers=_UA)
+        u_by, c_by = {}, {}
+        for r in ru.json():
+            d = datetime.fromtimestamp(r["timestamp"] / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+            u_by[d] = float(r["sumOpenInterest"])
+        for r in rc.json():
+            d = datetime.fromtimestamp(r["timestamp"] / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+            c_by[d] = float(r["sumOpenInterestValue"])   # 幣本位 OI（單位 BTC）
+    except Exception as e:
+        logger.warning(f"[market_snapshot] backfill 抓取失敗：{e}")
+        return 0
+
+    filled = 0
+    for d, u_oi in u_by.items():
+        if d in existing or d == today:
+            continue
+        store[d] = {"price": None, "oi_btc": u_oi + c_by.get(d, 0.0), "oi_usd": None,
+                    "funding_rate": None, "btc_dominance": None,
+                    "source": "backfill", "ts": time.time()}
+        filled += 1
+    if filled:
+        _save(store)
+        logger.info(f"[market_snapshot] backfill 補了 {filled} 天 OI 歷史")
+    return filled
+
+
 def get_snapshot_history() -> dict:
     """回傳全部快照 {date_str: snap}（已排除 meta 鍵）。"""
     return {k: v for k, v in _load().items() if not k.startswith("_")}
