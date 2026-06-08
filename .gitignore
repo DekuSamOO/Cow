@@ -30,3 +30,7 @@ db/news_i18n.json
 db/bottom_metrics_cache.json
 db/hashrate_history.json
 
+# OI 快照排程：log（執行時產生）+ .bat（含本機絕對路徑，非可攜）
+collector/oi_snapshot.log
+collector/run_oi_snapshot.bat
+
