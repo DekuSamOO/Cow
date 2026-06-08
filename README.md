@@ -342,6 +342,10 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 
 ## 版本紀錄
 
+### v3.9 (2026-06-08)
+- **feat(notify)**: 逃頂警報 Flex 化。`service/notification/builders.py` 新增 `build_escape_alert_flex()`，將逃頂評分 ≥ 門檻時的獨立警報由純文字改為完整 Flex bubble（紅色 header「🚨 BTC 逃頂警報」+ 與每日 Flex 同一個 `_build_escape_box` 逃頂雷達 box + 操作建議 box），缺 `escape_signals` 時回 `None`；`scripts/daily_line_notify.py` 的 `maybe_send_escape_alert` 改送此 Flex 並保留每日去重（`escape_alert_state.json`）。
+- **refactor(notify)**: 抽出共用 `_build_advice_box(label, text, color)` helper，每日 Flex「策略建議」與逃頂警報「操作建議」共用同一黃底建議 box，消除複製貼上。
+
 ### v3.8 (2026-06-08)
 - **feat(core)**: 新增「相對高點（逃頂雷達）」Phase 0+1 後端基礎建設（純函數/資料層，尚未接 UI）。`core/divergence.py` 價格 vs RSI/MACD 頂/底背離偵測（嚴格局部極值 + regular divergence 正規定義，純 pandas/numpy）；`core/relative_high.py` 單一真實來源——Layer A 五維逃頂評分(合約過熱 30/技術衰竭 25/鏈上派發 20/情緒過熱 15/總經逆風 10) + Layer B 長週期大頂（複用 `bear_bottom` bull_total + 四季論秋季）+ 高點價位錨（Pi Cycle 頂/Mayer 頂/冪律上界/四季論牛頂）；常數 `WEIGHTS`/`FUNDING_ANN_RED`/`UNFITTED_DIMS` 為跨 repo 單一來源（供 BTC_WATCH path import），全程零 Streamlit 依賴、零網路請求（外部資料由呼叫端注入）。
 - **feat(service)**: `service/market_snapshot.py` 每日落地 OI（U本位+幣本位加總）/BTC.D/資金費率快照至 `db/market_snapshot.json`，自建合約/情緒歷史供 OI 分位與 BTC.D 趨勢計算（Binance 端點僅留 30 天、CoinGecko 無免費歷史）；`service/etf_flow.py` 以 Farside `read_html` 抓美國現貨 BTC ETF 真實日淨流量，抓得到更新 `db/etf_flow.json`、403 時回退快取（沿用「雲端讀 repo 內 db」pattern）。

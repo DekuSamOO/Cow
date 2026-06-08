@@ -359,23 +359,18 @@ def maybe_send_escape_alert(data: dict) -> None:
         print(f"ℹ️ 逃頂評分 {score} ≥ {ESCAPE_ALERT_THRESHOLD}，但今日已推播逃頂警報，略過。")
         return
 
-    names = {"derivatives": "合約過熱", "technical": "技術衰竭", "onchain": "鏈上派發",
-             "sentiment": "情緒過熱", "macro": "總經逆風"}
-    sig = data.get("escape_signals", {}) or {}
-    lines = [f"・{names.get(k, k)}：{v['score']}/{v['max']}（{v['label']}）"
-             for k, v in sig.items() if v.get("score", 0) > 0]
-    text = (f"🚨 BTC 逃頂警報\n{data.get('escape_level', '')}\n"
-            f"逃頂評分 {score}/100｜現價 {data.get('price', '')}\n"
-            f"📋 {data.get('escape_action', '')}\n\n觸發維度：\n" + "\n".join(lines)
-            + "\n\n（風險量表，非精準擇時）")
-
     try:
+        from service.notification.builders import build_escape_alert_flex
         from service.notification.core import _send_line_message
-        _send_line_message([{"type": "text", "text": text}])
+        flex = build_escape_alert_flex(data)
+        if flex is None:
+            print("⚠️ 逃頂警報 Flex 無法建構（缺 escape_signals），略過。")
+            return
+        _send_line_message([flex])
         state["last_escape_date"] = today
         with open(_ESCAPE_STATE_FILE, "w") as f:
             json.dump(state, f)
-        print(f"🚨 已發送逃頂警報（評分 {score}）。")
+        print(f"🚨 已發送逃頂警報 Flex（評分 {score}）。")
     except Exception as e:
         print(f"❌ 逃頂警報發送失敗: {e}")
 

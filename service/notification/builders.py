@@ -202,6 +202,56 @@ def _build_escape_box(s):
     }
 
 
+def _build_advice_box(label, text, color):
+    """黃底建議 box（每日 Flex「策略建議」與逃頂警報「操作建議」共用）。"""
+    return {
+        "type": "box", "layout": "vertical", "margin": "lg",
+        "backgroundColor": "#FFF9E6", "paddingAll": "md", "cornerRadius": "8px",
+        "contents": [
+            {"type": "text", "text": label, "color": "#888888", "size": "xxs", "weight": "bold"},
+            {"type": "text", "text": text, "color": color,
+             "size": "sm", "weight": "bold", "wrap": True, "margin": "xs"},
+        ],
+    }
+
+
+def build_escape_alert_flex(s):
+    """≥ 門檻時的獨立逃頂警報，用與每日 Flex 同一個 _build_escape_box，外加紅色 header。
+    回傳完整 flex message；無 escape_signals 時回 None。"""
+    box = _build_escape_box(s)
+    if box is None:
+        return None
+    date_str = datetime.now().strftime('%Y-%m-%d %H:%M')
+    score = s.get("escape_score", 0) or 0
+
+    body_contents = [
+        {"type": "text", "text": f"💰 BTC {s.get('price', '')}", "weight": "bold",
+         "size": "lg", "color": "#E74C3C"},
+        box,
+    ]
+    if s.get("escape_action"):
+        body_contents.append(_build_advice_box("💡 操作建議", s["escape_action"], "#C0392B"))
+
+    bubble = {
+        "type": "bubble", "size": "giga",
+        "header": {
+            "type": "box", "layout": "vertical", "backgroundColor": "#C0392B",
+            "paddingAll": "16px",
+            "contents": [
+                {"type": "text", "text": "🚨 BTC 逃頂警報", "weight": "bold",
+                 "color": "#FFFFFF", "size": "xl"},
+                {"type": "text", "text": f"更新時間: {date_str}", "color": "#FFFFFF",
+                 "size": "xs", "margin": "sm"},
+            ],
+        },
+        "body": {
+            "type": "box", "layout": "vertical", "backgroundColor": "#FFFFFF",
+            "spacing": "sm", "contents": body_contents,
+        },
+    }
+    return {"type": "flex", "altText": f"🚨 BTC 逃頂警報 {score}/100", "contents": bubble}
+
+
 def _build_forecast_box(s):
     is_bear = s["forecast_type"] == "bear_bottom"
     title = "❄️ 熊市最低價預測" if is_bear else "🚀 牛市最高價預測"
@@ -416,15 +466,9 @@ def build_flex_message(s):
     if news_box:
         body_contents.append(news_box)
 
-    body_contents.append({
-        "type": "box", "layout": "vertical", "margin": "lg",
-        "backgroundColor": "#FFF9E6", "paddingAll": "md", "cornerRadius": "8px",
-        "contents": [
-            {"type": "text", "text": "💡 策略建議", "color": "#888888", "size": "xxs", "weight": "bold"},
-            {"type": "text", "text": s["swing_advice"], "color": _light(s["swing_advice_color"]),
-             "size": "sm", "weight": "bold", "wrap": True, "margin": "xs"},
-        ],
-    })
+    body_contents.append(
+        _build_advice_box("💡 策略建議", s["swing_advice"], _light(s["swing_advice_color"]))
+    )
 
     flex_bubble = {
         "type": "bubble", "size": "giga",
