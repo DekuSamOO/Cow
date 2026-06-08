@@ -143,6 +143,65 @@ def _build_radar_box(s):
         ],
     }
 
+def _escape_color(score: int) -> str:
+    if score >= 75: return "#C0392B"
+    if score >= 60: return "#E67E22"
+    if score >= 45: return "#F39C12"
+    if score >= 25: return "#888888"
+    return "#27AE60"
+
+
+def _build_escape_box(s):
+    """逃頂雷達（波段相對高點）— 每日 Flex 固定區塊。與 dashboard C5-A / BTC_WATCH 同源。
+    無 escape_signals（compute 失敗）時回 None。"""
+    sig = s.get("escape_signals")
+    if not sig:
+        return None
+    score = s.get("escape_score", 0) or 0
+    level = s.get("escape_level", "")
+    color = _escape_color(score)
+    left_flex = max(1, min(99, int(score)))
+
+    names = {"derivatives": "① 合約過熱", "technical": "② 技術衰竭",
+             "onchain": "③ 鏈上派發", "sentiment": "④ 情緒過熱", "macro": "⑤ 總經逆風"}
+    rows = []
+    for k, nm in names.items():
+        v = sig.get(k, {})
+        sc, mx = v.get("score", 0), v.get("max", 0)
+        tag = "（未擬合）" if k == "onchain" else ""
+        rows.append({
+            "type": "box", "layout": "horizontal", "margin": "xs", "contents": [
+                {"type": "text", "text": nm + tag, "color": "#555555", "size": "xs", "flex": 6},
+                {"type": "text", "text": f"{sc}/{mx}", "color": color if sc > 0 else "#AAAAAA",
+                 "size": "xs", "weight": "bold", "align": "end", "flex": 4},
+            ],
+        })
+
+    return {
+        "type": "box", "layout": "vertical", "margin": "lg",
+        "backgroundColor": "#FFF4F0", "cornerRadius": "8px", "paddingAll": "md",
+        "contents": [
+            {"type": "text", "text": "🚨 逃頂雷達（波段相對高點）", "weight": "bold",
+             "color": "#2C3E50", "size": "sm"},
+            {"type": "box", "layout": "horizontal", "margin": "sm", "contents": [
+                {"type": "box", "layout": "vertical", "flex": 7, "contents": [
+                    {"type": "text", "text": level, "color": color, "weight": "bold", "size": "md", "wrap": True},
+                ]},
+                {"type": "box", "layout": "vertical", "flex": 3, "alignItems": "flex-end", "contents": [
+                    {"type": "text", "text": f"{score}/100", "color": color, "size": "xl", "weight": "bold"},
+                ]},
+            ]},
+            {"type": "box", "layout": "horizontal", "margin": "sm", "height": "6px", "contents": [
+                {"type": "box", "layout": "vertical", "flex": left_flex, "backgroundColor": color, "contents": []},
+                {"type": "box", "layout": "vertical", "flex": 100 - left_flex, "backgroundColor": "#E0E0E0", "contents": []},
+            ]},
+            *rows,
+            {"type": "text", "text": "≥60 觸發逃頂警報｜風險量表非精準擇時，OI/BTC.D 歷史累積中",
+             "color": "#AAAAAA", "size": "xxs", "margin": "sm", "wrap": True},
+        ],
+    }
+
+
 def _build_forecast_box(s):
     is_bear = s["forecast_type"] == "bear_bottom"
     title = "❄️ 熊市最低價預測" if is_bear else "🚀 牛市最高價預測"
@@ -336,6 +395,11 @@ def build_flex_message(s):
 
     body_contents.append(_build_score_box(s, left_flex))
     body_contents.append(_build_radar_box(s))
+
+    # 逃頂雷達（波段相對高點）— 固定區塊，每日顯示
+    escape_box = _build_escape_box(s)
+    if escape_box:
+        body_contents.append(escape_box)
 
     # 最低價綜合評估（單一 block，整合四季論趨勢底 + 4 floor + on-chain/技術錨）
     bottom_box = _build_bottom_eval_box(s)
