@@ -31,11 +31,14 @@ _CACHE = os.path.join(os.path.dirname(__file__), "..", "db", "bottom_metrics_cac
 _UA    = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 
 # metric_key -> (endpoint, json value field)
+# 註：sopr 為「相對高點/逃頂」用（SOPR 飆高 = 老韭菜/巨鯨倒貨派發）；
+#     其餘為底部錨。同源同節流，故併於此單一服務。
 _ENDPOINTS = {
     "realized_price": ("realized-price", "realizedPrice"),
     "balanced_price": ("balanced-price", "balancedPrice"),
     "cvdd":           ("cvdd",           "cvdd"),
     "mvrv_zscore":    ("mvrv-zscore",    "mvrvZscore"),
+    "sopr":           ("sopr",           "sopr"),
 }
 
 _THROTTLE_SEC      = 4.0    # 端點間隔，避開 bitcoin-data.com burst 限流

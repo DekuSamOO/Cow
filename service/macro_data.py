@@ -80,10 +80,34 @@ _FALLBACK = {
         "date":  "2025-02-21",
         "note":  "USD/JPY 日圓匯率（靜態備援，Yahoo Finance + FRED 均失敗）",
     },
+    # 美國 PCE 物價指數 YoY 年增率（FRED PCEPI，%）
+    "pce": {
+        "value": 2.5,
+        "date":  "2026-04-01",
+        "note":  "美國 PCE YoY（FRED PCEPI 靜態備援，FRED 連線失敗）",
+    },
+    # 美國非農就業總人數（FRED PAYEMS，千人）
+    "nfp": {
+        "value": 159001.0,
+        "date":  "2026-05-01",
+        "note":  "美國非農就業（FRED PAYEMS 靜態備援，FRED 連線失敗）",
+    },
+    # 美國失業率（FRED UNRATE，%）
+    "unrate": {
+        "value": 4.3,
+        "date":  "2026-05-01",
+        "note":  "美國失業率（FRED UNRATE 靜態備援，FRED 連線失敗）",
+    },
+    # BTC 市值佔比（CoinGecko /global，%）
+    "btc_dominance": {
+        "value": 56.0,
+        "date":  "2026-06-08",
+        "note":  "BTC 市值佔比（CoinGecko /global 靜態備援，連線失敗）",
+    },
 }
 
 
-def _fred_fetch(series_id: str, timeout: int = 15) -> pd.DataFrame:
+def _fred_fetch(series_id: str, timeout: int = 30) -> pd.DataFrame:
     """
     從 FRED 公開 CSV 端點抓取時間序列，返回 DatetimeIndex DataFrame。
     FRED 以 '.' 代表缺失值，需先替換為 NaN。
@@ -92,12 +116,15 @@ def _fred_fetch(series_id: str, timeout: int = 15) -> pd.DataFrame:
     url  = _FRED_CSV.format(sid=series_id)
     resp = safe_get(url, timeout=timeout, verify=SSL_VERIFY)
     resp.raise_for_status()
-    df = pd.read_csv(
-        io.StringIO(resp.text),
-        parse_dates=["DATE"],
-        index_col="DATE",
-        na_values=["."],
-    )
+    # FRED 已將 CSV 首欄表頭由 "DATE" 改為 "observation_date"（2024+）。
+    # 不再寫死欄名，改取「第一欄」當日期欄，避免表頭一變就靜默走備援。
+    df = pd.read_csv(io.StringIO(resp.text), na_values=["."])
+    if df.empty or df.shape[1] < 2:
+        raise ValueError(f"FRED {series_id} 回傳格式異常")
+    date_col = df.columns[0]
+    df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+    df = df.dropna(subset=[date_col]).set_index(date_col)
+    df.index.name = "DATE"
     # 強制轉為數字（FRED 偶爾回傳帶空白字元的字串）
     df = df.apply(pd.to_numeric, errors="coerce").dropna()
     return df
@@ -316,6 +343,164 @@ def fetch_us_cpi_yoy() -> dict:
             "source":      "靜態備援",
             "is_fallback": True,
         }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 美國 PCE 物價指數 YoY（聯準會最重視的通膨指標）
+# ──────────────────────────────────────────────────────────────────────────────
+
+@st.cache_data(ttl=86_400)  # PCE 月頻，每天快取一次
+def fetch_us_pce_yoy() -> dict:
+    """
+    美國 PCE 物價指數年增率（FRED PCEPI，月頻）。
+    PCE 是聯準會貨幣政策最重視的通膨指標（較 CPI 更被 Fed 採用）。
+
+    返回 dict: {yoy_pct, mom_pct, latest_date, trend, source, is_fallback}
+    失敗回靜態備援（is_fallback=True），與 CPI 同邏輯。
+    """
+    try:
+        df = _fred_fetch("PCEPI")
+        df.columns = ["pce"]
+        df = df.sort_index()
+        yoy = df["pce"].pct_change(12) * 100
+        mom = df["pce"].pct_change(1)  * 100
+        yoy_curr = float(yoy.iloc[-1])
+        yoy_prev = float(yoy.iloc[-2]) if len(yoy) >= 2 else yoy_curr
+        if yoy_curr > yoy_prev + 0.15:
+            trend = "通膨升溫 ↑"
+        elif yoy_curr < yoy_prev - 0.15:
+            trend = "通膨降溫 ↓"
+        else:
+            trend = "穩定 →"
+        return {
+            "yoy_pct":     yoy_curr,
+            "mom_pct":     float(mom.iloc[-1]),
+            "latest_date": df.index[-1].strftime("%Y-%m"),
+            "trend":       trend,
+            "source":      "FRED PCEPI",
+            "is_fallback": False,
+        }
+    except Exception as e:
+        logger.warning(f"[PCE] FRED PCEPI 抓取失敗: {e}，使用靜態備援值")
+        fb = _FALLBACK["pce"]
+        return {
+            "yoy_pct":     fb["value"],
+            "mom_pct":     None,
+            "latest_date": fb["date"][:7],
+            "trend":       f"⚠️ 靜態備援值（{fb['date']}）",
+            "source":      "靜態備援",
+            "is_fallback": True,
+        }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 美國非農就業 + 失業率（就業類數據：決定經濟是否生病）
+# ──────────────────────────────────────────────────────────────────────────────
+
+@st.cache_data(ttl=86_400)
+def fetch_nfp() -> dict:
+    """
+    美國非農就業總人數（FRED PAYEMS，千人，月頻）。
+    回傳最新月「新增就業」= 當月總數 − 前月總數（千人），及趨勢。
+
+    就業太強（新增大、失業低）→ Fed 不急著降息 → BTC 承壓；
+    就業熄火 → 衰退預期 → 降息救市 → 中長期對 BTC 利多（見來源筆記第五段）。
+
+    返回 dict: {change_k, level_k, latest_date, trend, source, is_fallback}
+    """
+    try:
+        df = _fred_fetch("PAYEMS")
+        df.columns = ["payems"]
+        df = df.sort_index()
+        level = float(df["payems"].iloc[-1])
+        prev  = float(df["payems"].iloc[-2]) if len(df) >= 2 else level
+        change_k = level - prev   # 當月新增就業（千人）
+        return {
+            "change_k":    change_k,
+            "level_k":     level,
+            "latest_date": df.index[-1].strftime("%Y-%m"),
+            "trend":       "就業強勁 (升息傾向)" if change_k > 150 else (
+                           "就業疲弱 (降息傾向)" if change_k < 50 else "溫和增長"),
+            "source":      "FRED PAYEMS",
+            "is_fallback": False,
+        }
+    except Exception as e:
+        logger.warning(f"[NFP] FRED PAYEMS 抓取失敗: {e}，使用靜態備援值")
+        fb = _FALLBACK["nfp"]
+        return {
+            "change_k":    None,
+            "level_k":     fb["value"],
+            "latest_date": fb["date"][:7],
+            "trend":       f"⚠️ 靜態備援值（{fb['date']}）",
+            "source":      "靜態備援",
+            "is_fallback": True,
+        }
+
+
+@st.cache_data(ttl=86_400)
+def fetch_unrate() -> dict:
+    """
+    美國失業率（FRED UNRATE，%，月頻）。
+
+    返回 dict: {value, prev, change_pp, latest_date, trend, source, is_fallback}
+    失業率飆高 → 經濟生病 → 降息救火（中長期 BTC 利多）。
+    """
+    try:
+        df = _fred_fetch("UNRATE")
+        df.columns = ["unrate"]
+        df = df.sort_index()
+        val  = float(df["unrate"].iloc[-1])
+        prev = float(df["unrate"].iloc[-2]) if len(df) >= 2 else val
+        change = val - prev
+        return {
+            "value":       val,
+            "prev":        prev,
+            "change_pp":   change,
+            "latest_date": df.index[-1].strftime("%Y-%m"),
+            "trend":       "失業上升 (經濟轉弱)" if change > 0.05 else (
+                           "失業下降 (經濟強勁)" if change < -0.05 else "持平"),
+            "source":      "FRED UNRATE",
+            "is_fallback": False,
+        }
+    except Exception as e:
+        logger.warning(f"[UNRATE] FRED UNRATE 抓取失敗: {e}，使用靜態備援值")
+        fb = _FALLBACK["unrate"]
+        return {
+            "value":       fb["value"],
+            "prev":        fb["value"],
+            "change_pp":   0.0,
+            "latest_date": fb["date"][:7],
+            "trend":       f"⚠️ 靜態備援值（{fb['date']}）",
+            "source":      "靜態備援",
+            "is_fallback": True,
+        }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# BTC 市值佔比（Bitcoin Dominance）— 山寨輪動/資金末端訊號
+# ──────────────────────────────────────────────────────────────────────────────
+
+@st.cache_data(ttl=3_600)
+def fetch_btc_dominance() -> dict:
+    """
+    BTC 市值佔比（CoinGecko /global，%）。
+    BTC.D 下降而總市值維持 = 資金輪動到山寨（牛市末端訊號，見來源筆記第四段）。
+    僅回傳當前值；趨勢由 service/market_snapshot 的每日快照累積後計算。
+
+    返回 dict: {value, source, is_fallback}
+    """
+    try:
+        r = safe_get("https://api.coingecko.com/api/v3/global",
+                     timeout=8, verify=SSL_VERIFY)
+        if r.status_code == 200:
+            btc_d = r.json().get("data", {}).get("market_cap_percentage", {}).get("btc")
+            if btc_d is not None:
+                return {"value": float(btc_d), "source": "CoinGecko", "is_fallback": False}
+        raise ValueError(f"CoinGecko /global status={r.status_code}")
+    except Exception as e:
+        logger.warning(f"[BTC.D] CoinGecko 抓取失敗: {e}，使用靜態備援值")
+        fb = _FALLBACK["btc_dominance"]
+        return {"value": fb["value"], "source": "靜態備援", "is_fallback": True}
 
 
 # ──────────────────────────────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-# Cow — 比特幣投資戰情室 v3.5
+# Cow — 比特幣投資戰情室 v3.8
 
 > 比特幣多週期量化分析工具，整合技術指標、鏈上數據、期權與波段策略。
 
@@ -42,6 +42,8 @@ core/
   bottom_floors.py    最低價綜合評估「單一真實來源」compute_all_bottom_estimates（四季論趨勢底 + 4 floor + 鏈上錨 + 技術錨；LINE 推播與 dashboard 共用）
   miner_cost.py       礦工成本純數學模型（btc_per_day 依減半切換、eff_jth 分段插值、電費盈虧/all-in 成本，無 IO 依賴）
   gemini_client.py    Gemini REST API 輕量封裝（關閉 thinking budget 省 token、x-goog-api-key header，供新聞中文化）
+  divergence.py       價格 vs 動能（RSI/MACD）頂/底背離偵測（純 pandas/numpy，無 Streamlit 依賴；供逃頂雷達與未來抄底共用）
+  relative_high.py    相對高點（逃頂雷達）單一真實來源：Layer A 五維逃頂評分(0-100，合約/技術/鏈上/情緒/總經) + Layer B 長週期大頂 + 高點價位錨；常數 WEIGHTS/FUNDING_ANN_RED 供 BTC_WATCH path import，無 Streamlit 依賴
 
 service/
   local_db_reader.py  讀取本地 SQLite（15m 原始 / 重採樣日線），TTL 快取，全面 UTC 時區
@@ -51,12 +53,14 @@ service/
   realtime.py         即時報價（Binance→Kraken→本地DB 三層備援）
                       含資金費率/OI（Binance→Bybit→OKX 三層），Header 偽裝與 SSL 繞過
                       各欄位追蹤 price_source / funding_rate_source / tvl_source
-  macro_data.py       宏觀數據（FRED M2/CPI、Yahoo 日圓、量子威脅）+ 全面靜態備援 _FALLBACK 字典 (v1.1)
+  macro_data.py       宏觀數據（FRED M2/CPI/PCE/非農/失業率、Yahoo 日圓、CoinGecko BTC.D、量子威脅）+ 全面靜態備援 _FALLBACK 字典 (v1.1)；FRED CSV 改取首欄當日期欄（修 observation_date 改名後靜默走備援的 bug）
   mock.py             代理指標與模擬數據（API 失敗降級備援）
   overview.py         今日大盤速覽指標降級解析（主流程與 fragment 共用 helper，含 funding/tvl is_real 旗標）
   news.py             加密新聞多來源聚合去重（CryptoCompare/Cointelegraph/CoinDesk/Decrypt + CoinGecko 24h 熱搜）；_is_btc_crypto 嚴格過濾，只留比特幣/加密大盤、剔除山寨幣個別新聞
   news_i18n.py        Gemini 批次中文化（標題＋小結＋情緒）+ db/news_i18n.json 持久化快取（翻過不重翻）
-  bottom_metrics.py   鏈上底部錨指標（bitcoin-data.com：Realized/Balanced/CVDD/MVRV-Z）+ blockchain.info 歷史算力；429 長退避 + 12h json 快取，純資料層
+  bottom_metrics.py   鏈上底部錨指標（bitcoin-data.com：Realized/Balanced/CVDD/MVRV-Z/SOPR）+ blockchain.info 歷史算力；429 長退避 + 12h json 快取，純資料層
+  market_snapshot.py  每日市場快照（OI U本位+幣本位加總、BTC.D、資金費率、價格落地 db/market_snapshot.json）；自建合約/情緒歷史供逃頂雷達算 OI 分位/BTC.D 趨勢，純資料層
+  etf_flow.py         美國現貨 BTC ETF 每日淨流量真實值（Farside read_html 解析）；抓得到更新 db/etf_flow.json，403 時回退快取（雲端讀 repo 內 db pattern），供逃頂「鏈上派發」維度
 
 strategy/
   swing.py              Antigravity v4.1 波段策略引擎（防先視偏誤、日頻 Sharpe、多週期回測引擎）
@@ -82,7 +86,10 @@ tests/
   test_market_data.py   數據來源與備援鏈單元測試
   test_news.py          新聞聚合/去重/情緒彙總/中文化降級單元測試（monkeypatch 不打真 API）
   core/test_bottom_floors.py  最低價綜合評估離線單元測試（礦工成本/趨勢外插/final_low/可靠度加權中位數 ensemble/_weighted_median，注入 onchain/hashrate，8 passed）
+  core/test_divergence.py     頂/底背離偵測單元測試（合成雙峰資料，確定性，4 passed）
+  core/test_relative_high.py  相對高點逃頂評分單元測試（年化資費/極端高分/平靜低分/缺料 graceful/維度上限/價位錨排序，8 passed）
   bottom_floors_backtest.py   最低價地板回測（2015/2018/2022 熊底 vs 礦工電費/all-in 驗證）
+  relative_high_backtest.py   逃頂權重敏感度分析（分層 train/test，AUC 以 Mann-Whitney U；僅擬合資費/技術/F&G 三維，OI/ETF/總經維持專家權重）
 ```
 
 ---
@@ -260,7 +267,11 @@ python scripts/test_flex_message.py
 | 鏈上 TVL | DeFiLlama API | Bitcoin DeFi 生態鎖倉量 |
 | 穩定幣市值 | DeFiLlama API | 全球穩定幣流通量 |
 | 恐懼貪婪指數 | Alternative.me | 市場情緒代理 |
-| M2 / CPI / 日圓 | FRED 公開 CSV API | 宏觀流動性指標 |
+| M2 / CPI / PCE / 非農 / 失業率 | FRED 公開 CSV API | 宏觀流動性與通膨/就業指標 |
+| 日圓匯率 | Yahoo Finance → FRED | USD/JPY |
+| BTC 市值佔比 (BTC.D) | CoinGecko /global | 山寨輪動/資金末端訊號 |
+| 鏈上 SOPR | bitcoin-data.com | 獲利了結/巨鯨派發（逃頂鏈上錨） |
+| 美國現貨 BTC ETF 淨流量 | Farside Investors | 機構資金進出（逃頂鏈上派發維度，db 快取回退） |
 | DeFi 無風險利率 | DeFiLlama (Aave V3 USDT) | 雙幣策略動態折現 |
 
 ---
@@ -330,6 +341,13 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 ---
 
 ## 版本紀錄
+
+### v3.8 (2026-06-08)
+- **feat(core)**: 新增「相對高點（逃頂雷達）」Phase 0+1 後端基礎建設（純函數/資料層，尚未接 UI）。`core/divergence.py` 價格 vs RSI/MACD 頂/底背離偵測（嚴格局部極值 + regular divergence 正規定義，純 pandas/numpy）；`core/relative_high.py` 單一真實來源——Layer A 五維逃頂評分(合約過熱 30/技術衰竭 25/鏈上派發 20/情緒過熱 15/總經逆風 10) + Layer B 長週期大頂（複用 `bear_bottom` bull_total + 四季論秋季）+ 高點價位錨（Pi Cycle 頂/Mayer 頂/冪律上界/四季論牛頂）；常數 `WEIGHTS`/`FUNDING_ANN_RED`/`UNFITTED_DIMS` 為跨 repo 單一來源（供 BTC_WATCH path import），全程零 Streamlit 依賴、零網路請求（外部資料由呼叫端注入）。
+- **feat(service)**: `service/market_snapshot.py` 每日落地 OI（U本位+幣本位加總）/BTC.D/資金費率快照至 `db/market_snapshot.json`，自建合約/情緒歷史供 OI 分位與 BTC.D 趨勢計算（Binance 端點僅留 30 天、CoinGecko 無免費歷史）；`service/etf_flow.py` 以 Farside `read_html` 抓美國現貨 BTC ETF 真實日淨流量，抓得到更新 `db/etf_flow.json`、403 時回退快取（沿用「雲端讀 repo 內 db」pattern）。
+- **feat(service)**: `service/macro_data.py` 補 `fetch_us_pce_yoy`/`fetch_nfp`/`fetch_unrate`（FRED PCEPI/PAYEMS/UNRATE）與 `fetch_btc_dominance`（CoinGecko /global），皆含靜態備援；`service/bottom_metrics.py` `_ENDPOINTS` 加 SOPR 端點（逃頂鏈上錨）。
+- **fix(macro)**: `_fred_fetch` 修既有 bug——FRED 已將 CSV 首欄表頭由 `DATE` 改名為 `observation_date`，舊版寫死 `parse_dates=["DATE"]` 導致 CPI/M2/USDJPY 解析失敗靜默走靜態備援；改為「取第一欄當日期欄」+ 格式檢核，timeout 15→30s。
+- **test**: 新增 `tests/core/test_divergence.py`（4 passed）、`tests/core/test_relative_high.py`（8 passed）共 12 個確定性離線測試；`tests/relative_high_backtest.py` 逃頂權重敏感度分析（分層 train/test，Mann-Whitney U AUC，僅擬合資費/技術/F&G 三維，OI/ETF/總經維持專家權重）。
 
 ### v3.7 (2026-06-05)
 - **chore(deps)**: `requirements.txt` / `pyproject.toml` 全面鎖版本並對齊（單一真相為 requirements.txt）。關鍵約束 `numpy>=1.26,<2`——pandas-ta 0.3.x 仍 `from numpy import NaN`，numpy 2.x 會在 import 階段崩潰（本地測不出、雲端重建才爆）；`streamlit==1.37.1` 鎖雲端實跑版本避免行為漂移；其餘套件補 `>=` 下界。`pyproject.toml` 補齊 pandas-ta/yfinance/httpx/line-bot-sdk/urllib3、version 升 3.5.0、新增 `[tool.pytest.ini_options] testpaths=["tests"]`（只收集正規單元測試，排除 `scripts/test_*.py` 手動除錯工具）。
