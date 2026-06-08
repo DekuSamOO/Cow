@@ -7,10 +7,11 @@ v2: 整合原 JustVibe 四季日報內容（季節徽章 + 底部支撐三指標
 
 import os
 import sys
+import json
 import urllib3
 import requests
 from core.http_client import safe_get, safe_post
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 
 SEASON_BG_COLOR = {
     "spring": "#27AE60",
@@ -243,6 +244,12 @@ def get_decision_data():
                     summary["swing_advice"] = "⚪ 趨勢偏弱，空頭或震盪格局"
                     summary["swing_advice_color"] = "#aaaaaa"
 
+            # ── 相對高點逃頂評分（與 dashboard / BTC_WATCH 同源 core/relative_high）──
+            try:
+                summary.update(_compute_escape(btc_df, curr, latest_funding))
+            except Exception as _ee:
+                print(f"[WARN] escape score: {_ee}")
+
     except Exception as e: print(f"Data error: {e}")
     return summary
 
@@ -273,9 +280,105 @@ def fetch_news_digest(limit: int = 10, top: int = 8) -> dict:
     return out
 
 
+def _compute_escape(btc_df, curr, latest_funding) -> dict:
+    """
+    逃頂綜合評分（與 dashboard C5 / BTC_WATCH 同源 core/relative_high）。
+    GH Actions 無 live Binance OI（geo-block）→ oi_stats=None；其餘維度盡量補齊
+    （funding 已有、技術用 btc_df、F&G/SOPR/BTC.D/ETF快取/總經事件）。
+    回傳 escape_score / escape_level / escape_color / escape_action / escape_signals。
+    """
+    from core.relative_high import compute_escape_top_score, escape_top_meta
+    from service.bottom_metrics import get_latest_bottom_metrics
+    from service.market_snapshot import get_btcd_trend
+    from service.etf_flow import get_etf_flow_summary
+    from service.macro_data import (get_next_macro_event, fetch_us_cpi_yoy,
+                                    fetch_us_pce_yoy, fetch_nfp, fetch_unrate)
+
+    fng = None
+    try:
+        r = safe_get("https://api.alternative.me/fng/", timeout=8, verify=SSL_VERIFY)
+        if r.status_code == 200:
+            fng = float(r.json()["data"][0]["value"])
+    except Exception:
+        pass
+
+    sopr = btcd = etf = macro = None
+    try: sopr = get_latest_bottom_metrics().get("sopr")
+    except Exception: pass
+    try: btcd = get_btcd_trend()
+    except Exception: pass
+    try: etf = get_etf_flow_summary()
+    except Exception: pass
+    try:
+        cpi = fetch_us_cpi_yoy(); pce = fetch_us_pce_yoy()
+        nfp = fetch_nfp(); unr = fetch_unrate(); nxt = get_next_macro_event()
+        macro = {
+            "cpi_hot": "升溫" in (cpi.get("trend") or ""),
+            "pce_hot": "升溫" in (pce.get("trend") or ""),
+            "jobs_strong": ((nfp.get("change_k") or 0) > 150) or ((unr.get("change_pp") or 0) < 0),
+            "event_within_days": nxt.get("days"),
+        }
+    except Exception:
+        pass
+
+    score, signals = compute_escape_top_score(
+        curr, btc_df, funding_8h=latest_funding, oi_stats=None,
+        etf_summary=etf, sopr=sopr, fng=fng, btc_d_trend=btcd, macro=macro)
+    level, color, action = escape_top_meta(score)
+    return {"escape_score": score, "escape_level": level, "escape_color": color,
+            "escape_action": action, "escape_signals": signals}
+
+
 def send_line_message(flex_payload):
     from service.notification.core import _send_line_message
     _send_line_message([flex_payload])
+
+
+# 獨立 state 檔（與 price_alert.py 的 alert_state.json 分開，避免兩 workflow 互相覆蓋）
+_ESCAPE_STATE_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "escape_alert_state.json")
+
+
+def maybe_send_escape_alert(data: dict) -> None:
+    """逃頂評分 ≥ 門檻時，額外推一則 LINE 文字警報（每曆日最多一次，防洗版）。"""
+    from config import ESCAPE_ALERT_THRESHOLD
+    score = data.get("escape_score", 0) or 0
+    if score < ESCAPE_ALERT_THRESHOLD:
+        print(f"✓ 逃頂評分 {score} < {ESCAPE_ALERT_THRESHOLD}，不觸發逃頂警報。")
+        return
+
+    state = {}
+    if os.path.exists(_ESCAPE_STATE_FILE):
+        try:
+            with open(_ESCAPE_STATE_FILE) as f:
+                state = json.load(f)
+        except Exception:
+            pass
+    today = str(date.today())
+    if state.get("last_escape_date") == today:
+        print(f"ℹ️ 逃頂評分 {score} ≥ {ESCAPE_ALERT_THRESHOLD}，但今日已推播逃頂警報，略過。")
+        return
+
+    names = {"derivatives": "合約過熱", "technical": "技術衰竭", "onchain": "鏈上派發",
+             "sentiment": "情緒過熱", "macro": "總經逆風"}
+    sig = data.get("escape_signals", {}) or {}
+    lines = [f"・{names.get(k, k)}：{v['score']}/{v['max']}（{v['label']}）"
+             for k, v in sig.items() if v.get("score", 0) > 0]
+    text = (f"🚨 BTC 逃頂警報\n{data.get('escape_level', '')}\n"
+            f"逃頂評分 {score}/100｜現價 {data.get('price', '')}\n"
+            f"📋 {data.get('escape_action', '')}\n\n觸發維度：\n" + "\n".join(lines)
+            + "\n\n（風險量表，非精準擇時）")
+
+    try:
+        from service.notification.core import _send_line_message
+        _send_line_message([{"type": "text", "text": text}])
+        state["last_escape_date"] = today
+        with open(_ESCAPE_STATE_FILE, "w") as f:
+            json.dump(state, f)
+        print(f"🚨 已發送逃頂警報（評分 {score}）。")
+    except Exception as e:
+        print(f"❌ 逃頂警報發送失敗: {e}")
+
 
 if __name__ == "__main__":
     from dotenv import load_dotenv
@@ -284,3 +387,5 @@ if __name__ == "__main__":
     data = get_decision_data()
     data.update(fetch_news_digest())
     send_line_message(build_flex_message(data))
+    # 逃頂警報：抖進每日推播，超門檻才額外推一則（每日去重）
+    maybe_send_escape_alert(data)

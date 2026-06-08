@@ -31,6 +31,15 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
+    # 下載上次留下的逃頂警報狀態（首次執行 artifact 不存在，continue-on-error 略過）
+    # 供 maybe_send_escape_alert 的「每日最多一次」去重跨 3 次排程執行持久化
+    - name: Download escape alert state
+      uses: actions/download-artifact@v5
+      with:
+        name: escape-alert-state
+        path: .
+      continue-on-error: true
+
     - name: Run Daily Notifier Script
       # 將 GitHub Secrets 注入為 Python 腳本所需的環境變數
       env:
@@ -40,3 +49,12 @@ jobs:
         PYTHONPATH: ${{ github.workspace }}
       run: |
         python scripts/daily_line_notify.py
+
+    # 上傳最新逃頂警報狀態（保留 2 天）
+    - name: Upload escape alert state
+      uses: actions/upload-artifact@v5
+      with:
+        name: escape-alert-state
+        path: escape_alert_state.json
+        retention-days: 2
+      continue-on-error: true
