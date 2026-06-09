@@ -133,14 +133,16 @@ def fetch_etf_flow(force: bool = False) -> dict:
 def get_etf_flow_summary(force: bool = False) -> dict:
     """
     回傳 ETF 流量摘要：
-      {latest, latest_date, consecutive_outflow_days, cum_5d, n, asof}
-    - consecutive_outflow_days：自最新日往回，連續淨流出（<0）天數
+      {latest, latest_date, consecutive_outflow_days, consecutive_inflow_days,
+       cum_5d, n, asof}
+    - consecutive_outflow_days：自最新日往回，連續淨流出（<0）天數（逃頂派發訊號）
+    - consecutive_inflow_days：自最新日往回，連續淨流入（>0）天數（抄底吸籌訊號）
     - cum_5d：近 5 個交易日累計淨流量（百萬美元）
     - n：可用資料筆數；無資料時各值為 None
     """
     data = fetch_etf_flow(force=force)
     out = {"latest": None, "latest_date": None, "consecutive_outflow_days": 0,
-           "cum_5d": None, "n": len(data), "asof": None}
+           "consecutive_inflow_days": 0, "cum_5d": None, "n": len(data), "asof": None}
     if not data:
         return out
     items = sorted(data.items())          # 依日期升冪
@@ -150,11 +152,17 @@ def get_etf_flow_summary(force: bool = False) -> dict:
     out["latest_date"] = dates[-1]
     out["asof"] = dates[-1]
     out["cum_5d"] = sum(vals[-5:])
-    cnt = 0
+    out_cnt = in_cnt = 0
     for v in reversed(vals):
         if v < 0:
-            cnt += 1
+            out_cnt += 1
         else:
             break
-    out["consecutive_outflow_days"] = cnt
+    for v in reversed(vals):
+        if v > 0:
+            in_cnt += 1
+        else:
+            break
+    out["consecutive_outflow_days"] = out_cnt
+    out["consecutive_inflow_days"] = in_cnt
     return out

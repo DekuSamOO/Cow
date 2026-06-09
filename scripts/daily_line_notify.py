@@ -244,11 +244,11 @@ def get_decision_data():
                     summary["swing_advice"] = "⚪ 趨勢偏弱，空頭或震盪格局"
                     summary["swing_advice_color"] = "#aaaaaa"
 
-            # ── 相對高點逃頂評分（與 dashboard / BTC_WATCH 同源 core/relative_high）──
+            # ── 波段雷達（逃頂＋抄底）＋四季雷達頂錨（同源 core/relative_high + relative_low）──
             try:
-                summary.update(_compute_escape(btc_df, curr, latest_funding))
+                summary.update(_compute_radars(btc_df, curr, latest_funding, current_price))
             except Exception as _ee:
-                print(f"[WARN] escape score: {_ee}")
+                print(f"[WARN] radar score: {_ee}")
 
     except Exception as e: print(f"Data error: {e}")
     return summary
@@ -280,14 +280,15 @@ def fetch_news_digest(limit: int = 10, top: int = 8) -> dict:
     return out
 
 
-def _compute_escape(btc_df, curr, latest_funding) -> dict:
+def _compute_radars(btc_df, curr, latest_funding, price) -> dict:
     """
-    逃頂綜合評分（與 dashboard C5 / BTC_WATCH 同源 core/relative_high）。
-    GH Actions 無 live Binance OI（geo-block）→ oi_stats=None；其餘維度盡量補齊
-    （funding 已有、技術用 btc_df、F&G/SOPR/BTC.D/ETF快取/總經事件）。
-    回傳 escape_score / escape_level / escape_color / escape_action / escape_signals。
+    波段雷達（逃頂＋抄底）＋四季雷達頂錨/牛頂熊底分，一次算齊（共用同一批外部資料）。
+    與 dashboard 波段/四季雷達、BTC_WATCH 同源 core/relative_high + relative_low。
+    GH Actions 無 live Binance OI（geo-block）→ oi_stats=None；其餘維度盡量補齊。
+    macro 同時帶逃頂（hot/strong）與抄底（cool/weak）兩套欄位。
     """
-    from core.relative_high import compute_escape_top_score, escape_top_meta
+    from core.relative_high import compute_relative_high
+    from core.relative_low import compute_relative_low
     from service.bottom_metrics import get_latest_bottom_metrics
     from service.market_snapshot import get_btcd_trend
     from service.etf_flow import get_etf_flow_summary
@@ -312,21 +313,39 @@ def _compute_escape(btc_df, curr, latest_funding) -> dict:
     try:
         cpi = fetch_us_cpi_yoy(); pce = fetch_us_pce_yoy()
         nfp = fetch_nfp(); unr = fetch_unrate(); nxt = get_next_macro_event()
+        nfp_k = nfp.get("change_k") or 0; unr_pp = unr.get("change_pp") or 0
+        ct = cpi.get("trend") or ""; pt = pce.get("trend") or ""
         macro = {
-            "cpi_hot": "升溫" in (cpi.get("trend") or ""),
-            "pce_hot": "升溫" in (pce.get("trend") or ""),
-            "jobs_strong": ((nfp.get("change_k") or 0) > 150) or ((unr.get("change_pp") or 0) < 0),
+            "cpi_hot": "升溫" in ct, "pce_hot": "升溫" in pt,
+            "jobs_strong": (nfp_k > 150) or (unr_pp < 0),
+            "cpi_cool": "降溫" in ct, "pce_cool": "降溫" in pt,
+            "jobs_weak": (nfp_k < 50) or (unr_pp > 0),
             "event_within_days": nxt.get("days"),
         }
     except Exception:
         pass
 
-    score, signals = compute_escape_top_score(
-        curr, btc_df, funding_8h=latest_funding, oi_stats=None,
-        etf_summary=etf, sopr=sopr, fng=fng, btc_d_trend=btcd, macro=macro)
-    level, color, action = escape_top_meta(score)
-    return {"escape_score": score, "escape_level": level, "escape_color": color,
-            "escape_action": action, "escape_signals": signals}
+    common = dict(funding_8h=latest_funding, oi_stats=None, etf_summary=etf,
+                  sopr=sopr, fng=fng, btc_d_trend=btcd, macro=macro)
+    rh = compute_relative_high(price, curr, btc_df, **common)
+    rl = compute_relative_low(price, curr, btc_df, **common)
+    ct_state = rh["cycle_top"]
+    return {
+        # 波段雷達 · 逃頂
+        "escape_score": rh["escape_score"], "escape_level": rh["escape_level"],
+        "escape_color": rh["escape_color"], "escape_action": rh["escape_action"],
+        "escape_signals": rh["escape_signals"],
+        # 波段雷達 · 抄底
+        "low_score": rl["low_score"], "low_level": rl["low_level"],
+        "low_color": rl["low_color"], "low_action": rl["low_action"],
+        "low_signals": rl["low_signals"],
+        # 四季雷達 · 週期頂錨 + 牛頂/熊底分（cycle_top 只取可序列化的純量欄位）
+        "top_estimates": rh["top_estimates"],
+        "cycle_top": {"bull_total": ct_state.get("bull_total", 0),
+                      "bear_total": ct_state.get("bear_total", 0),
+                      "effective_season": ct_state.get("effective_season"),
+                      "is_autumn": ct_state.get("is_autumn", False)},
+    }
 
 
 def send_line_message(flex_payload):

@@ -15,13 +15,6 @@ SEASON_LIGHT_BG = {
     "winter": "#E3F2FD",
 }
 
-SEASON_DESC = {
-    "spring": "減半後 0–12 個月，市場低調吸籌",
-    "summer": "減半後 12–18 個月，主升浪爆發",
-    "autumn": "減半後 18–36 個月，獲利了結回落",
-    "winter": "減半後 36–48 個月，長期底部整理",
-}
-
 LIGHT_REMAP = {
     "#00ff88": "#27AE60",
     "#ff4b4b": "#E74C3C",
@@ -35,6 +28,7 @@ def _light(c: str) -> str:
     return LIGHT_REMAP.get(c, c)
 
 def _build_season_box(s):
+    """季節徽章（如「❄️ 冬季 — 深熊底部」）+ 週期進度 + 本輪峰值。無季節時回 None。"""
     if s["season_zh"] == "N/A":
         return None
 
@@ -69,6 +63,7 @@ def _build_season_box(s):
         "paddingAll": "md",
         "contents": contents,
     }
+
 
 def _build_floor_support_box(s):
     items = [
@@ -110,36 +105,6 @@ def _build_floor_support_box(s):
             *rows,
             {"type": "text", "text": "綠=現價在支撐上方　紅=跌破支撐",
              "color": "#AAAAAA", "size": "xxs", "margin": "sm", "wrap": True},
-        ],
-    }
-
-def _radar_row(label, value_text, value_color):
-    return {
-        "type": "box", "layout": "horizontal", "margin": "xs",
-        "contents": [
-            {"type": "text", "text": label, "color": "#666666", "size": "sm"},
-            {"type": "text", "text": value_text, "color": _light(value_color), "size": "sm",
-             "weight": "bold", "align": "end"},
-        ],
-    }
-
-def _build_radar_box(s):
-    return {
-        "type": "box", "layout": "vertical",
-        "margin": "lg",
-        "backgroundColor": "#F8F9FA",
-        "cornerRadius": "8px",
-        "paddingAll": "md",
-        "contents": [
-            {"type": "text", "text": "🐂 波段雷達", "weight": "bold",
-             "color": "#2C3E50", "size": "sm"},
-            _radar_row("MA200 支撐",  s["ma200_label"],   "#2C3E50"),
-            _radar_row("資金費率",    s["funding_text"],  s["funding_color"]),
-            _radar_row("趨勢方向",    s["trend_text"],    s["trend_color"]),
-            _radar_row("RSI 強弱",    s["rsi_text"],      s["rsi_color"]),
-            _radar_row("MACD 交叉",   s["macd_text"],     s["macd_color"]),
-            _radar_row("ADX 動能",    s["adx_text"],      s["adx_color"]),
-            _radar_row("EMA20 乖離",  s["ema_dist_text"], s["ema_dist_color"]),
         ],
     }
 
@@ -197,6 +162,74 @@ def _build_escape_box(s):
             ]},
             *rows,
             {"type": "text", "text": "≥60 觸發逃頂警報｜風險量表非精準擇時，OI/BTC.D 歷史累積中",
+             "color": "#AAAAAA", "size": "xxs", "margin": "sm", "wrap": True},
+        ],
+    }
+
+
+def _low_color(score: int) -> str:
+    """抄底分數色（高分=低估=綠；低分=無底部訊號=紅）。"""
+    if score >= 60: return "#27AE60"
+    if score >= 45: return "#F39C12"
+    if score >= 25: return "#888888"
+    return "#C0392B"
+
+
+_ESCAPE_DIM_NAMES = {"derivatives": "合約過熱", "technical": "技術衰竭", "onchain": "鏈上派發",
+                     "sentiment": "情緒過熱", "macro": "總經逆風"}
+_LOW_DIM_NAMES = {"cycle": "長週期深跌", "derivatives": "合約超冷", "technical": "技術回穩",
+                  "sentiment": "情緒恐慌", "onchain": "鏈上吸籌", "macro": "總經順風"}
+
+
+def _dominant_dim(signals, names) -> str:
+    """得分比例最高的維度顯示名（資料不足回 —）。"""
+    best, best_r = "—", -1.0
+    for k, nm in names.items():
+        v = (signals or {}).get(k, {})
+        mx = v.get("max", 0)
+        if mx:
+            r = v.get("score", 0) / mx
+            if r > best_r:
+                best_r, best = r, nm
+    return best if best_r > 0 else "—"
+
+
+def _swing_side(title, score, level, light_color, dom):
+    """波段雷達單側（逃頂或抄底）：標題 + 分數 + 等級 + 分數條 + 主導維度。"""
+    bar = max(1, min(99, int(score)))
+    return {
+        "type": "box", "layout": "vertical", "flex": 1, "contents": [
+            {"type": "text", "text": title, "weight": "bold", "color": light_color, "size": "sm"},
+            {"type": "text", "text": f"{score}/100", "color": light_color, "size": "xl", "weight": "bold"},
+            {"type": "text", "text": level, "color": light_color, "size": "xxs", "wrap": True},
+            {"type": "box", "layout": "horizontal", "margin": "sm", "height": "6px", "contents": [
+                {"type": "box", "layout": "vertical", "flex": bar, "backgroundColor": light_color, "contents": []},
+                {"type": "box", "layout": "vertical", "flex": 100 - bar, "backgroundColor": "#E0E0E0", "contents": []},
+            ]},
+            {"type": "text", "text": f"主導：{dom}", "color": "#888888", "size": "xxs", "margin": "sm", "wrap": True},
+        ],
+    }
+
+
+def _build_swing_radar_box(s):
+    """📍 波段雷達 — 逃頂／抄底左右並排雙計分。與 dashboard 波段雷達同源。無任一 signals 時回 None。"""
+    esig = s.get("escape_signals")
+    lsig = s.get("low_signals")
+    if not esig and not lsig:
+        return None
+    e_score = s.get("escape_score", 0) or 0
+    l_score = s.get("low_score", 0) or 0
+    left = _swing_side("🚨 逃頂", e_score, s.get("escape_level", ""),
+                       _escape_color(e_score), _dominant_dim(esig, _ESCAPE_DIM_NAMES))
+    right = _swing_side("🟢 抄底", l_score, s.get("low_level", ""),
+                        _low_color(l_score), _dominant_dim(lsig, _LOW_DIM_NAMES))
+    return {
+        "type": "box", "layout": "vertical", "margin": "lg",
+        "backgroundColor": "#F8F9FA", "cornerRadius": "8px", "paddingAll": "md",
+        "contents": [
+            {"type": "text", "text": "📍 波段雷達", "weight": "bold", "color": "#2C3E50", "size": "sm"},
+            {"type": "box", "layout": "horizontal", "margin": "sm", "spacing": "md", "contents": [left, right]},
+            {"type": "text", "text": "≥60 觸發逃頂／抄底警報 · 風險量表非精準擇時",
              "color": "#AAAAAA", "size": "xxs", "margin": "sm", "wrap": True},
         ],
     }
@@ -430,6 +463,85 @@ def _build_bottom_eval_box(s):
     }
 
 
+def _season_cell(label, value, dist, dist_color, accent):
+    return {"type": "box", "layout": "vertical", "flex": 1, "contents": [
+        {"type": "text", "text": label, "color": "#888888", "size": "xxs", "align": "center"},
+        {"type": "text", "text": f"${value:,.0f}", "color": accent, "size": "md", "weight": "bold", "align": "center"},
+        {"type": "text", "text": dist, "color": dist_color, "size": "xxs", "align": "center"},
+    ]}
+
+
+def _build_season_radar_box(s):
+    """🗓️ 四季雷達 — 季節 + 週期頂底並排 + 通道條 + 頂錨依據 + 牛頂/熊底分 + 定位句。
+    整合舊「季節徽章」，頂用 top_estimates 中位、底用 bottom_eval.final_low。無 season_zh 時回 None。"""
+    if s.get("season_zh", "N/A") == "N/A":
+        return None
+    cp = s.get("current_price", 0) or 0
+    tops = s.get("top_estimates") or []
+    be = s.get("bottom_eval") or {}
+    ct = s.get("cycle_top") or {}
+    top_vals = sorted(t["value"] for t in tops)
+    top_repr = top_vals[len(top_vals) // 2] if top_vals else None
+    bottom_repr = be.get("final_low")
+
+    contents = [
+        {"type": "text", "text": "🗓️ 四季雷達", "weight": "bold", "color": "#2C3E50", "size": "sm"},
+    ]
+
+    cells = []
+    if top_repr and cp:
+        d = (top_repr / cp - 1) * 100
+        cells.append(_season_cell("週期頂（中位錨）", top_repr, f"距頂 +{d:.0f}%", "#27AE60", "#E74C3C"))
+    if bottom_repr and cp:
+        d = (cp / bottom_repr - 1) * 100
+        dc = "#27AE60" if d >= 0 else "#E74C3C"
+        cells.append(_season_cell("四季論底", bottom_repr, f"距底 {'+' if d>=0 else ''}{d:.0f}%", dc, "#2980B9"))
+    if cells:
+        contents.append({"type": "box", "layout": "horizontal", "margin": "md", "spacing": "md", "contents": cells})
+
+    if top_repr and bottom_repr and cp and top_repr > bottom_repr:
+        pos = max(1, min(99, int((cp - bottom_repr) / (top_repr - bottom_repr) * 100)))
+        contents.append({"type": "text", "text": f"現價 ${cp:,.0f}（通道 {pos}% 位置）",
+                         "color": "#888888", "size": "xxs", "margin": "md"})
+        contents.append({"type": "box", "layout": "horizontal", "margin": "xs", "height": "8px", "contents": [
+            {"type": "box", "layout": "vertical", "flex": pos, "backgroundColor": "#2980B9", "contents": []},
+            {"type": "box", "layout": "vertical", "flex": 100 - pos, "backgroundColor": "#E74C3C", "contents": []},
+        ]})
+        contents.append({"type": "box", "layout": "horizontal", "contents": [
+            {"type": "text", "text": "底", "color": "#2980B9", "size": "xxs"},
+            {"type": "text", "text": "頂", "color": "#E74C3C", "size": "xxs", "align": "end"},
+        ]})
+
+    # 頂錨依據明細（頂部價格依據列出）
+    if tops:
+        anchor_txt = "｜".join(f"{t['label']} ${t['value']:,.0f}" for t in tops[:3])
+        contents.append({"type": "text", "text": f"頂依據：{anchor_txt}",
+                         "color": "#999999", "size": "xxs", "margin": "md", "wrap": True})
+
+    bull = ct.get("bull_total", 0)
+    bear = ct.get("bear_total", 0)
+    eff = ct.get("effective_season")
+    contents.append({"type": "text", "text": f"牛頂分 {bull}/100 ┃ 熊底分 {bear}/100",
+                     "color": "#555555", "size": "xs", "margin": "md", "weight": "bold"})
+    if eff == "autumn":
+        pos_txt = "🍂 高點已過、底部未至 → 逐步減倉"
+    elif bull >= 60:
+        pos_txt = "🔥 接近整輪大頂 → 分批止盈"
+    elif eff == "winter" or bear >= 50:
+        pos_txt = "❄️ 築底階段 → 定期定額囤幣"
+    elif eff == "spring":
+        pos_txt = "🌱 復甦初期 → 分批建倉"
+    else:
+        pos_txt = "☀️ 主升/中段 → 持有設移動止盈"
+    contents.append({"type": "text", "text": pos_txt, "color": "#666666", "size": "xxs", "margin": "xs", "wrap": True})
+
+    return {
+        "type": "box", "layout": "vertical", "margin": "md",
+        "backgroundColor": "#FFF8F0", "cornerRadius": "8px", "paddingAll": "md",
+        "contents": contents,
+    }
+
+
 def build_flex_message(s):
     date_str = datetime.now().strftime('%Y-%m-%d %H:%M')
     left_flex = max(1, min(99, int((s["cycle_score"] + 100) / 2)))
@@ -439,33 +551,41 @@ def build_flex_message(s):
          "size": "xxl", "color": "#27AE60"},
     ]
 
+    # 1. 季節徽章（冬季 — 深熊底部）
     season_box = _build_season_box(s)
     if season_box:
         body_contents.append(season_box)
 
+    # 2. 長週期多空評分
     body_contents.append(_build_score_box(s, left_flex))
-    body_contents.append(_build_radar_box(s))
 
-    # 逃頂雷達（波段相對高點）— 固定區塊，每日顯示
-    escape_box = _build_escape_box(s)
-    if escape_box:
-        body_contents.append(escape_box)
+    # 3. 波段雷達（逃頂 + 抄底並排）
+    swing_box = _build_swing_radar_box(s)
+    if swing_box:
+        body_contents.append(swing_box)
 
-    # 最低價綜合評估（單一 block，整合四季論趨勢底 + 4 floor + on-chain/技術錨）
+    # 4. 四季雷達（季節 + 週期頂底 + 通道 + 頂錨依據 + 牛頂/熊底分）
+    season_radar = _build_season_radar_box(s)
+    if season_radar:
+        body_contents.append(season_radar)
+
+    # 5. 最低價綜合評估（底部完整明細，同源 core/bottom_floors）
     bottom_box = _build_bottom_eval_box(s)
     if bottom_box:
         body_contents.append(bottom_box)
-    else:
-        # 向後相容：無 bottom_eval（舊呼叫端）時退回原兩個分離 box
+    elif s.get("season_zh", "N/A") == "N/A":
+        # 向後相容：無 bottom_eval（舊呼叫端）時退回原預測 + floor box
         body_contents.append(_build_forecast_box(s))
         floor_box = _build_floor_support_box(s)
         if floor_box:
             body_contents.append(floor_box)
 
+    # 6. 加密新聞輿情
     news_box = _build_news_box(s)
     if news_box:
         body_contents.append(news_box)
 
+    # 7. 策略建議
     body_contents.append(
         _build_advice_box("💡 策略建議", s["swing_advice"], _light(s["swing_advice_color"]))
     )

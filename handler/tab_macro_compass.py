@@ -37,7 +37,9 @@ from core.season_forecast import (
     CYCLE_HISTORY,
 )
 from core.bottom_floors import compute_all_bottom_estimates
-from core.relative_high import compute_relative_high
+from core.relative_high import (compute_relative_high, compute_cycle_top_estimates,
+                                compute_cycle_top_state)
+from core.relative_low import compute_relative_low
 from service.bottom_metrics import get_latest_bottom_metrics, fetch_hashrate_history_ths
 from service.etf_flow import get_etf_flow_summary
 from service.market_snapshot import get_oi_stats, get_btcd_trend
@@ -128,11 +130,14 @@ def _render_cycle_waterfall(fc: dict):
     return fig
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def _gather_escape_externals(cache_key: str) -> dict:
+def _gather_radar_externals(cache_key: str) -> dict:
     """
-    逃頂雷達的外部資料（ETF 流量 / SOPR / BTC.D 趨勢 / 總經）一次抓齊並快取 30 分鐘，
-    避免 Streamlit 每次 rerun 重打。各服務內部另有 json 快取，此層再省一次。
+    相對高/低點雷達共用的外部資料（ETF 流量 / SOPR / BTC.D 趨勢 / 總經）一次抓齊並
+    快取 30 分鐘，避免 Streamlit 每次 rerun 重打。各服務內部另有 json 快取，此層再省一次。
     回傳純 dict（可序列化），失敗欄位為 None。
+
+    macro 同時帶逃頂（hot/strong = 逆風）與抄底（cool/weak = 順風）兩套布林欄位，
+    兩側雷達各取所需：逃頂吃 cpi_hot/jobs_strong，抄底吃 cpi_cool/jobs_weak。
     """
     out = {"etf": None, "sopr": None, "btcd": None, "macro": None, "asof": None}
     try:
@@ -152,12 +157,22 @@ def _gather_escape_externals(cache_key: str) -> dict:
     try:
         cpi = fetch_us_cpi_yoy(); pce = fetch_us_pce_yoy()
         nfp = fetch_nfp(); unrate = fetch_unrate()
-        jobs_strong = ((nfp.get("change_k") or 0) > 150) or ((unrate.get("change_pp") or 0) < 0)
+        nfp_k = nfp.get("change_k") or 0
+        unrate_pp = unrate.get("change_pp") or 0
+        jobs_strong = (nfp_k > 150) or (unrate_pp < 0)
+        jobs_weak   = (nfp_k < 50) or (unrate_pp > 0)   # 新增就業疲弱或失業上升 = 降息傾向
+        cpi_trend = cpi.get("trend") or ""; pce_trend = pce.get("trend") or ""
         nxt = get_next_macro_event()
         out["macro"] = {
-            "cpi_hot": "升溫" in (cpi.get("trend") or ""),
-            "pce_hot": "升溫" in (pce.get("trend") or ""),
+            # 逃頂側（過熱 = 逆風）
+            "cpi_hot": "升溫" in cpi_trend,
+            "pce_hot": "升溫" in pce_trend,
             "jobs_strong": bool(jobs_strong),
+            # 抄底側（降溫 = 順風）
+            "cpi_cool": "降溫" in cpi_trend,
+            "pce_cool": "降溫" in pce_trend,
+            "jobs_weak": bool(jobs_weak),
+            # 共用
             "event_within_days": nxt.get("days"),   # db/macro_events.json（Notion 同源）
             "next_event_type": nxt.get("type"),
         }
@@ -166,18 +181,14 @@ def _gather_escape_externals(cache_key: str) -> dict:
     return out
 
 
-def _render_escape_radar(btc, curr, funding_rate, fng_val, realtime_data):
-    """C5. 逃頂雷達（相對高點）— 與 C 熊市底部獵人對稱。與 LINE 推播同源 core/relative_high。"""
-    st.markdown('---')
-    st.subheader('C5. 🚨 相對高點雷達 (Relative-High Radar)')
-    st.caption('分兩層看：**C5-A 波段逃頂** = 短中期相對高點（如 2026/5 $82k→$60k，給止盈/開空）；'
-               '**C5-B 週期大頂** = 整輪牛市大頂（四季論秋季）。兩者互補——可能 A 高 B 低（牛市途中回檔高點），'
-               '或 A、B 皆高（接近整輪大頂）。與每日 LINE 推播同源 core/relative_high。')
+def _render_escape_block(btc, curr, funding_rate, fng_val, realtime_data):
+    """逃頂評分段（過熱該止盈）— 波段雷達上半。與 LINE 推播、BTC_WATCH 同源 core/relative_high。"""
+    st.markdown('##### 🚨 逃頂評分（過熱該止盈）')
     try:
         price = float(curr['close'])
         oi_total = getattr(realtime_data, 'open_interest', None)
         oi_stats = get_oi_stats(oi_total) if oi_total else None
-        ext = _gather_escape_externals(str(btc.index[-1]))
+        ext = _gather_radar_externals(str(btc.index[-1]))
         rh = compute_relative_high(
             price, btc.iloc[-1], btc,
             funding_8h=funding_rate,
@@ -189,16 +200,14 @@ def _render_escape_radar(btc, curr, funding_rate, fng_val, realtime_data):
             macro=ext.get('macro'),
         )
     except Exception as e:
-        st.caption(f'相對高點雷達暫不可用：{type(e).__name__}: {e}')
+        st.caption(f'逃頂評分暫不可用：{type(e).__name__}: {e}')
         return
 
     score = rh['escape_score']
     level, color = rh['escape_level'], rh['escape_color']
     sig = rh['escape_signals']
 
-    # ══════════ C5-A 波段逃頂（短中期）══════════
-    st.markdown('#### C5-A · 波段逃頂訊號（短中期）')
-    st.caption('五維加權 0–100（合約過熱+技術衰竭+鏈上派發+情緒過熱+總經逆風），判斷「現在是否處於一個波段相對高點」。')
+    st.caption('五維加權 0–100（合約過熱＋技術衰竭＋鏈上派發＋情緒過熱＋總經逆風），分數越高越過熱。')
     gauge = go.Figure(go.Indicator(
         mode='gauge+number', value=score,
         title={'text': "波段逃頂評分<br><span style='font-size:0.8em;color:gray'>Swing Escape-Top</span>",
@@ -256,38 +265,247 @@ def _render_escape_radar(btc, curr, funding_rate, fng_val, realtime_data):
                      'SOPR/總經視來源可達性（FRED 在公司網路常被擋，雲端正常）。'
                      '其餘為 0 則代表市場當下確實不過熱。')
 
-    # ══════════ C5-B 週期大頂（長期 · 四季論）══════════
-    st.markdown('#### C5-B · 週期大頂（長期 · 四季論）')
-    st.caption('用 8 大鏈上/技術指標的「牛頂分數」+ 四季論季節，判斷是否接近**整輪牛市大頂**（與 C 熊市底部獵人對稱）。')
-    ct = rh.get('cycle_top', {})
-    _season_zh = {'spring': '🌱 春季(復甦)', 'summer': '☀️ 夏季(主升)',
-                  'autumn': '🍂 秋季(泡沫破裂)', 'winter': '❄️ 冬季(築底)'}
-    eff = ct.get('effective_season')
-    _season_label = '🍂 秋季(泡沫破裂)' if ct.get('is_autumn') else _season_zh.get(eff, eff or '—')
-    bcol1, bcol2 = st.columns([1, 2])
-    with bcol1:
-        st.metric('牛頂分數 (0-100)', f"{ct.get('bull_total', 0)}/100",
-                  help='8 大指標的牛頂側合計，越高越接近整輪大頂')
-        st.metric('多空評分', f"{ct.get('market_score', 0):+d}",
-                  help='牛頂分 − 熊底分，+100 狂熱 / −100 深熊')
-        st.markdown(f"**有效季節**：{_season_label}")
-    with bcol2:
-        est = rh.get('top_estimates', [])
-        if est:
-            _rows = ''
-            for e in est:
-                dist = (e['value'] / price - 1) * 100
-                dclr = '#ef5350' if dist <= 0 else '#66bb6a'
-                _rows += (f"<tr><td style='padding:4px 8px;color:#ffd54f;'>{e['label']}</td>"
-                          f"<td style='padding:4px 8px;text-align:right;color:#fff;font-weight:600;'>${e['value']:,.0f}</td>"
-                          f"<td style='padding:4px 8px;text-align:right;color:{dclr};'>{'+' if dist>=0 else ''}{dist:.0f}%</td>"
-                          f"<td style='padding:4px 8px;color:#777;font-size:0.72rem;'>{e['note']}</td></tr>")
-            st.markdown(f"""<table style="width:100%;border-collapse:collapse;font-size:0.82rem;">
-                <tr style="color:#aaa;border-bottom:1px solid #444;">
-                  <th style="text-align:left;padding:4px 8px;">高點價位錨</th><th style="text-align:right;padding:4px 8px;">價位</th>
-                  <th style="text-align:right;padding:4px 8px;">現價距此</th><th style="text-align:left;padding:4px 8px;">說明</th></tr>
-                {_rows}</table>""", unsafe_allow_html=True)
-    st.caption('⚠️ 相對高點雷達為**風險量表**，非精準擇時工具（回測顯示可回測維度判別力偏弱，OI/ETF 等強訊號歷史不足無法驗證）。')
+
+def _render_dip_block(btc, curr, funding_rate, fng_val, realtime_data):
+    """抄底評分段（低估可進場）— 波段雷達下半。與 LINE 推播、BTC_WATCH 同源 core/relative_low。"""
+    st.markdown('##### 🟢 抄底評分（低估可進場）')
+    try:
+        price = float(curr['close'])
+        oi_total = getattr(realtime_data, 'open_interest', None)
+        oi_stats = get_oi_stats(oi_total) if oi_total else None
+        ext = _gather_radar_externals(str(btc.index[-1]))
+        rl = compute_relative_low(
+            price, btc.iloc[-1], btc,
+            funding_8h=funding_rate,
+            oi_stats=oi_stats,
+            etf_summary=ext.get('etf'),
+            sopr=ext.get('sopr'),
+            fng=float(fng_val) if fng_val is not None else None,
+            btc_d_trend=ext.get('btcd'),
+            macro=ext.get('macro'),   # 同時含 cool/weak 欄位，抄底側取順風項
+        )
+    except Exception as e:
+        st.caption(f'抄底評分暫不可用：{type(e).__name__}: {e}')
+        return
+
+    score = rl['low_score']
+    level, color = rl['low_level'], rl['low_color']
+    sig = rl['low_signals']
+
+    st.caption('六維加權 0–100（長週期深跌＋合約超冷＋技術回穩＋情緒恐慌＋鏈上吸籌＋總經順風），分數越高越低估。')
+    gauge = go.Figure(go.Indicator(
+        mode='gauge+number', value=score,
+        title={'text': "波段抄底評分<br><span style='font-size:0.8em;color:gray'>Swing Dip-Buy</span>",
+               'font': {'size': 16}},
+        gauge={'axis': {'range': [0, 100]}, 'bar': {'color': color}, 'bgcolor': '#1e1e1e',
+               'borderwidth': 2, 'bordercolor': '#333',
+               'steps': [{'range': [0, 25], 'color': '#3a1a1a'}, {'range': [25, 45], 'color': '#2a2a2a'},
+                         {'range': [45, 60], 'color': '#3a3a1a'}, {'range': [60, 75], 'color': '#1a3a1a'},
+                         {'range': [75, 100], 'color': '#0a3a2a'}],
+               'threshold': {'line': {'color': '#fff', 'width': 3}, 'thickness': 0.75, 'value': score}}))
+    gauge.update_layout(height=260, template='plotly_dark', paper_bgcolor='#0e1117', font={'color': 'white'})
+    dg1, dg2 = st.columns([1, 1])
+    with dg1:
+        st.plotly_chart(gauge, use_container_width=True)
+    with dg2:
+        st.markdown(f'### {level}')
+        st.markdown(f'**評分: {score}/100**')
+        st.success(f'📋 **操作建議**: {rl["low_action"]}')
+        st.markdown("""
+        | 分數 | 狀態 | 行動 |
+        |------|------|------|
+        | 75-100 | 強力抄底 | 分批進場/回補空單 |
+        | 60-75 | 明確低估 | 定投/減空 |
+        | 45-60 | 偏冷觀察 | 留意打底，勿純憑超賣搶反彈 |
+        | 25-45 | 中性 | 正常持有 |
+        | 0-25 | 無底部訊號 | 勿接刀 |
+        """)
+
+    # 六維卡片
+    dim_names = {'cycle': '① 長週期深跌', 'derivatives': '② 合約超冷', 'technical': '③ 技術回穩',
+                 'sentiment': '④ 情緒恐慌', 'onchain': '⑤ 鏈上吸籌', 'macro': '⑥ 總經順風'}
+    unfitted = set(rl.get('unfitted_dims', []))
+    cols = st.columns(6)
+    accumulating = []
+    for col, (key, name) in zip(cols, dim_names.items()):
+        s = sig[key]
+        bar_pct = (s['score'] / s['max'] * 100) if s['max'] else 0
+        tag = " <span style='color:#ff9800;font-size:0.7rem;'>(未擬合)</span>" if key in unfitted else ""
+        if '累積中' in s['label'] or '無資料' in s['label']:
+            accumulating.append(name.split(' ')[-1] if ' ' in name else name)
+        col.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-title">{name}{tag}</div>
+            <div class="metric-value" style="font-size:1.0rem;">{s['value']}</div>
+            <div class="metric-delta" style="font-size:0.7rem;">{s['label']}</div>
+            <div style="background:#333;border-radius:4px;height:6px;margin-top:8px;">
+                <div style="background:{color};width:{bar_pct:.0f}%;height:6px;border-radius:4px;"></div>
+            </div>
+            <div style="color:#888;font-size:0.72rem;text-align:right;">{s['score']}/{s['max']} 分</div>
+        </div>""", unsafe_allow_html=True)
+    if accumulating:
+        st.caption('ℹ️ 部分維度為 0 是「資料尚未到位」而非「無訊號」：'
+                   + '、'.join(accumulating)
+                   + '。Mayer/200週需數百日歷史；ETF 連續流入＆SOPR 視來源可達性'
+                     '（bitcoin-data.com 在公司網路偶限流，雲端正常）。其餘為 0 則代表市場當下確實不夠低估。')
+
+
+# 完整評分標準（與 core/relative_high、core/relative_low 的閾值同步——改 core 閾值時一併更新此表）
+_ESCAPE_RUBRIC_MD = """
+**🚨 逃頂評分 · 五維計分標準**（滿分 100，分數越高越過熱；命中較高門檻者取該檔分數）
+
+| 維度（滿分） | 子項 | 計分門檻 |
+|---|---|---|
+| ① 合約過熱 **30** | 資金費率年化 (20) | ≥90%→20｜≥70%→16｜≥50%→12｜≥30%→6｜≥15%→3｜≥0→0｜負費率→0 |
+| | OI 分位 (10) | 近期新高 / ≥95 分位→10｜≥85→7｜≥70→4｜其餘→0 |
+| ② 技術衰竭 **25** | 頂背離 (18) | RSI+MACD 雙頂背離→18｜單指標背離→8~12｜無→0 |
+| | RSI_14 超買 (7) | ≥80→7｜≥75→5｜≥70→3｜其餘→0 |
+| ③ 鏈上派發 **20**〔未擬合〕 | ETF 連續流出 (12) | ≥10日→12｜≥7日→10｜≥5日→7｜≥3日→4｜1–2日→2｜淨流入→0 |
+| | SOPR (8) | ≥1.08→8｜≥1.05→6｜≥1.03→4｜≥1.01→2｜其餘→0 |
+| ④ 情緒過熱 **15** | F&G 貪婪 (10) | ≥90→10｜≥80→8｜≥75→5｜≥70→3｜其餘→0 |
+| | BTC.D 下降 (5) | 下降 / ≤−1.0pp→5｜≤−0.5pp→3｜其餘→0 |
+| ⑤ 總經逆風 **10** | 通膨/就業 hawkish (7) | 通膨升溫 +4、就業強勁 +3（上限 7） |
+| | 事件臨近 (3) | ≤1日→3｜≤3日→2｜≤7日→1｜無→0 |
+
+等級：≥75 強烈逃頂｜≥60 明確過熱（觸發 LINE 逃頂警報）｜≥45 偏熱警戒｜≥25 中性｜<25 無過熱
+"""
+
+_LOW_RUBRIC_MD = """
+**🟢 抄底評分 · 六維計分標準**（滿分 100，分數越高越低估；命中較低門檻者取該檔分數）
+
+| 維度（滿分） | 子項 | 計分門檻 |
+|---|---|---|
+| ① 長週期深跌 **25**（最強維度）| Mayer 倍數 (10) | <0.8→10｜<1.0→6｜<1.2→3｜≥1.2→0 |
+| | 200週均線比 (9) | <1.0→9｜<1.3→6｜<2.0→3｜≥2.0→0 |
+| | 冪律比 (6) | <2.0→6｜<5.0→3｜≥5.0→0 |
+| ② 合約超冷 **20**〔未擬合〕 | 負費率年化 (10) | ≤−30%→10｜≤−20%→8｜≤−15%→6｜≤−5%→3｜<0→2｜≥0→0 |
+| | OI 1h 清洗 (10) | ≤−8%→10｜≤−5%→7｜≤−3%→4｜其餘→0 |
+| ③ 技術回穩 **20** | 底背離 (14) | RSI+MACD 雙底背離→14｜單指標背離→6~10｜無→0 |
+| | RSI_14 超賣 (6) | ≤20→6｜≤25→4｜≤30→2｜其餘→0 |
+| ④ 情緒恐慌 **15** | F&G 恐懼 (10) | ≤10→10｜≤20→8｜≤25→5｜≤30→3｜其餘→0 |
+| | BTC.D 上升 (5) | 上升 / ≥1.0pp→5｜≥0.5pp→3｜其餘→0 |
+| ⑤ 鏈上吸籌 **10**〔灰燈〕 | ETF 連續流入 (6) | ≥7日→6｜≥5日→4｜≥3日→2｜其餘→0 |
+| | SOPR 割肉 (4) | ≤0.92→4｜≤0.95→3｜≤0.98→2｜其餘→0 |
+| ⑥ 總經順風 **10**〔灰燈〕 | 通膨/就業 dovish (7) | 通膨降溫 +4、就業轉弱 +3（上限 7） |
+| | 事件臨近 (3) | ≤1日→3｜≤3日→2｜≤7日→1｜無→0 |
+
+等級：≥75 強力抄底｜≥60 明確低估（觸發 LINE 抄底訊號）｜≥45 偏冷觀察｜≥25 中性｜<25 無底部訊號
+
+〔未擬合〕＝權重採專家設定、歷史樣本不足無法回測驗證；〔灰燈〕＝同未擬合，且資料源在純幣安環境可能缺漏。
+"""
+
+
+def _render_swing_radar(btc, curr, funding_rate, fng_val, realtime_data):
+    """📍 波段雷達 — 短中期雙向相對評分（逃頂＋抄底）。取代舊 C5/C6，與 LINE 推播同源。"""
+    st.markdown('---')
+    st.subheader('📍 波段雷達 (Swing Radar)')
+    st.caption('短中期擇時的**雙向量表**：逃頂（過熱該止盈）＋ 抄底（低估可進場）。兩側天生非對稱——'
+               '逃頂靠「合約過熱」、抄底靠「長週期深跌」。≥60 觸發對應 LINE 警報；為風險/估值量表，非精準擇時工具。')
+    _render_escape_block(btc, curr, funding_rate, fng_val, realtime_data)
+    st.markdown('')
+    _render_dip_block(btc, curr, funding_rate, fng_val, realtime_data)
+    with st.expander('📖 完整評分標準與計分方式（逃頂五維 ＋ 抄底六維，每一檔門檻）', expanded=False):
+        st.markdown(_ESCAPE_RUBRIC_MD)
+        st.markdown(_LOW_RUBRIC_MD)
+
+
+_SEASON_ZH_FULL = {'spring': '🌱 春季（復甦）', 'summer': '☀️ 夏季（主升）',
+                   'autumn': '🍂 秋季（泡沫破裂）', 'winter': '❄️ 冬季（築底）'}
+
+
+def _render_season_radar(btc, fc, be, price):
+    """🗓️ 四季雷達 — 本輪減半週期的頂底定位（週期頂錨 ＋ 四季論底 ＋ 通道位置 ＋ 牛頂/熊底分）。
+    整合 core/relative_high 的高點錨與牛頂分、core/bottom_floors 的最終最低價（即下方 D2）。"""
+    try:
+        tops = compute_cycle_top_estimates(price, btc)
+        cyc = compute_cycle_top_state(btc.iloc[-1], btc, price)
+    except Exception as e:
+        st.caption(f'四季雷達暫不可用：{type(e).__name__}: {e}')
+        return
+
+    top_vals = sorted(e['value'] for e in tops) if tops else []
+    top_repr = top_vals[len(top_vals) // 2] if top_vals else None     # 高點錨中位數
+    bottom_repr = (be or {}).get('final_low')
+    bull = cyc.get('bull_total', 0)
+    bear = cyc.get('bear_total', 0)
+    eff = cyc.get('effective_season')
+    season_label = _SEASON_ZH_FULL.get(eff, eff or '—')
+
+    st.markdown('#### 🗓️ 四季雷達 · 本輪頂底定位')
+    st.caption('把「現價」放進本輪減半週期的頂↔底通道：頂取 Pi Cycle／Mayer／冪律／四季論牛頂的**中位錨**，'
+               '底取四季論趨勢底（即下方 D2 的最終最低價）。牛頂分／熊底分來自 8 大鏈上技術指標。')
+
+    cT, cB = st.columns(2)
+    with cT:
+        if top_repr:
+            d = (top_repr / price - 1) * 100
+            st.markdown(f"""<div style="background:#1a1a2e;border:2px solid #ef5350;border-radius:10px;padding:14px;text-align:center;">
+                <div style="color:#888;font-size:0.8rem;">週期頂（高點錨中位）</div>
+                <div style="color:#ef5350;font-size:1.8rem;font-weight:800;">${top_repr:,.0f}</div>
+                <div style="color:#66bb6a;font-size:0.78rem;">距頂 +{d:.0f}%</div>
+            </div>""", unsafe_allow_html=True)
+        else:
+            st.caption('週期頂錨累積中（需 SMA350/730 等長均線）')
+    with cB:
+        if bottom_repr:
+            d = (price / bottom_repr - 1) * 100
+            st.markdown(f"""<div style="background:#1a1a2e;border:2px solid #42a5f5;border-radius:10px;padding:14px;text-align:center;">
+                <div style="color:#888;font-size:0.8rem;">四季論底（D2 最終最低價）</div>
+                <div style="color:#42a5f5;font-size:1.8rem;font-weight:800;">${bottom_repr:,.0f}</div>
+                <div style="color:{'#66bb6a' if price >= bottom_repr else '#ef5350'};font-size:0.78rem;">距底 {d:+.0f}%</div>
+            </div>""", unsafe_allow_html=True)
+        else:
+            st.caption('四季論底暫不可用（見 D2）')
+
+    # 通道位置條（現價在 底↔頂 區間的相對位置）
+    if top_repr and bottom_repr and top_repr > bottom_repr:
+        pos = max(0.0, min(1.0, (price - bottom_repr) / (top_repr - bottom_repr)))
+        pos_pct = pos * 100
+        st.markdown(f"""<div style="position:relative;height:38px;margin:14px 0 2px 0;">
+            <div style="position:absolute;top:16px;left:0;right:0;height:8px;border-radius:4px;
+                 background:linear-gradient(90deg,#42a5f5 0%,#9e9e9e 50%,#ef5350 100%);"></div>
+            <div style="position:absolute;top:2px;left:{pos_pct:.1f}%;transform:translateX(-50%);
+                 color:#fff;font-size:0.9rem;">▼</div>
+            <div style="position:absolute;top:26px;left:{pos_pct:.1f}%;transform:translateX(-50%);
+                 color:#fff;font-size:0.7rem;white-space:nowrap;">現價 ${price:,.0f}</div>
+            <div style="position:absolute;top:26px;left:0;color:#42a5f5;font-size:0.7rem;">底</div>
+            <div style="position:absolute;top:26px;right:0;color:#ef5350;font-size:0.7rem;">頂</div>
+        </div>""", unsafe_allow_html=True)
+        st.caption(f'現價落在本輪通道 **{pos_pct:.0f}%** 位置（0%＝貼四季論底，100%＝抵高點錨中位）')
+
+    # 週期頂錨明細（頂部價格依據，對稱下方 D2 的底部明細）
+    if tops:
+        _trs = ''
+        for t in tops:
+            d = (t['value'] / price - 1) * 100
+            _trs += (f"<tr><td style='padding:3px 8px;color:#ffd54f;'>{t['label']}</td>"
+                     f"<td style='padding:3px 8px;text-align:right;color:#fff;font-weight:600;'>${t['value']:,.0f}</td>"
+                     f"<td style='padding:3px 8px;text-align:right;color:#66bb6a;'>+{d:.0f}%</td>"
+                     f"<td style='padding:3px 8px;color:#777;font-size:0.72rem;'>{t['note']}</td></tr>")
+        st.markdown(f"""<table style="width:100%;border-collapse:collapse;font-size:0.8rem;margin-top:8px;">
+            <tr style="color:#aaa;border-bottom:1px solid #444;">
+              <th style="text-align:left;padding:3px 8px;">週期頂錨（依據）</th><th style="text-align:right;padding:3px 8px;">價位</th>
+              <th style="text-align:right;padding:3px 8px;">距現價</th><th style="text-align:left;padding:3px 8px;">說明</th></tr>
+            {_trs}</table>""", unsafe_allow_html=True)
+        st.caption('「週期頂」取上述各錨的**中位數**為代表；底部完整 10 項見下方 D2。')
+
+    # 牛頂分 / 熊底分 + 季節定位句
+    mcol1, mcol2, mcol3 = st.columns([1, 1, 2])
+    mcol1.metric('牛頂分數', f'{bull}/100', help='8 大鏈上技術指標的牛頂側合計，越高越接近整輪大頂')
+    mcol2.metric('熊底分數', f'{bear}/100', help='8 大指標的熊底側合計，越高越接近整輪大底')
+    with mcol3:
+        if eff == 'autumn':
+            _pos = '🍂 高點已過、底部未至 → 逐步減倉、轉穩定資產'
+        elif bull >= 60:
+            _pos = '🔥 接近整輪大頂 → 分批止盈、收緊移動止盈'
+        elif eff == 'winter' or bear >= 50:
+            _pos = '❄️ 築底階段 → 定期定額囤幣、布局下一輪'
+        elif eff == 'spring':
+            _pos = '🌱 復甦初期 → 分批建倉、佈局主流'
+        else:
+            _pos = '☀️ 主升/中段 → 持有並設移動止盈'
+        st.markdown(f"**有效季節**：{season_label}")
+        st.markdown(f"**週期定位**：{_pos}")
 
 
 def render(btc, chart_df, tvl_hist, stable_hist, fund_hist, curr, dxy, funding_rate, tvl_val, fng_val, fng_state, fng_source, proxies, realtime_data):
@@ -671,8 +889,8 @@ def render(btc, chart_df, tvl_hist, stable_hist, fund_hist, curr, dxy, funding_r
     }
     st.dataframe(pd.DataFrame(summary_data), use_container_width=True, hide_index=True)
 
-    # ── C5. 逃頂雷達（相對高點，與 C 底部獵人對稱）──
-    _render_escape_radar(btc, curr, funding_rate, fng_val, realtime_data)
+    # ── 📍 波段雷達（逃頂＋抄底雙向相對評分，取代舊 C5/C6）──
+    _render_swing_radar(btc, curr, funding_rate, fng_val, realtime_data)
 
     st.markdown('---')
     st.subheader('D. 🗓️ 四季理論目標價預測 (Halving Cycle Forecast)')
@@ -740,14 +958,24 @@ def render(btc, chart_df, tvl_hist, stable_hist, fund_hist, curr, dxy, funding_r
             st.warning(fc['correction_reason'])
         st.plotly_chart(_render_season_timeline(si, effective_season=eff['season']), use_container_width=True)
         st.markdown('---')
-        # ── D2 底部支撐綜合評估（與每日 LINE 推播同源 core/bottom_floors）──
-        st.markdown('#### D2. 🛡️ 底部支撐綜合評估')
-        st.caption('整合四季論趨勢底 + 200週均線/冪律/礦工成本 + 鏈上錨（Realized/Balanced/CVDD）+ 技術錨（Mayer/AHR999），與每日 LINE 推播同源。')
+        # ── 底部估計（🗓️ 四季雷達定位 + D2 明細共用同一 be，避免重算與漂移）──
+        be = None
         try:
             _hr = fetch_hashrate_history_ths()
             _lh = _hr[max(_hr)] if _hr else None
             be = compute_all_bottom_estimates(current_price, df=btc, hashrate_ths=_lh,
                                               onchain=get_latest_bottom_metrics())
+        except Exception as _be_err:
+            st.caption(f'底部資料暫不可用：{type(_be_err).__name__}: {_be_err}')
+
+        # ── 🗓️ 四季雷達 · 本輪頂底定位（週期頂錨 + 四季論底 + 牛頂/熊底分，整合原 C5-B）──
+        _render_season_radar(btc, fc, be, current_price)
+        st.markdown('---')
+
+        # ── D2 底部支撐綜合評估明細（core/bottom_floors，與四季雷達共用 be，與每日 LINE 同源）──
+        st.markdown('#### D2. 🛡️ 底部支撐綜合評估')
+        st.caption('整合四季論趨勢底 + 200週均線/冪律/礦工成本 + 鏈上錨（Realized/Balanced/CVDD）+ 技術錨（Mayer/AHR999），與每日 LINE 推播同源。')
+        if be and be.get('estimates'):
             _kc = {'season': '#ef5350', 'floor': '#42a5f5', 'anchor': '#ffd54f', 'warning': '#ff9800'}
             mcol1, mcol2 = st.columns(2)
             with mcol1:
@@ -787,8 +1015,8 @@ def render(btc, chart_df, tvl_hist, stable_hist, fund_hist, curr, dxy, funding_r
                 unsafe_allow_html=True)
             if be.get('asof'):
                 st.caption(f"鏈上資料 as of {be['asof']}（bitcoin-data.com）")
-        except Exception as e:
-            st.caption(f'底部綜合評估暫不可用：{type(e).__name__}: {e}')
+        else:
+            st.caption('底部綜合評估暫不可用')
 
         st.markdown('#### D3. 目標價走勢圖（過去2年 + 未來12個月）')
         ss_fc_key = f'tab_mc_fig_fc_{bb_cache_key}'
