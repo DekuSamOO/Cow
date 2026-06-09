@@ -42,8 +42,9 @@ core/
   bottom_floors.py    最低價綜合評估「單一真實來源」compute_all_bottom_estimates（四季論趨勢底 + 4 floor + 鏈上錨 + 技術錨；LINE 推播與 dashboard 共用）
   miner_cost.py       礦工成本純數學模型（btc_per_day 依減半切換、eff_jth 分段插值、電費盈虧/all-in 成本，無 IO 依賴）
   gemini_client.py    Gemini REST API 輕量封裝（關閉 thinking budget 省 token、x-goog-api-key header，供新聞中文化）
-  divergence.py       價格 vs 動能（RSI/MACD）頂/底背離偵測（純 pandas/numpy，無 Streamlit 依賴；供逃頂雷達與未來抄底共用）
+  divergence.py       價格 vs 動能（RSI/MACD）頂/底背離偵測（純 pandas/numpy，無 Streamlit 依賴；detect_top/bottom_divergence_combo 供逃頂與抄底雷達共用）
   relative_high.py    相對高點（逃頂雷達）單一真實來源：Layer A 五維逃頂評分(0-100，合約/技術/鏈上/情緒/總經) + Layer B 長週期大頂 + 高點價位錨；常數 WEIGHTS/FUNDING_ANN_RED 供 BTC_WATCH path import，無 Streamlit 依賴
+  relative_low.py     相對底部（抄底雷達）單一真實來源：六維抄底評分(0-100，長週期深跌25/合約超冷20/技術回穩20/情緒恐慌15/鏈上10/總經10，權重經 relative_low_backtest 拍板)；compute_relative_low_score/relative_low_meta 供 BTC_WATCH path import，無 Streamlit 依賴
 
 service/
   local_db_reader.py  讀取本地 SQLite（15m 原始 / 重採樣日線），TTL 快取，全面 UTC 時區
@@ -90,6 +91,7 @@ tests/
   core/test_relative_high.py  相對高點逃頂評分單元測試（年化資費/極端高分/平靜低分/缺料 graceful/維度上限/價位錨排序，8 passed）
   bottom_floors_backtest.py   最低價地板回測（2015/2018/2022 熊底 vs 礦工電費/all-in 驗證）
   relative_high_backtest.py   逃頂權重敏感度分析（分層 train/test，AUC 以 Mann-Whitney U；僅擬合資費/技術/F&G 三維，OI/ETF/總經維持專家權重）
+  relative_low_backtest.py    抄底權重敏感度分析（鏡像逃頂版；swing low+60日反彈≥18% 為正樣本，擬合負費率/技術/F&G/長週期四維，grid 過擬合→採專家配重。長週期深跌 AUC 0.662 最強）
 ```
 
 ---
@@ -341,6 +343,12 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 ---
 
 ## 版本紀錄
+
+### v3.10 (2026-06-09)
+- **feat(core)**: 新增 `core/relative_low.py`（相對底部抄底雷達，鏡像 `relative_high.py`）。六維抄底評分(0-100)：長週期深跌 25 / 合約超冷 20 / 技術回穩 20 / 情緒恐慌 15 / 鏈上 10 / 總經 10，`compute_relative_low_score`/`relative_low_meta`/`compute_relative_low` 供 dashboard 與 Crypto/BTC_WATCH.py path import。`UNFITTED_DIMS_LOW=("onchain","macro")`、負費率閾值標未擬合。
+- **feat(core)**: `core/divergence.py` 補 `detect_bottom_divergence_combo`（RSI+MACD 底背離，對稱 `detect_top_divergence_combo`），供 relative_low 技術維度。
+- **test**: 新增 `tests/relative_low_backtest.py`（抄底權重敏感度分析，鏡像逃頂版）。實證：**長週期深跌 AUC 0.662 最強**（底部靠估值便宜、頂部靠槓桿過熱，兩側天生非對稱）；grid search 過擬合（36 樣本 test AUC 0.438）→ 採專家配重。負費率 AUC 0.533 最弱但 OI 清洗子項不可回測仍保留。
+- **note(Crypto)**: 配套改寫 `Crypto/BTC_WATCH.py` —— OI 改 `openInterestHist` 5m×13(1h滾動)+1d×30(分位) 取代失效的相鄰 60s 差值、日線 limit→1500（200週可算）、防線改動態 `bottom_floors.final_low`（fallback 54000）、儀表板化（cls 清屏+emoji+逃頂五維/抄底六維）。可得天花板：逃頂 65、抄底 75（已接 alternative.me F&G；BTC.D/ETF/SOPR/總經無源灰燈）。
 
 ### v3.9 (2026-06-08)
 - **feat(notify)**: 逃頂警報 Flex 化。`service/notification/builders.py` 新增 `build_escape_alert_flex()`，將逃頂評分 ≥ 門檻時的獨立警報由純文字改為完整 Flex bubble（紅色 header「🚨 BTC 逃頂警報」+ 與每日 Flex 同一個 `_build_escape_box` 逃頂雷達 box + 操作建議 box），缺 `escape_signals` 時回 `None`；`scripts/daily_line_notify.py` 的 `maybe_send_escape_alert` 改送此 Flex 並保留每日去重（`escape_alert_state.json`）。

@@ -121,18 +121,14 @@ def detect_bottom_divergence(df: pd.DataFrame, lookback: int = 120, order: int =
     return _detect(df, lookback, order, indicator, "bottom", recent_bars)
 
 
-def detect_top_divergence_combo(df: pd.DataFrame, lookback: int = 120,
-                                order: int = 4, recent_bars: int = 25) -> Dict[str, Any]:
-    """
-    綜合 RSI_14 與 MACD 兩指標的頂背離，回傳：
-      {has_divergence, strength, rsi, macd, n_confirm}
-    n_confirm = 出現背離的指標數（0-2）；strength 取兩者最大。
-    MACD 欄位優先用 'MACD'（indicators.py 設的別名），無則略。
-    """
-    rsi = detect_top_divergence(df, lookback, order, "RSI_14", recent_bars)
+def _detect_combo(detect_fn, df: pd.DataFrame, lookback: int, order: int,
+                  recent_bars: int) -> Dict[str, Any]:
+    """頂/底 combo 共用核心：對 RSI_14 + MACD 各跑一次 detect_fn 再彙整。
+    MACD 欄位優先用 'MACD'（indicators.py 設的別名），無則退 'MACD_Hist'，皆無則略。"""
+    rsi = detect_fn(df, lookback, order, "RSI_14", recent_bars)
     macd_col = "MACD" if (df is not None and "MACD" in df.columns) else \
                ("MACD_Hist" if (df is not None and "MACD_Hist" in df.columns) else None)
-    macd = (detect_top_divergence(df, lookback, order, macd_col, recent_bars)
+    macd = (detect_fn(df, lookback, order, macd_col, recent_bars)
             if macd_col else {"has_divergence": False, "strength": 0.0})
     n_confirm = int(rsi["has_divergence"]) + int(macd["has_divergence"])
     return {
@@ -142,3 +138,17 @@ def detect_top_divergence_combo(df: pd.DataFrame, lookback: int = 120,
         "rsi": rsi,
         "macd": macd,
     }
+
+
+def detect_top_divergence_combo(df: pd.DataFrame, lookback: int = 120,
+                                order: int = 4, recent_bars: int = 25) -> Dict[str, Any]:
+    """綜合 RSI_14 與 MACD 兩指標的頂背離（看跌），回傳
+    {has_divergence, strength, n_confirm, rsi, macd}；n_confirm 為出現背離的指標數（0-2）。"""
+    return _detect_combo(detect_top_divergence, df, lookback, order, recent_bars)
+
+
+def detect_bottom_divergence_combo(df: pd.DataFrame, lookback: int = 120,
+                                   order: int = 4, recent_bars: int = 25) -> Dict[str, Any]:
+    """綜合 RSI_14 與 MACD 兩指標的底背離（看漲），鏡像 detect_top_divergence_combo。
+    供 core/relative_low（底部技術回穩維度）與抄底警報共用。"""
+    return _detect_combo(detect_bottom_divergence, df, lookback, order, recent_bars)

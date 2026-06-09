@@ -1,7 +1,7 @@
 # CLAUDE.md — Cow（BTC 投資戰情室）
 
 **路徑：** `D:\Users\63191\Documents\GitHub\Cow`
-**目前版本：** v3.5
+**目前版本：** v3.10
 **Live App：** https://mfyyo9qf5mymsrouxkfdgj.streamlit.app
 **Streamlit 版本：** 1.37.1
 
@@ -76,6 +76,32 @@ all-in = 電費 × 1.6。
 - mvrv-zscore 端點末筆偶為 nan（次要指標，已 graceful 過濾）。
 - `compute_all_bottom_estimates(now=...)` 須傳 **naive datetime**（內部已 strip tz；但傳 tz-aware
   進 `project_bear_bottom`/`get_current_season` 會與 naive HALVING_DATES 比較拋錯——已在 bottom_floors 統一去 tz）。
+
+---
+
+## 相對高/低點雷達（逃頂 + 抄底，2026-06-08~09）
+
+**單一真實來源**：`core/relative_high.py`（逃頂五維）＋ `core/relative_low.py`（抄底六維），
+dashboard、Crypto/BTC_WATCH.py（path import）、LINE 推播共用，杜絕兩邊閾值漂移。
+
+- **逃頂五維（30/25/20/15/10）**：合約過熱 / 技術衰竭 / 鏈上派發 / 情緒過熱 / 總經逆風。
+  `compute_escape_top_score` + `escape_top_meta`。
+- **抄底六維（25/20/20/15/10/10）**：長週期深跌 / 合約超冷 / 技術回穩 / 情緒恐慌 / 鏈上吸籌 / 總經順風。
+  `compute_relative_low_score` + `relative_low_meta`。
+- **權重由敏感度測試決定**（`tests/relative_high_backtest.py` / `relative_low_backtest.py`，
+  鏡像方法：swing 高/低點 + 其後 60 日反向 18% 為正樣本、時序 train/test、Mann-Whitney U AUC、
+  grid search）。**樣本少 → grid 必過擬合 → 採專家配重 + 單維 AUC 排序微調**。
+- **兩側天生非對稱**：底部最強維度是「長週期深跌」(AUC 0.662)，頂部是「合約過熱」——
+  底部靠估值便宜、頂部靠槓桿過熱。這不是設計缺陷，是市場結構。
+- **未擬合維度**標 `UNFITTED_DIMS` / `UNFITTED_DIMS_LOW`：OI 自建快照、ETF(2024+)、
+  負費率、總經（需行事曆）。
+
+**BTC_WATCH.py 共用**：純幣安環境只連 fapi/dapi + path import 算分。OI 用
+`openInterestHist`（5m×13 滾動清洗 + 1d×30 分位）取代失效的相鄰 60s 差值；防線用
+`bottom_floors.final_low`（fallback 54000）。可得天花板：逃頂 65、抄底 75
+（已接 alternative.me F&G；BTC.D/ETF/SOPR/總經無資料源 → 灰燈）。
+
+詳見 PLAN：`Obsidian/Github/Cow/20260608plan_相對高點判斷.md`、`20260609plan_相對底部判斷.md`。
 
 ---
 
