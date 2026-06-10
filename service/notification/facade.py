@@ -176,7 +176,7 @@ def notify_defense_line(price: float) -> dict:
         f"1. 關閉 2 台馬丁格爾機器人\n"
         f"2. 將 USDT 全數換成 BTC\n"
         f"3. 注入幣本位機器人作為額外保證金\n"
-        f"4. 強評價從 ~$53,333 拉低至 ~$40,000\n"
+        f"4. 強平價從 ~$47,000 拉低至 ~$37,000\n"
         f"━━━━━━━━━━━━━━━━\n"
         f"🕐 時間: {now_str}\n"
         f"⚠️ 完成操作後請至 GitHub Actions 停用 price_alert workflow"
