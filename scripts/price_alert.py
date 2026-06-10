@@ -3,7 +3,7 @@ scripts/price_alert.py
 1 BTC ROAD 價格警報腳本（GitHub Actions 每小時觸發）
 
 監控關鍵門檻：
-  - BTC <= $58,000 → 觸發事件二：馬丁格爾轉換 + 補保證金
+  - BTC <= config.ALERT_PRICE_LOW（防守線）→ 觸發事件二：馬丁格爾轉換 + 補保證金
 
 防重複推播：使用 alert_state.json 記錄今日已推播的警報，
 每個警報每個曆日最多推一次，避免 BTC 在門檻附近震盪時狂轟。
@@ -12,14 +12,13 @@ scripts/price_alert.py
 import json
 import os
 import sys
-import requests
-from core.http_client import safe_get, safe_post
+from core.http_client import safe_get
 import urllib3
 from datetime import date
 
 
 from config import SSL_VERIFY, ALERT_PRICE_LOW, ALERT_PRICE_REARM_GAP
-from service.notification.facade import notify_58k_defense
+from service.notification.facade import notify_defense_line
 
 if not SSL_VERIFY:
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -38,7 +37,7 @@ def _load_state() -> dict:
                 return json.load(f)
         except Exception:
             pass
-    return {"last_58k_date": None}  # armed_58k 缺鍵時由呼叫端 .get(..., True) 視為已武裝
+    return {"last_defense_date": None}  # armed_defense 缺鍵時由呼叫端 .get(..., True) 視為已武裝
 
 
 def _save_state(state: dict) -> None:
@@ -76,22 +75,22 @@ def main() -> None:
 
     state = _load_state()
     today = str(date.today())
-    armed = state.get("armed_58k", True)  # 舊 state 檔無此鍵 → 視為已武裝
+    armed = state.get("armed_defense", True)  # 舊 state 檔無此鍵 → 視為已武裝
 
-    # ── 觸發事件二：$58,000 防守警報（遲滯：單次跌破只推一次，回升超過門檻+GAP 才重新武裝）──
+    # ── 觸發事件二：防守線警報（遲滯：單次跌破只推一次，回升超過門檻+GAP 才重新武裝）──
     rearm_price = ALERT_PRICE_LOW + ALERT_PRICE_REARM_GAP
     if price <= ALERT_PRICE_LOW:
-        if armed and _should_alert(state.get("last_58k_date")):
+        if armed and _should_alert(state.get("last_defense_date")):
             print(f"🛡️  觸發事件二：BTC ${price:,.0f} <= ${ALERT_PRICE_LOW:,.0f}，發送防守警報")
-            notify_58k_defense(price)
-            state["last_58k_date"] = today
-            state["armed_58k"] = False  # 解除武裝：持續低於門檻不再重複推播
+            notify_defense_line(price)
+            state["last_defense_date"] = today
+            state["armed_defense"] = False  # 解除武裝：持續低於門檻不再重複推播
         else:
             reason = "今日已推播" if armed else f"已解除武裝（回升至 ${rearm_price:,.0f} 才重新武裝）"
             print(f"ℹ️  BTC ${price:,.0f} <= ${ALERT_PRICE_LOW:,.0f}，{reason}，略過。")
     else:
         if not armed and price >= rearm_price:
-            state["armed_58k"] = True
+            state["armed_defense"] = True
             print(f"🔄 BTC ${price:,.0f} >= ${rearm_price:,.0f}，防守警報重新武裝。")
         else:
             print(f"✓ BTC ${price:,.0f} > ${ALERT_PRICE_LOW:,.0f}，未觸及防守門檻。")

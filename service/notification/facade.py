@@ -1,4 +1,5 @@
 from datetime import datetime
+from config import ALERT_PRICE_LOW
 from service.notification.core import (
     _send_line_message,
     _send_telegram_message,
@@ -158,15 +159,16 @@ def send_test_message(platform: str = "all") -> dict:
     return result
 
 
-def notify_58k_defense(price: float) -> dict:
+def notify_defense_line(price: float) -> dict:
     """
-    BTC 跌至 $58,000 推播 — 1 BTC ROAD 觸發事件二。
+    BTC 跌至防守線（config.ALERT_PRICE_LOW）推播 — 1 BTC ROAD 觸發事件二。
+    門檻只存 config 一份，訊息文字動態帶入。
     """
     result = {'line': False, 'telegram': False}
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
+
     text = (
-        f"🛡️ BTC 跌破 $58,000！\n"
+        f"🛡️ BTC 跌破 ${ALERT_PRICE_LOW:,.0f}！\n"
         f"━━━━━━━━━━━━━━━━\n"
         f"💰 現價:  ${price:,.0f}\n"
         f"━━━━━━━━━━━━━━━━\n"

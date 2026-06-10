@@ -1,4 +1,4 @@
-# Cow — 比特幣投資戰情室 v3.12
+# Cow — 比特幣投資戰情室 v3.13
 
 > 比特幣多週期量化分析工具，整合技術指標、鏈上數據、期權與波段策略。
 
@@ -74,7 +74,7 @@ strategy/
 
 scripts/
   daily_line_notify.py     GitHub Actions 雲端自動推播腳本（Kraken 備援，台灣 08:23 / 13:39 / 18:27 三時段，含新聞輿情、逃頂警報分級/分數Δ/遲滯狀態機、OI 快照過期警告）
-  price_alert.py           GitHub Actions 每小時價格警報（$58k 防守線，含同日去重 + armed 遲滯：跌破推一次、回升門檻+$500 才重新武裝）
+  price_alert.py           GitHub Actions 每小時價格警報（防守線 $54k＝config.ALERT_PRICE_LOW 單一來源，含同日去重 + armed 遲滯：跌破推一次、回升門檻+$500 才重新武裝）
   test_flex_message.py     本地端測試 LINE Flex Message 排版的除錯腳本
   test_compare_backtest.py 驗證腳本：對相同參數同時執行 swing.py 與 Walk-Forward，確認結果量級一致
 
@@ -352,6 +352,10 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 ---
 
 ## 版本紀錄
+
+### v3.13 (2026-06-10)
+- **feat(alerts)**: 防守警報門檻 $58,000 → **$54,000**（`config.ALERT_PRICE_LOW`，對齊 BTC_WATCH 防線 fallback）。
+- **refactor(alerts)**: 門檻命名去硬編碼 —— `notify_58k_defense` 改名 `notify_defense_line`，推播標題動態帶入 `ALERT_PRICE_LOW`；`scripts/price_alert.py` state 鍵改 `last_defense_date` / `armed_defense`（舊 58k 鍵作廢，缺鍵視為已武裝屬預期）。下次調門檻只需改 config 一行。
 
 ### v3.12 (2026-06-10)
 - **fix(core)**: `core/indicators.py` 新增 `_ta_series()` helper —— pandas-ta 0.4.x 在資料長度不足（如 <200 根算 SMA200）時 `ta.sma/ema/rsi/atr` 回傳 `None`，導致下游 `.diff(20)` / `.reindex` 崩潰，統一轉為 NaN Series；`tests/core/test_indicators.py` 修正斷言 typo（SMA_20 → SMA_200）並加強短資料斷言。
