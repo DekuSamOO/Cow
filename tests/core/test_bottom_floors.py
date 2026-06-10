@@ -87,6 +87,40 @@ def test_ensemble_is_reliability_weighted_median():
     assert all("reliability" in e and 0 < e["reliability"] <= 100 for e in res["estimates"])
 
 
+def test_reliability_sensitivity_ensemble_moves_final_low_invariant(monkeypatch):
+    """權重敏感度：擾動 _RELIABILITY → ensemble 隨之移動，但 final_low（max 邏輯）不受影響。"""
+    import core.bottom_floors as bf
+    df = _synthetic_df()
+    price = float(df["close"].iloc[-1])
+    onchain = {"realized_price": 50000, "balanced_price": 30000, "cvdd": 15000, "asof": "x"}
+    kw = dict(df=df, hashrate_ths=7.6e8, now=datetime(2026, 6, 1), onchain=onchain)
+    base = compute_all_bottom_estimates(price, **kw)
+
+    # 把最高值錨（realized=50000）權重拉到壓倒性 → 加權中位數應被拉向它
+    for k in list(bf._RELIABILITY):
+        monkeypatch.setitem(bf._RELIABILITY, k, 1)
+    monkeypatch.setitem(bf._RELIABILITY, "realized", 10000)
+    skewed = compute_all_bottom_estimates(price, **kw)
+
+    # 加權中位數被拉到壓倒性權重的錨（realized=50000），且確實偏離原 ensemble
+    assert abs(skewed["ensemble_low"] - 50000) < 1e-6
+    assert abs(skewed["ensemble_low"] - base["ensemble_low"]) > 1.0
+    # final_low = max(四季論趨勢底, 礦工電費) 與可靠度權重無關
+    assert abs(skewed["final_low"] - base["final_low"]) < 1e-6
+
+
+def test_config_is_single_source():
+    """config 與 core 讀到的是同一份參數（別名 import，防止再度漂移）。"""
+    import config
+    import core.bottom_floors as bf
+    from core import miner_cost as mc
+    assert bf._RELIABILITY is config.BOTTOM_RELIABILITY
+    assert bf._MINER_BOTTOM_MULT == config.MINER_BOTTOM_MULT
+    assert mc.ELECTRICITY_RATE == config.MINER_ELECTRICITY_RATE
+    assert mc.ALLIN_FACTOR == config.MINER_ALLIN_FACTOR
+    assert len(mc._EFF_ANCHORS) == len(config.MINER_EFF_ANCHORS)
+
+
 def test_weighted_median_basic():
     from core.bottom_floors import _weighted_median
     # 權重全相等 → 一般中位數行為

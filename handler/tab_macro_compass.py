@@ -37,6 +37,7 @@ from core.season_forecast import (
     CYCLE_HISTORY,
 )
 from core.bottom_floors import compute_all_bottom_estimates
+from core.action_ensemble import compute_composite_action, POSITION_NOTE
 from core.relative_high import (compute_relative_high, compute_cycle_top_estimates,
                                 compute_cycle_top_state)
 from core.relative_low import compute_relative_low
@@ -223,6 +224,7 @@ def _render_trend_banner(btc, curr):
         d = sig[key]
         col.metric(f"{_dim_zh[key]} ({d['score']:+d}/±{d['max']})", d['value'])
         col.caption(d['label'])
+    return td
 
 
 def _render_escape_block(btc, curr, funding_rate, fng_val, realtime_data):
@@ -308,6 +310,7 @@ def _render_escape_block(btc, curr, funding_rate, fng_val, realtime_data):
                    + '。OI/BTC.D 由本地每日快照自建歷史（剛起步，需數週累積）；'
                      'SOPR/總經視來源可達性（FRED 在公司網路常被擋，雲端正常）。'
                      '其餘為 0 則代表市場當下確實不過熱。')
+    return rh
 
 
 def _render_dip_block(btc, curr, funding_rate, fng_val, realtime_data):
@@ -392,6 +395,27 @@ def _render_dip_block(btc, curr, funding_rate, fng_val, realtime_data):
                    + '、'.join(accumulating)
                    + '。Mayer/200週需數百日歷史；ETF 連續流入＆SOPR 視來源可達性'
                      '（bitcoin-data.com 在公司網路偶限流，雲端正常）。其餘為 0 則代表市場當下確實不夠低估。')
+    return rl
+
+
+def _render_composite_action(td, rh, rl):
+    """🎯 三軸合成行動建議 — 與 LINE 推播同源 core/action_ensemble。任一軸缺失則隱藏。"""
+    comp = compute_composite_action(
+        (td or {}).get('trend_score'),
+        (rh or {}).get('escape_score'),
+        (rl or {}).get('low_score'),
+    )
+    if comp is None:
+        return
+    st.markdown(f"""
+    <div style="background:#1e2530;border-left:4px solid {comp['color']};border-radius:6px;
+                padding:12px 16px;margin-top:8px;">
+        <span style="font-size:1.05rem;font-weight:bold;color:{comp['color']};">
+            {comp['emoji']} 三軸合成．今日行動：{comp['action']}（{comp['pos_label']}）
+        </span><br>
+        <span style="color:#bbb;font-size:0.85rem;">{comp['detail']}</span>
+    </div>""", unsafe_allow_html=True)
+    st.caption(f"⚠️ {POSITION_NOTE}；三軸 = 趨勢方向 × 逃頂 × 抄底，與 LINE 推播同源 core/action_ensemble。")
 
 
 # 完整評分標準（與 core/relative_high、core/relative_low 的閾值同步——改 core 閾值時一併更新此表）
@@ -445,11 +469,12 @@ def _render_swing_radar(btc, curr, funding_rate, fng_val, realtime_data):
     st.subheader('📍 波段雷達 (Swing Radar)')
     st.caption('短中期擇時的**雙向量表**：逃頂（過熱該止盈）＋ 抄底（低估可進場）。兩側天生非對稱——'
                '逃頂靠「合約過熱」、抄底靠「長週期深跌」。≥60 觸發對應 LINE 警報；為風險/估值量表，非精準擇時工具。')
-    _render_trend_banner(btc, curr)
+    td = _render_trend_banner(btc, curr)
     st.markdown('')
-    _render_escape_block(btc, curr, funding_rate, fng_val, realtime_data)
+    rh = _render_escape_block(btc, curr, funding_rate, fng_val, realtime_data)
     st.markdown('')
-    _render_dip_block(btc, curr, funding_rate, fng_val, realtime_data)
+    rl = _render_dip_block(btc, curr, funding_rate, fng_val, realtime_data)
+    _render_composite_action(td, rh, rl)
     with st.expander('📖 完整評分標準與計分方式（逃頂五維 ＋ 抄底六維，每一檔門檻）', expanded=False):
         st.markdown(_ESCAPE_RUBRIC_MD)
         st.markdown(_LOW_RUBRIC_MD)

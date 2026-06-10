@@ -375,6 +375,18 @@ def snapshot_market_state():
     else:
         print(f"  ⚠ OI 快照未取得 OI（可能 Binance 封鎖此環境）")
 
+    # ETF 流量快取刷新（Farside 對 datacenter IP 回 403，雲端/Actions 只能讀 repo 內快取
+    # → 本機跑 collector 時順手強制刷新，git_push 的 `git add db/` 會一併 commit etf_flow.json）
+    try:
+        from service.etf_flow import fetch_etf_flow
+        data = fetch_etf_flow(force=True)
+        if data:
+            print(f"  ✓ ETF 流量快取已刷新（{len(data)} 筆，最新 {max(data)}）")
+        else:
+            print("  ⚠ ETF 流量無資料（Farside 不可達且無既有快取）")
+    except Exception as e:
+        print(f"  ⚠ ETF 快取刷新失敗：{e}")
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Git Push

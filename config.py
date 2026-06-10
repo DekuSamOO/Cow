@@ -122,3 +122,46 @@ ESCAPE_ALERT_TIERS: tuple = ((85, "危急"), (75, "警報"), (60, "預警"))
 
 # 跨日再推條件：連續多日超門檻時，分數較上次推播 ≥ 此差值（或升級）才再推，避免每天重複。
 ESCAPE_ALERT_REPUSH_DELTA: int = 5
+
+# ==============================================================================
+# 底部模型演算法參數（單一可調來源；core/bottom_floors、core/miner_cost 讀此處）
+# 注：四季論各輪 peak/bottom mult 為歷史實測值（非可調參數），留在 core/season_forecast。
+# ==============================================================================
+# 各底部算法可靠度權重（滿分 100；綜合歷史抓底命中度 + 資料品質 + 理論紮實度 + 樣本數）。
+# 用於 ensemble 加權中位數；miner_allin 為警示線（註定被跌破）不納入 ensemble。
+BOTTOM_RELIABILITY: dict = {
+    "realized":      82,   # Realized Price：全網成本基礎，熊底貼著它
+    "ma200w":        80,   # 200 週均線：四輪一致、零假設
+    "balanced":      78,   # Balanced Price：歷史大底精準錨
+    "miner_elec":    75,   # 礦工電費硬地板：三輪從未跌破
+    "miner_implied": 68,   # 電費 × MINER_BOTTOM_MULT 實證延伸
+    "power_law":     66,   # 冪律下界：長期公允下緣
+    "cvdd":          64,   # CVDD：歷史絕對底，近年偏保守
+    "ahr999_floor":  62,   # AHR999 抄底頂：便宜區上界
+    "mayer_floor":   60,   # Mayer 底：啟發式比例
+    "season_bottom": 58,   # 四季論趨勢底：週期邏輯佳但 n=3 脆弱
+    "miner_allin":   50,   # all-in 警示線（不納入 ensemble）
+}
+# 礦工電費歷史熊底倍數（2015/2018/2022 熊底/電費中位數 ≈ 1.10 的保守取值）
+MINER_BOTTOM_MULT: float = 1.08
+# Mayer Multiple 歷史底部區（價/2年線）
+MAYER_BOTTOM_RATIO: float = 0.6
+# AHR999 抄底區上界
+AHR999_DCA_CEIL: float = 0.45
+# 全網平均電價（USD/kWh）
+MINER_ELECTRICITY_RATE: float = 0.055
+# all-in / 純電費 加成（礦機折舊 + 場地 + 運維；業界估 1.5~2.0）
+MINER_ALLIN_FACTOR: float = 1.6
+# 全網平均礦機效率 anchor（ISO日期, J/TH）——業界粗估，分段線性插值；
+# ⚠️ 礦工成本模型最大不確定來源，新機型世代交替時應更新末端 anchor
+MINER_EFF_ANCHORS: tuple = (
+    ("2013-01-01", 2000.0),
+    ("2014-06-01",  800.0),
+    ("2016-01-01",  250.0),
+    ("2017-06-01",  130.0),
+    ("2018-12-01",   95.0),
+    ("2020-06-01",   60.0),
+    ("2022-06-01",   40.0),
+    ("2024-04-01",   28.0),
+    ("2026-01-01",   24.0),
+)

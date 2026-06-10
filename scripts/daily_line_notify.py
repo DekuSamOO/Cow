@@ -290,6 +290,7 @@ def _compute_radars(btc_df, curr, latest_funding, price) -> dict:
     from core.relative_high import compute_relative_high
     from core.relative_low import compute_relative_low
     from core.trend_direction import compute_trend_direction
+    from core.action_ensemble import compute_composite_action
     from service.bottom_metrics import get_latest_bottom_metrics
     from service.market_snapshot import get_btcd_trend, get_snapshot_staleness_days
     from service.etf_flow import get_etf_flow_summary
@@ -338,6 +339,9 @@ def _compute_radars(btc_df, curr, latest_funding, price) -> dict:
     rl = compute_relative_low(price, curr, btc_df, **common)
     td = compute_trend_direction(curr, btc_df)
     ct_state = rh["cycle_top"]
+
+    # 三軸合成行動建議（與 dashboard 同源 core/action_ensemble）
+    comp = compute_composite_action(td["trend_score"], rh["escape_score"], rl["low_score"])
     return {
         # 波段雷達 · 逃頂
         "escape_score": rh["escape_score"], "escape_level": rh["escape_level"],
@@ -356,8 +360,14 @@ def _compute_radars(btc_df, curr, latest_funding, price) -> dict:
                       "bear_total": ct_state.get("bear_total", 0),
                       "effective_season": ct_state.get("effective_season"),
                       "is_autumn": ct_state.get("is_autumn", False)},
+        # 三軸合成（comp 為 None 時欄位缺省，builders 自動隱藏該行）
+        **({"composite_emoji": comp["emoji"], "composite_action": comp["action"],
+            "composite_pos": comp["pos_label"], "composite_color": comp["color"]}
+           if comp else {}),
         # 健康檢查：本機 OI 快照距今天數（>2 天時卡片顯示警告，揪出靜默失敗的排程）
         "snapshot_stale_days": snapshot_stale,
+        # ETF 快取最新一筆距今天數（>4 天時卡片提示資料過舊，週末 1-3 天屬正常）
+        "etf_stale_days": (etf or {}).get("stale_days"),
     }
 
 

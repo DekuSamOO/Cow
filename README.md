@@ -1,4 +1,4 @@
-# Cow — 比特幣投資戰情室 v3.13
+# Cow — 比特幣投資戰情室 v3.14
 
 > 比特幣多週期量化分析工具，整合技術指標、鏈上數據、期權與波段策略。
 
@@ -23,12 +23,12 @@
 
 ```text
 app.py              入口點（組合各層，不含業務邏輯；今日大盤速覽 6 大 Metric 以 @st.fragment(run_every=60) 每 60 秒自動更新）
-config.py           集中設定（均線週期、交易成本、倉位風控參數、WALK_FORWARD_EXIT_MODES、警報門檻/分級/遲滯常數）
+config.py           集中設定（均線週期、交易成本、倉位風控參數、WALK_FORWARD_EXIT_MODES、警報門檻/分級/遲滯常數、底部模型演算法參數：可靠度權重/礦工電價/效率 anchors 等單一可調來源）
 data_manager.py     根層級數據管理器（TVL/穩定幣/資金費率歷史 SQLite 快取、指數退避重試、增量模式）
 BTC_WATCH.py        BTC 雙向監控終端儀表板**正本**（2026-06-10 起由 Crypto repo 移入本 repo 維護）：純幣安 fapi/dapi + path import core 的逃頂五維/抄底六維/趨勢方向四維評分，60 秒刷新
 
 collector/
-  btc_price_collector.py  本地端 15m K 線收集器（Binance + Kraken 雙源，年度 SQLite 分割，支援 --push）
+  btc_price_collector.py  本地端 15m K 線收集器（Binance + Kraken 雙源，年度 SQLite 分割，支援 --push；每日市場快照末順手強制刷新 db/etf_flow.json，git_push 一併提交）
 
 db/                 年度分割 SQLite 資料庫（本地收集後 push 至雲端，Streamlit 直接讀 repo 內 db）
   btcusdt_15m_2013.db
@@ -47,6 +47,8 @@ core/
   relative_high.py    相對高點（逃頂雷達）單一真實來源：Layer A 五維逃頂評分(0-100，合約/技術/鏈上/情緒/總經) + Layer B 長週期大頂 + 高點價位錨；常數 WEIGHTS/FUNDING_ANN_RED 供 BTC_WATCH path import，無 Streamlit 依賴
   relative_low.py     相對底部（抄底雷達）單一真實來源：六維抄底評分(0-100，長週期深跌25/合約超冷20/技術回穩20/情緒恐慌15/鏈上10/總經10，權重經 relative_low_backtest 拍板)；compute_relative_low_score/relative_low_meta 供 BTC_WATCH path import，無 Streamlit 依賴
   trend_direction.py  趨勢方向（波段雷達第三軸）單一真實來源：四維**有號**評分（均線結構±40/MACD±30/斜率±15/ADX±15）→ 淨分 [-100,+100]，ADX<20 方向三維打 0.6 折防盤整假突破；compute_trend_score/trend_meta/compute_trend_direction 供 dashboard/BTC_WATCH/LINE 共用，無 Streamlit 依賴
+  radar_replay.py     三雷達歷史每日分數回放（逐日重放逃頂/抄底/趨勢分數，DIV_WINDOW 視窗切片避免 O(n²)）+ threshold_forward_stats（門檻向上跨越事件 → 其後 60 日報酬分布，±18% 命中定義與權重擬合一致、cooldown 防重複計數）；僅用歷史可得輸入（OI/ETF/SOPR/BTC.D/總經與線上灰燈一致給 0 → 分數為保守下界），無 Streamlit 依賴
+  action_ensemble.py  三軸合成行動建議單一真實來源 compute_composite_action（趨勢方向 × 逃頂 × 抄底 → 11 種行動 + 建議倉位區間【專家設定，未擬合】）；dashboard 與 LINE 推播共用，邊界與 trend_meta/escape_top_meta/relative_low_meta/ESCAPE_ALERT_THRESHOLD 對齊，無 Streamlit 依賴
 
 service/
   local_db_reader.py  讀取本地 SQLite（15m 原始 / 重採樣日線），TTL 快取，全面 UTC 時區
@@ -56,6 +58,7 @@ service/
   realtime.py         即時報價（Binance→Kraken→本地DB 三層備援）
                       含資金費率/OI（Binance→Bybit→OKX 三層），Header 偽裝與 SSL 繞過
                       各欄位追蹤 price_source / funding_rate_source / tvl_source
+                      fetch_fng_history()：F&G 全史（alternative.me limit=0），供雷達回放與權重回測共用
   macro_data.py       宏觀數據（FRED M2/CPI/PCE/非農/失業率、Yahoo 日圓、CoinGecko BTC.D、量子威脅）+ 全面靜態備援 _FALLBACK 字典 (v1.1)；FRED CSV 改取首欄當日期欄（修 observation_date 改名後靜默走備援的 bug）
   mock.py             代理指標與模擬數據（API 失敗降級備援）
   overview.py         今日大盤速覽指標降級解析（主流程與 fragment 共用 helper，含 funding/tvl is_real 旗標）
@@ -63,8 +66,8 @@ service/
   news_i18n.py        Gemini 批次中文化（標題＋小結＋情緒）+ db/news_i18n.json 持久化快取（翻過不重翻）
   bottom_metrics.py   鏈上底部錨指標（bitcoin-data.com：Realized/Balanced/CVDD/MVRV-Z/SOPR）+ blockchain.info 歷史算力；429 長退避 + 12h json 快取，純資料層
   market_snapshot.py  每日市場快照（OI U本位+幣本位加總、BTC.D、資金費率、價格落地 db/market_snapshot.json）；自建合約/情緒歷史供逃頂雷達算 OI 分位/BTC.D 趨勢，純資料層
-  etf_flow.py         美國現貨 BTC ETF 每日淨流量真實值（Farside read_html 解析）；抓得到更新 db/etf_flow.json，403 時回退快取（雲端讀 repo 內 db pattern），供逃頂「鏈上派發」維度
-  notification/       LINE/Telegram 推播模組（core 發送、builders 組 Flex：每日決策面板/逃頂警報分級配色/40KB 大小防線、facade 對外介面）
+  etf_flow.py         美國現貨 BTC ETF 每日淨流量真實值（Farside read_html 解析）；抓得到更新 db/etf_flow.json，403 時回退快取（雲端讀 repo 內 db pattern），供逃頂「鏈上派發」維度；summary 含 stale_days（最新一筆距今天數，>4 天 Flex 顯示資料過舊警示）
+  notification/       LINE/Telegram 推播模組（core 發送、builders 組 Flex：每日決策面板/逃頂警報分級配色/🎯 今日行動行/ETF 過舊警示/40KB 大小防線、facade 對外介面）
 
 strategy/
   swing.py              Antigravity v4.1 波段策略引擎（防先視偏誤、日頻 Sharpe、多週期回測引擎）
@@ -80,17 +83,17 @@ scripts/
 
 handler/
   layout.py          頁面設置、側欄（只保留日期區間，策略參數移至各 Tab）
-  tab_macro_compass.py Tab 1：長週期羅盤（雙 Gauge + 評分公式 expander + 三層框架 + 底部 8 指標 + 四季季節徽章/時間軸 + D2 底部支撐綜合評估 + D3 目標價走勢圖 + 波段雷達三軸：趨勢方向橫幅/逃頂/抄底，與 LINE 推播同源 core）
+  tab_macro_compass.py Tab 1：長週期羅盤（雙 Gauge + 評分公式 expander + 三層框架 + 底部 8 指標 + 四季季節徽章/時間軸 + D2 底部支撐綜合評估 + D3 目標價走勢圖 + 波段雷達三軸：趨勢方向橫幅/逃頂/抄底 + 三軸合成今日行動橫幅，與 LINE 推播同源 core）
   tab_swing.py       Tab 2：波段狙擊（3 行式 K 線子圖、2x3 條件儀表板、動態建議、倉位計算）
   tab_dual_invest.py Tab 3：雙幣理財（行權價梯形視覺化）
-  tab_backtest.py    Tab 4：時光機回測（5 個子 Tab：波段 PnL、雙幣滾倉、牛市雷達、多週期回測、Walk-Forward 無先視）
+  tab_backtest.py    Tab 4：時光機回測（6 個子 Tab：波段 PnL、雙幣滾倉、牛市雷達、多週期回測、Walk-Forward 無先視、波段雷達回放）
 
 tests/
   test_bear_bottom.py   熊市底部指標單元測試
   test_dual_invest.py   雙幣期權策略單元測試
   test_market_data.py   數據來源與備援鏈單元測試
   test_news.py          新聞聚合/去重/情緒彙總/中文化降級單元測試（monkeypatch 不打真 API）
-  core/test_bottom_floors.py  最低價綜合評估離線單元測試（礦工成本/趨勢外插/final_low/可靠度加權中位數 ensemble/_weighted_median，注入 onchain/hashrate，8 passed）
+  core/test_bottom_floors.py  最低價綜合評估離線單元測試（礦工成本/趨勢外插/final_low/可靠度加權中位數 ensemble/_weighted_median + 權重敏感度與 config 單一來源，注入 onchain/hashrate，10 passed）
   core/test_divergence.py     頂/底背離偵測單元測試（合成雙峰資料，確定性，4 passed）
   core/test_relative_high.py  相對高點逃頂評分單元測試（年化資費/極端高分/平靜低分/缺料 graceful/維度上限/價位錨排序，8 passed）
   core/test_trend_direction.py 趨勢方向評分單元測試（權重總和/強多/強空/盤整折扣/clamp/缺料 graceful/介面 shape，8 passed）
@@ -98,7 +101,9 @@ tests/
   relative_high_backtest.py   逃頂權重敏感度分析（分層 train/test，AUC 以 Mann-Whitney U；僅擬合資費/技術/F&G 三維，OI/ETF/總經維持專家權重）
   relative_low_backtest.py    抄底權重敏感度分析（鏡像逃頂版；swing low+60日反彈≥18% 為正樣本，擬合負費率/技術/F&G/長週期四維，grid 過擬合→採專家配重。長週期深跌 AUC 0.662 最強）
   test_alert_logic.py         逃頂警報分級/去重/遲滯與分數Δ狀態機測試（monkeypatch 攔截 LINE 發送，8 passed）
-  test_flex_size.py           build_flex_message 40KB 大小防線與 OI 快照過期警告測試（3 passed）
+  test_flex_size.py           build_flex_message 40KB 大小防線、OI 快照過期/ETF 過舊警告與今日行動行測試（5 passed）
+  core/test_radar_replay.py   三雷達歷史回放單元測試（合成資料：序列因果性/F&G 與資費注入/門檻事件統計，4 passed）
+  core/test_action_ensemble.py 三軸合成行動決策矩陣測試（多空盤整分流/11 行動分支/邊界與警報門檻對齊/None 缺料處理，14 passed）
 ```
 
 ---
@@ -190,7 +195,7 @@ tests/
 
 ### Tab 4：⏳ 時光機回測
 
-包含 5 個子分頁，提供從簡單波段到嚴格防先視偏誤的完整回測工具箱。
+包含 6 個子分頁，提供從簡單波段到嚴格防先視偏誤的完整回測工具箱。
 
 #### 子分頁 1：📉 波段策略 PnL
 在任意歷史區間內驗證 Antigravity 策略績效：
@@ -225,6 +230,13 @@ tests/
 4. **Chandelier Exit**：追蹤止利（N 日最高點 - K×ATR）
 5. **Time Stop**：持倉 ≥ 15 日且淨報酬 < 5%，強制出場
 6. **EMA 停損**：跌破防守均線（最後防線）
+
+#### 子分頁 6：📡 波段雷達回放
+逐日重放逃頂/抄底/趨勢方向的歷史分數序列（與 dashboard / LINE / BTC_WATCH 同源 `core` 邏輯）：
+* 選雷達 + 回放年數（2-10 年）按鈕觸發，session 快取同設定只算一次（4 年約 2-3 秒）
+* 價格（log）疊分數雙列圖；趨勢雷達另出多空佔比統計
+* **門檻跨越事件統計**：分數向上跨越 45/60/75 → 其後 60 日報酬分布與命中率（±18% 命中定義與權重擬合一致），作為未來重校 `ESCAPE_ALERT_THRESHOLD` 的依據
+* 回放僅用歷史可得輸入（技術/長週期全期、資金費率 2021+、F&G 2018+；OI/ETF/SOPR/BTC.D/總經灰燈給 0）→ **分數為保守下界**（可得天花板：逃頂 55、抄底 65）
 
 ---
 
@@ -352,6 +364,15 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 ---
 
 ## 版本紀錄
+
+### v3.14 (2026-06-10)
+- **feat(core)**: 新增 `core/radar_replay.py`（三雷達歷史每日分數回放：escape/low/trend score series，DIV_WINDOW 視窗切片避免 O(n²)；`threshold_forward_stats` 門檻向上跨越事件 → 其後 60 日報酬分布，±18% 命中定義與權重擬合一致 + cooldown 防重複計數）；`service/realtime.py` 新增 `fetch_fng_history()`（F&G 全史，收斂原本散落兩個回測腳本的 ad hoc 抓取）。
+- **feat(dashboard)**: 回測 Tab 新增第 6 子分頁「📡 波段雷達回放」（`handler/components/backtest_radar.py`：選雷達+年數按鈕觸發、session 快取、價格疊分數雙列圖、門檻統計表、趨勢多空佔比）。
+- **feat(core)**: 新增 `core/action_ensemble.py`（三軸合成行動建議單一真實來源：趨勢方向 × 逃頂 × 抄底 決策矩陣 → 11 種行動 + 建議倉位區間【未擬合】，邊界與各雷達 meta/警報門檻對齊）；dashboard 波段雷達加三軸合成行動橫幅（三個 `_render_*` 改回傳計算結果）、LINE Flex 波段雷達 box 加「🎯 今日行動」行（無資料自動隱藏）。
+- **refactor(config)**: 底部模型 magic numbers 升 `config.py` 新區段（`BOTTOM_RELIABILITY`/`MINER_BOTTOM_MULT`/`MAYER_BOTTOM_RATIO`/`AHR999_DCA_CEIL`/`MINER_ELECTRICITY_RATE`/`MINER_ALLIN_FACTOR`/`MINER_EFF_ANCHORS`）；`core/bottom_floors.py`、`core/miner_cost.py` 改 import 並保留既有內部別名 → 下游（BTC_WATCH/推播）零改動。四季論各輪 mult 為歷史實測值，刻意留在 `core/season_forecast`。
+- **feat(etf)**: Farside ETF 資料防護 —— collector 每日快照末強制刷新 `db/etf_flow.json`；`get_etf_flow_summary` 新增 `stale_days`，>4 天時每日 Flex 顯示「⚠️ ETF 流量資料為 N 天前」（週末 1-3 天空窗不警示）。
+- **fix(core)**: `core/bear_bottom.py` 全部 SMA（111/350/365/730/1400）與月線 RSI 套 `core/indicators._ta_series`，修資料不足時 pandas-ta 回 `None` 導致 `.reindex` AttributeError 崩潰（A1 同型 bug）。
+- **test**: 新增 `tests/core/test_radar_replay.py`（4 個）、`tests/core/test_action_ensemble.py`（14 個）；`test_bottom_floors.py` 加權重敏感度與 config 單一來源測試（10 passed）；`test_flex_size.py` 加 ETF 過舊與今日行動行測試（5 passed）。
 
 ### v3.13 (2026-06-10)
 - **feat(alerts)**: 防守警報門檻 $58,000 → **$54,000**（`config.ALERT_PRICE_LOW`，對齊 BTC_WATCH 防線 fallback）。

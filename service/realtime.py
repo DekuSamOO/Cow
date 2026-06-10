@@ -247,8 +247,8 @@ def fetch_realtime_data() -> RealtimeData:
     # 3. Fear & Greed
     try:
         r = safe_get(
-            "https://api.alternative.me/fng/", 
-            timeout=5, 
+            "https://api.alternative.me/fng/",
+            timeout=5,
             verify=SSL_VERIFY,
             headers=headers
         )
@@ -260,3 +260,23 @@ def fetch_realtime_data() -> RealtimeData:
         logger.warning(f"F&G error: {e}")
 
     return data
+
+
+def fetch_fng_history() -> dict:
+    """
+    F&G 全史（2018-02 起，alternative.me limit=0，免金鑰）。
+    回傳 {"YYYY-MM-DD": float}；失敗回空 dict。
+    供雷達歷史回放（core/radar_replay）與權重回測腳本共用；
+    快取由呼叫端決定（dashboard 端掛 @st.cache_data）。
+    """
+    import pandas as pd
+    out = {}
+    try:
+        r = safe_get("https://api.alternative.me/fng/?limit=0&format=json",
+                     timeout=20, verify=SSL_VERIFY)
+        for it in r.json().get("data", []):
+            d = pd.to_datetime(int(it["timestamp"]), unit="s").strftime("%Y-%m-%d")
+            out[d] = float(it["value"])
+    except Exception as e:
+        logger.warning(f"F&G history error: {e}")
+    return out

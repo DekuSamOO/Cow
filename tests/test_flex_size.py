@@ -47,6 +47,22 @@ def test_oversized_news_box_is_dropped():
     assert _size(msg) <= _FLEX_SOFT_LIMIT_BYTES
 
 
+def test_composite_action_line_rendered():
+    s = _minimal_summary()
+    s["escape_signals"] = {"derivatives": {"score": 5, "max": 30}}
+    s["escape_score"] = 20
+    s["composite_emoji"] = "🟢"
+    s["composite_action"] = "順勢持有"
+    s["composite_pos"] = "建議倉位 60–80%（未擬合）"
+    s["composite_color"] = "#27AE60"
+    rendered = json.dumps(build_flex_message(s), ensure_ascii=False)
+    assert "今日行動：順勢持有" in rendered
+    # 無 composite 欄位時不顯示
+    s2 = _minimal_summary()
+    s2["escape_signals"] = {"derivatives": {"score": 5, "max": 30}}
+    assert "今日行動" not in json.dumps(build_flex_message(s2), ensure_ascii=False)
+
+
 def test_snapshot_stale_warning_rendered():
     s = _minimal_summary()
     s["snapshot_stale_days"] = 5
@@ -56,3 +72,12 @@ def test_snapshot_stale_warning_rendered():
     s["snapshot_stale_days"] = 1
     msg2 = build_flex_message(s)
     assert "未更新" not in json.dumps(msg2, ensure_ascii=False)
+
+
+def test_etf_stale_warning_rendered():
+    s = _minimal_summary()
+    s["etf_stale_days"] = 7
+    assert "ETF 流量資料為 7 天前" in json.dumps(build_flex_message(s), ensure_ascii=False)
+    # 週末空窗（<=4 天）不顯示
+    s["etf_stale_days"] = 3
+    assert "ETF 流量資料" not in json.dumps(build_flex_message(s), ensure_ascii=False)

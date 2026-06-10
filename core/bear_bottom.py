@@ -9,6 +9,8 @@ import pandas as pd
 import pandas_ta as ta
 from datetime import datetime
 
+from core.indicators import _ta_series
+
 
 def calculate_bear_bottom_indicators(df):
     """
@@ -24,23 +26,23 @@ def calculate_bear_bottom_indicators(df):
     if df.empty:
         return df
 
-    # 1. Pi Cycle Bottom
-    df['SMA_111'] = ta.sma(df['close'], length=111)
-    df['SMA_350'] = ta.sma(df['close'], length=350)
+    # 1. Pi Cycle Bottom（_ta_series：pandas-ta 在資料不足時回 None，統一轉 NaN Series）
+    df['SMA_111'] = _ta_series(ta.sma(df['close'], length=111), df.index)
+    df['SMA_350'] = _ta_series(ta.sma(df['close'], length=350), df.index)
     df['SMA_350x2'] = df['SMA_350'] * 2
     df['PiCycle_Gap'] = (df['SMA_111'] / df['SMA_350x2'] - 1) * 100
 
     # 2. 200-Week SMA (1400 days)
-    df['SMA_1400'] = ta.sma(df['close'], length=1400)
+    df['SMA_1400'] = _ta_series(ta.sma(df['close'], length=1400), df.index)
     df['SMA200W_Ratio'] = df['close'] / df['SMA_1400'].where(df['SMA_1400'] > 0)
 
     # 3. Puell Multiple Proxy
-    df['SMA_365'] = ta.sma(df['close'], length=365)
+    df['SMA_365'] = _ta_series(ta.sma(df['close'], length=365), df.index)
     df['Puell_Proxy'] = df['close'] / df['SMA_365'].where(df['SMA_365'] > 0)
 
     # 4. Monthly RSI
     monthly_close = df['close'].resample('MS').last()
-    monthly_rsi = ta.rsi(monthly_close, length=14)
+    monthly_rsi = _ta_series(ta.rsi(monthly_close, length=14), monthly_close.index)
     df['RSI_Monthly'] = monthly_rsi.reindex(df.index).ffill()
 
     # 5. Power Law Support
@@ -55,7 +57,7 @@ def calculate_bear_bottom_indicators(df):
     df['PowerLaw_Ratio'] = df['close'] / df['PowerLaw_Support'].where(df['PowerLaw_Support'] > 0)
 
     # 6. Mayer Multiple (2年均線)
-    df['SMA_730'] = ta.sma(df['close'], length=730)
+    df['SMA_730'] = _ta_series(ta.sma(df['close'], length=730), df.index)
     df['Mayer_Multiple'] = df['close'] / df['SMA_730'].where(df['SMA_730'] > 0)
 
     return df

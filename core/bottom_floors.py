@@ -28,28 +28,12 @@ import pandas as pd
 from core.season_forecast import project_bear_bottom
 from core import miner_cost
 
-# 各底部算法可靠度權重（滿分 100；綜合歷史抓底命中度 + 資料品質 + 理論紮實度 + 樣本數）
-# 用於 ensemble 加權中位數。miner_allin 為警示線（註定被跌破）不納入 ensemble。
-_RELIABILITY = {
-    "realized":      82,   # Realized Price：全網成本基礎，熊底貼著它
-    "ma200w":        80,   # 200 週均線：四輪一致、零假設
-    "balanced":      78,   # Balanced Price：歷史大底精準錨
-    "miner_elec":    75,   # 礦工電費硬地板：三輪從未跌破
-    "miner_implied": 68,   # 電費 × 1.08 實證延伸
-    "power_law":     66,   # 冪律下界：長期公允下緣
-    "cvdd":          64,   # CVDD：歷史絕對底，近年偏保守
-    "ahr999_floor":  62,   # AHR999 抄底頂：便宜區上界
-    "mayer_floor":   60,   # Mayer 底：啟發式 0.6 比例
-    "season_bottom": 58,   # 四季論趨勢底：週期邏輯佳但 n=3 脆弱
-    "miner_allin":   50,   # all-in 警示線（不納入 ensemble）
-}
+# 可調參數集中於 config.py（單一可調來源）；此處保留既有內部名稱，下游零改動
+from config import (BOTTOM_RELIABILITY as _RELIABILITY,
+                    MINER_BOTTOM_MULT as _MINER_BOTTOM_MULT,
+                    MAYER_BOTTOM_RATIO as _MAYER_BOTTOM_RATIO,
+                    AHR999_DCA_CEIL as _AHR999_DCA_CEIL)
 
-# 礦工電費歷史熊底倍數（2015/2018/2022 熊底/電費 的中位數 ≈ 1.10）→ 電費隱含底錨
-_MINER_BOTTOM_MULT = 1.08
-# Mayer Multiple 歷史底部區（價/2年線）
-_MAYER_BOTTOM_RATIO = 0.6
-# AHR999 抄底區上界
-_AHR999_DCA_CEIL = 0.45
 _GENESIS = datetime(2009, 1, 3)
 
 

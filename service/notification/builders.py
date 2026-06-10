@@ -286,11 +286,20 @@ def _build_swing_radar_box(s):
     if trend_strip:
         contents.append(trend_strip)
         contents.append({"type": "separator", "margin": "sm"})
-    contents += [
-        {"type": "box", "layout": "horizontal", "margin": "sm", "spacing": "md", "contents": [left, right]},
-        {"type": "text", "text": "≥60 觸發逃頂／抄底警報 · 風險量表非精準擇時",
-         "color": "#AAAAAA", "size": "xxs", "margin": "sm", "wrap": True},
-    ]
+    contents.append(
+        {"type": "box", "layout": "horizontal", "margin": "sm", "spacing": "md", "contents": [left, right]})
+    # 三軸合成行動建議（與 dashboard 同源 core/action_ensemble；無資料時隱藏）
+    if s.get("composite_action"):
+        contents.append({
+            "type": "text",
+            "text": f"{s.get('composite_emoji', '🎯')} 今日行動：{s['composite_action']}"
+                    f"｜{s.get('composite_pos', '')}",
+            "color": _light(s.get("composite_color") or "#2C3E50"),
+            "size": "xs", "weight": "bold", "margin": "sm", "wrap": True,
+        })
+    contents.append(
+        {"type": "text", "text": "≥60 觸發逃頂／抄底警報 · 風險量表非精準擇時 · 倉位未擬合僅供參考",
+         "color": "#AAAAAA", "size": "xxs", "margin": "sm", "wrap": True})
     return {
         "type": "box", "layout": "vertical", "margin": "lg",
         "backgroundColor": "#F8F9FA", "cornerRadius": "8px", "paddingAll": "md",
@@ -640,12 +649,18 @@ def build_flex_message(s):
          "size": "xxl", "color": "#27AE60"},
     ]
 
-    # 0. 健康檢查：本機 OI 快照排程靜默失敗時，從卡片直接看到
+    # 0. 健康檢查：本機 OI 快照排程靜默失敗 / ETF 快取過舊，從卡片直接看到
     stale_days = s.get("snapshot_stale_days")
     if stale_days is not None and stale_days > 2:
         body_contents.append({
             "type": "text", "text": f"⚠️ OI 快照已 {stale_days} 天未更新（檢查本機排程）",
             "color": "#E74C3C", "size": "xs", "wrap": True, "margin": "sm",
+        })
+    etf_stale = s.get("etf_stale_days")
+    if etf_stale is not None and etf_stale > 4:
+        body_contents.append({
+            "type": "text", "text": f"⚠️ ETF 流量資料為 {etf_stale} 天前（本機跑 collector 可刷新）",
+            "color": "#E67E22", "size": "xs", "wrap": True, "margin": "sm",
         })
 
     # 1. 季節徽章（冬季 — 深熊底部）

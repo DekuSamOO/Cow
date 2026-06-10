@@ -142,7 +142,8 @@ def get_etf_flow_summary(force: bool = False) -> dict:
     """
     data = fetch_etf_flow(force=force)
     out = {"latest": None, "latest_date": None, "consecutive_outflow_days": 0,
-           "consecutive_inflow_days": 0, "cum_5d": None, "n": len(data), "asof": None}
+           "consecutive_inflow_days": 0, "cum_5d": None, "n": len(data), "asof": None,
+           "stale_days": None}
     if not data:
         return out
     items = sorted(data.items())          # 依日期升冪
@@ -151,6 +152,12 @@ def get_etf_flow_summary(force: bool = False) -> dict:
     out["latest"] = vals[-1]
     out["latest_date"] = dates[-1]
     out["asof"] = dates[-1]
+    # 最新一筆距今天數（ETF 僅交易日更新：週末 1-3 天屬正常，>4 天代表來源久未更新）
+    try:
+        out["stale_days"] = (datetime.now(timezone.utc).date()
+                             - datetime.strptime(dates[-1], "%Y-%m-%d").date()).days
+    except ValueError:
+        pass
     out["cum_5d"] = sum(vals[-5:])
     out_cnt = in_cnt = 0
     for v in reversed(vals):

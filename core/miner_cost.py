@@ -18,8 +18,10 @@ from datetime import datetime
 from typing import Optional, List, Tuple
 import bisect
 
-ELECTRICITY_RATE = 0.055   # USD/kWh（全網平均，與既有推播一致）
-ALLIN_FACTOR     = 1.6     # all-in / 純電費（礦機折舊 + 場地 + 運維的綜合加成；業界估 1.5~2.0）
+# 可調參數集中於 config.py（單一可調來源）；保留既有名稱供下游（bottom_floors / 推播）取用
+from config import (MINER_ELECTRICITY_RATE as ELECTRICITY_RATE,
+                    MINER_ALLIN_FACTOR as ALLIN_FACTOR,
+                    MINER_EFF_ANCHORS)
 
 # 減半日 → 之後每日全網產出（BTC/day = block_reward × 144）
 _HALVINGS: List[Tuple[datetime, float]] = [
@@ -31,18 +33,10 @@ _HALVINGS: List[Tuple[datetime, float]] = [
     (datetime(2028, 4, 17),  225.0),   # 1.5625（預估）
 ]
 
-# 全網平均礦機效率 anchor（date, J/TH）——業界粗估，效率逐年下降
-# 來源綜合：早期 GPU/FPGA→ASIC 演進、S9(16nm)→S17/S19→S19XP/S21
+# 全網平均礦機效率 anchor（date, J/TH）——值定義於 config.MINER_EFF_ANCHORS（ISO 字串），
+# 此處解析為 datetime。來源綜合：早期 GPU/FPGA→ASIC 演進、S9(16nm)→S17/S19→S19XP/S21
 _EFF_ANCHORS: List[Tuple[datetime, float]] = [
-    (datetime(2013, 1, 1), 2000.0),
-    (datetime(2014, 6, 1),  800.0),
-    (datetime(2016, 1, 1),  250.0),
-    (datetime(2017, 6, 1),  130.0),
-    (datetime(2018, 12, 1),  95.0),
-    (datetime(2020, 6, 1),   60.0),
-    (datetime(2022, 6, 1),   40.0),
-    (datetime(2024, 4, 1),   28.0),
-    (datetime(2026, 1, 1),   24.0),
+    (datetime.fromisoformat(d), v) for d, v in MINER_EFF_ANCHORS
 ]
 
 

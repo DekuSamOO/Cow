@@ -17,6 +17,7 @@ from handler.components import (
     backtest_bull_radar,
     backtest_multitf,
     backtest_walkforward,
+    backtest_radar,
 )
 
 
@@ -29,12 +30,13 @@ def render(btc, call_risk=None, put_risk=None, ahr_threshold=None):
     """
     st.markdown("### ⏳ 時光機回測 (Backtest Engine)")
 
-    bt_tab1, bt_tab2, bt_tab3, bt_tab4, bt_tab5 = st.tabs([
+    bt_tab1, bt_tab2, bt_tab3, bt_tab4, bt_tab5, bt_tab6 = st.tabs([
         "📉 波段策略 PnL",
         "💰 雙幣滾倉回測",
         "🐂 牛市雷達準確度",
         "📈 多週期回測 (Multi-TF)",
         "🚀 Walk-Forward 無先視回測",
+        "📡 波段雷達回放",
     ])
 
     with bt_tab1:
@@ -51,3 +53,6 @@ def render(btc, call_risk=None, put_risk=None, ahr_threshold=None):
 
     with bt_tab5:
         backtest_walkforward.render(btc)
+
+    with bt_tab6:
+        backtest_radar.render(btc)
