@@ -1,4 +1,4 @@
-# Cow — 比特幣投資戰情室 v3.11
+# Cow — 比特幣投資戰情室 v3.12
 
 > 比特幣多週期量化分析工具，整合技術指標、鏈上數據、期權與波段策略。
 
@@ -23,7 +23,7 @@
 
 ```text
 app.py              入口點（組合各層，不含業務邏輯；今日大盤速覽 6 大 Metric 以 @st.fragment(run_every=60) 每 60 秒自動更新）
-config.py           集中設定（均線週期、交易成本、倉位風控參數、WALK_FORWARD_EXIT_MODES）
+config.py           集中設定（均線週期、交易成本、倉位風控參數、WALK_FORWARD_EXIT_MODES、警報門檻/分級/遲滯常數）
 data_manager.py     根層級數據管理器（TVL/穩定幣/資金費率歷史 SQLite 快取、指數退避重試、增量模式）
 BTC_WATCH.py        BTC 雙向監控終端儀表板**正本**（2026-06-10 起由 Crypto repo 移入本 repo 維護）：純幣安 fapi/dapi + path import core 的逃頂五維/抄底六維/趨勢方向四維評分，60 秒刷新
 
@@ -64,6 +64,7 @@ service/
   bottom_metrics.py   鏈上底部錨指標（bitcoin-data.com：Realized/Balanced/CVDD/MVRV-Z/SOPR）+ blockchain.info 歷史算力；429 長退避 + 12h json 快取，純資料層
   market_snapshot.py  每日市場快照（OI U本位+幣本位加總、BTC.D、資金費率、價格落地 db/market_snapshot.json）；自建合約/情緒歷史供逃頂雷達算 OI 分位/BTC.D 趨勢，純資料層
   etf_flow.py         美國現貨 BTC ETF 每日淨流量真實值（Farside read_html 解析）；抓得到更新 db/etf_flow.json，403 時回退快取（雲端讀 repo 內 db pattern），供逃頂「鏈上派發」維度
+  notification/       LINE/Telegram 推播模組（core 發送、builders 組 Flex：每日決策面板/逃頂警報分級配色/40KB 大小防線、facade 對外介面）
 
 strategy/
   swing.py              Antigravity v4.1 波段策略引擎（防先視偏誤、日頻 Sharpe、多週期回測引擎）
@@ -72,7 +73,8 @@ strategy/
   notifier.py           LINE Bot 主動推播通知模組
 
 scripts/
-  daily_line_notify.py     GitHub Actions 雲端自動推播腳本（Kraken 備援，台灣 08:23 / 13:39 / 18:27 三時段，含新聞輿情）
+  daily_line_notify.py     GitHub Actions 雲端自動推播腳本（Kraken 備援，台灣 08:23 / 13:39 / 18:27 三時段，含新聞輿情、逃頂警報分級/分數Δ/遲滯狀態機、OI 快照過期警告）
+  price_alert.py           GitHub Actions 每小時價格警報（$58k 防守線，含同日去重 + armed 遲滯：跌破推一次、回升門檻+$500 才重新武裝）
   test_flex_message.py     本地端測試 LINE Flex Message 排版的除錯腳本
   test_compare_backtest.py 驗證腳本：對相同參數同時執行 swing.py 與 Walk-Forward，確認結果量級一致
 
@@ -95,6 +97,8 @@ tests/
   bottom_floors_backtest.py   最低價地板回測（2015/2018/2022 熊底 vs 礦工電費/all-in 驗證）
   relative_high_backtest.py   逃頂權重敏感度分析（分層 train/test，AUC 以 Mann-Whitney U；僅擬合資費/技術/F&G 三維，OI/ETF/總經維持專家權重）
   relative_low_backtest.py    抄底權重敏感度分析（鏡像逃頂版；swing low+60日反彈≥18% 為正樣本，擬合負費率/技術/F&G/長週期四維，grid 過擬合→採專家配重。長週期深跌 AUC 0.662 最強）
+  test_alert_logic.py         逃頂警報分級/去重/遲滯與分數Δ狀態機測試（monkeypatch 攔截 LINE 發送，8 passed）
+  test_flex_size.py           build_flex_message 40KB 大小防線與 OI 快照過期警告測試（3 passed）
 ```
 
 ---
@@ -308,6 +312,8 @@ streamlit run app.py
 3. 推送後 Actions 將依排程自動執行，亦可手動觸發 `workflow_dispatch` 測試。
 4. **Streamlit Cloud** 網頁版若要中文新聞，另需在 App settings → Secrets 加 `GOOGLE_API_KEY = "..."`。
 
+**失敗告警：** `daily_line_notify.yml` 與 `price_alert.yml` 任一步驟失敗時，會以 `if: failure()` step 直接 curl 推送 LINE 文字告警（含 run 連結），避免排程靜默失敗無人知；每日 Flex 卡片另在本機 OI 快照 >2 天未更新時顯示「⚠️ OI 快照已 N 天未更新」健康警告。
+
 **本地端除錯：**
 ```bash
 # 使用 test_flex_message.py 在本地預覽 Flex Message 排版，不實際發送至 LINE
@@ -346,6 +352,15 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 ---
 
 ## 版本紀錄
+
+### v3.12 (2026-06-10)
+- **fix(core)**: `core/indicators.py` 新增 `_ta_series()` helper —— pandas-ta 0.4.x 在資料長度不足（如 <200 根算 SMA200）時 `ta.sma/ema/rsi/atr` 回傳 `None`，導致下游 `.diff(20)` / `.reindex` 崩潰，統一轉為 NaN Series；`tests/core/test_indicators.py` 修正斷言 typo（SMA_20 → SMA_200）並加強短資料斷言。
+- **feat(actions)**: `daily_line_notify.yml` / `price_alert.yml` 各加 `if: failure()` 的 LINE curl 告警 step，排程失敗不再靜默；`service/market_snapshot.py` 新增 `get_snapshot_staleness_days()`，每日 Flex 在本機 OI 快照 >2 天未更新時顯示健康警告。
+- **feat(alerts)**: 逃頂警報分級（60 預警 / 75 警報 / 85 危急，`config.ESCAPE_ALERT_TIERS`）—— header 標題/底色依分級切換、顯示「較上次警報 +N 分」；`maybe_send_escape_alert` 重寫為狀態機：同日去重保留 + 跨日需 +5 分或升級才再推 + 低於門檻解除武裝；每日 Flex 波段雷達加逃頂/抄底分數 vs 前一推播日 Δ（`attach_score_deltas`，score_history 留近 3 日，與警報共用 `escape_alert_state.json` artifact）。
+- **feat(alerts)**: `scripts/price_alert.py` $58k 防守警報加 armed 遲滯 —— 跌破推一次即解除武裝，回升至門檻+$500（`ALERT_PRICE_REARM_GAP`）才重新武裝，防門檻附近震盪隔日反覆推播。
+- **feat(notify)**: `builders.py` 加 Flex payload 大小防線（軟上限 40KB，LINE 硬上限 50KB）—— 超限先移除新聞區塊並 log。
+- **refactor(BTC_WATCH)**: `BTC_WATCH.py` 硬編碼 Cow 路徑改由 `__file__` 推導（換機/搬資料夾不需改碼）。
+- **test**: 新增 `tests/test_alert_logic.py`（警報分級/去重/遲滯/Δ 狀態機，monkeypatch 攔截 LINE 發送，8 個）與 `tests/test_flex_size.py`（大小防線/過期警告，3 個）。
 
 ### v3.11 (2026-06-10)
 - **feat(core)**: 新增 `core/trend_direction.py`（波段雷達第三軸「趨勢方向」單一真實來源，鏡像 `relative_low.py` 結構但分數**有號**）。四維評分：均線結構 ±40（close/SMA50/SMA200 排列）/ MACD ±30（零軸×金叉死叉）/ 斜率 ±15（SMA200 標準化斜率+SMA50 近20日）/ ADX ±15（強度×前三維方向）→ 淨分 [-100,+100]；ADX<20 時方向三維打 0.6 折（盤整防假突破內生到分數）。與逃頂/抄底正交：「貴不貴」之外補「風往哪吹」，可同時「強多頭+逃頂高」或「空頭+抄底高」（勿純憑估值接刀）。

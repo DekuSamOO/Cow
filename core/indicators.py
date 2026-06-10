@@ -8,15 +8,22 @@ import pandas_ta as ta
 from datetime import datetime
 
 
+def _ta_series(result, index):
+    """pandas-ta 在資料長度不足時回傳 None；統一轉成 NaN Series 防止下游 diff/reindex 崩潰。"""
+    if result is None:
+        return pd.Series(np.nan, index=index)
+    return result
+
+
 def calculate_technical_indicators(df):
     df = df.copy()
     if df.empty:
         return df
 
     # Moving Averages
-    df['SMA_200'] = ta.sma(df['close'], length=200)
-    df['EMA_20'] = ta.ema(df['close'], length=20)
-    df['SMA_50'] = ta.sma(df['close'], length=50)
+    df['SMA_200'] = _ta_series(ta.sma(df['close'], length=200), df.index)
+    df['EMA_20'] = _ta_series(ta.ema(df['close'], length=20), df.index)
+    df['SMA_50'] = _ta_series(ta.sma(df['close'], length=50), df.index)
 
     # SMA 200 Slope (20-day lookback)
     if 'SMA_200' in df.columns:
@@ -25,15 +32,15 @@ def calculate_technical_indicators(df):
         df['SMA_200_Slope'] = 0
 
     # RSI (Daily)
-    df['RSI_14'] = ta.rsi(df['close'], length=14)
+    df['RSI_14'] = _ta_series(ta.rsi(df['close'], length=14), df.index)
 
     # RSI (Weekly)
     weekly_close = df['close'].resample('W-MON').last()
-    weekly_rsi = ta.rsi(weekly_close, length=14)
+    weekly_rsi = _ta_series(ta.rsi(weekly_close, length=14), weekly_close.index)
     df['RSI_Weekly'] = weekly_rsi.reindex(df.index).ffill()
 
     # ATR
-    df['ATR'] = ta.atr(df['high'], df['low'], df['close'], length=14)
+    df['ATR'] = _ta_series(ta.atr(df['high'], df['low'], df['close'], length=14), df.index)
 
     # Bollinger Bands
     bb = ta.bbands(df['close'], length=20, std=2.0)

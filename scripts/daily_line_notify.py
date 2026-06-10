@@ -291,7 +291,7 @@ def _compute_radars(btc_df, curr, latest_funding, price) -> dict:
     from core.relative_low import compute_relative_low
     from core.trend_direction import compute_trend_direction
     from service.bottom_metrics import get_latest_bottom_metrics
-    from service.market_snapshot import get_btcd_trend
+    from service.market_snapshot import get_btcd_trend, get_snapshot_staleness_days
     from service.etf_flow import get_etf_flow_summary
     from service.macro_data import (get_next_macro_event, fetch_us_cpi_yoy,
                                     fetch_us_pce_yoy, fetch_nfp, fetch_unrate)
@@ -326,6 +326,12 @@ def _compute_radars(btc_df, curr, latest_funding, price) -> dict:
     except Exception:
         pass
 
+    snapshot_stale = None
+    try:
+        snapshot_stale = get_snapshot_staleness_days()
+    except Exception:
+        pass
+
     common = dict(funding_8h=latest_funding, oi_stats=None, etf_summary=etf,
                   sopr=sopr, fng=fng, btc_d_trend=btcd, macro=macro)
     rh = compute_relative_high(price, curr, btc_df, **common)
@@ -350,6 +356,8 @@ def _compute_radars(btc_df, curr, latest_funding, price) -> dict:
                       "bear_total": ct_state.get("bear_total", 0),
                       "effective_season": ct_state.get("effective_season"),
                       "is_autumn": ct_state.get("is_autumn", False)},
+        # 健康檢查：本機 OI 快照距今天數（>2 天時卡片顯示警告，揪出靜默失敗的排程）
+        "snapshot_stale_days": snapshot_stale,
     }
 
 
@@ -363,38 +371,93 @@ _ESCAPE_STATE_FILE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "escape_alert_state.json")
 
 
-def maybe_send_escape_alert(data: dict) -> None:
-    """逃頂評分 ≥ 門檻時，額外推一則 LINE 文字警報（每曆日最多一次，防洗版）。"""
-    from config import ESCAPE_ALERT_THRESHOLD
-    score = data.get("escape_score", 0) or 0
-    if score < ESCAPE_ALERT_THRESHOLD:
-        print(f"✓ 逃頂評分 {score} < {ESCAPE_ALERT_THRESHOLD}，不觸發逃頂警報。")
-        return
-
-    state = {}
+def _load_escape_state() -> dict:
     if os.path.exists(_ESCAPE_STATE_FILE):
         try:
             with open(_ESCAPE_STATE_FILE) as f:
-                state = json.load(f)
+                return json.load(f)
         except Exception:
             pass
+    return {}
+
+
+def _save_escape_state(state: dict) -> None:
+    with open(_ESCAPE_STATE_FILE, "w") as f:
+        json.dump(state, f)
+
+
+def attach_score_deltas(data: dict) -> None:
+    """
+    每日 Flex 的逃頂/抄底分數 Δ（vs 前一個推播日），寫入 data['escape_delta']/['low_delta']，
+    並把今日分數存回 state（與逃頂警報共用 escape_alert_state.json，同一 artifact 持久化）。
+    同日多次推播以首次寫入的當日分數為準更新，Δ 基準恆為「最近的前一日」。
+    """
+    state = _load_escape_state()
+    hist = state.get("score_history") or {}
     today = str(date.today())
+    prev_dates = sorted(d for d in hist if d < today)
+    if prev_dates:
+        prev = hist[prev_dates[-1]]
+        if prev.get("escape") is not None and data.get("escape_score") is not None:
+            data["escape_delta"] = int(data["escape_score"]) - int(prev["escape"])
+        if prev.get("low") is not None and data.get("low_score") is not None:
+            data["low_delta"] = int(data["low_score"]) - int(prev["low"])
+    hist[today] = {"escape": data.get("escape_score"), "low": data.get("low_score")}
+    state["score_history"] = {d: hist[d] for d in sorted(hist)[-3:]}  # 留近 3 日即可
+    _save_escape_state(state)
+
+
+def maybe_send_escape_alert(data: dict) -> None:
+    """
+    逃頂評分 ≥ 門檻時推 LINE 警報，分級 60 預警 / 75 警報 / 85 危急（config.ESCAPE_ALERT_TIERS）。
+    防洗版三規則：
+      1. 同曆日最多一次（原規則保留）。
+      2. 跨日需「分數較上次推播 +ESCAPE_ALERT_REPUSH_DELTA」或「升級」才再推，
+         連續多日同分不再重複轟炸。
+      3. 低於門檻時解除武裝，下次再跨門檻視為新事件重新警報。
+    """
+    from config import ESCAPE_ALERT_THRESHOLD, ESCAPE_ALERT_REPUSH_DELTA
+    from service.notification.builders import escape_alert_tier
+
+    score = data.get("escape_score", 0) or 0
+    state = _load_escape_state()
+
+    if score < ESCAPE_ALERT_THRESHOLD:
+        if state.get("last_escape_score") is not None:
+            state.pop("last_escape_score", None)
+            state.pop("last_escape_tier", None)
+            _save_escape_state(state)
+        print(f"✓ 逃頂評分 {score} < {ESCAPE_ALERT_THRESHOLD}，不觸發逃頂警報。")
+        return
+
+    today = str(date.today())
+    tier_rank, tier_name = escape_alert_tier(score)
+    last_score = state.get("last_escape_score")
+    last_tier = state.get("last_escape_tier") or 0
+
     if state.get("last_escape_date") == today:
         print(f"ℹ️ 逃頂評分 {score} ≥ {ESCAPE_ALERT_THRESHOLD}，但今日已推播逃頂警報，略過。")
+        return
+    if (last_score is not None and tier_rank <= last_tier
+            and score < last_score + ESCAPE_ALERT_REPUSH_DELTA):
+        print(f"ℹ️ 逃頂評分 {score}（上次推播 {last_score}）未升級也未 +{ESCAPE_ALERT_REPUSH_DELTA}，"
+              f"略過重複警報。")
         return
 
     try:
         from service.notification.builders import build_escape_alert_flex
         from service.notification.core import _send_line_message
+        if last_score is not None:
+            data["escape_prev_score"] = last_score
         flex = build_escape_alert_flex(data)
         if flex is None:
             print("⚠️ 逃頂警報 Flex 無法建構（缺 escape_signals），略過。")
             return
         _send_line_message([flex])
-        state["last_escape_date"] = today
-        with open(_ESCAPE_STATE_FILE, "w") as f:
-            json.dump(state, f)
-        print(f"🚨 已發送逃頂警報 Flex（評分 {score}）。")
+        state.update({"last_escape_date": today, "last_escape_score": score,
+                      "last_escape_tier": tier_rank})
+        _save_escape_state(state)
+        print(f"🚨 已發送逃頂警報 Flex（{tier_name}，評分 {score}）。")
     except Exception as e:
         print(f"❌ 逃頂警報發送失敗: {e}")
 
@@ -405,6 +468,7 @@ if __name__ == "__main__":
     load_dotenv()
     data = get_decision_data()
     data.update(fetch_news_digest())
+    attach_score_deltas(data)  # 逃頂/抄底分數 vs 昨日 Δ，顯示於波段雷達區塊
     send_line_message(build_flex_message(data))
-    # 逃頂警報：抖進每日推播，超門檻才額外推一則（每日去重）
+    # 逃頂警報：抖進每日推播，超門檻才額外推一則（分級 + 去重 + 遲滯）
     maybe_send_escape_alert(data)

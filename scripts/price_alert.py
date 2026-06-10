@@ -18,7 +18,7 @@ import urllib3
 from datetime import date
 
 
-from config import SSL_VERIFY, ALERT_PRICE_LOW
+from config import SSL_VERIFY, ALERT_PRICE_LOW, ALERT_PRICE_REARM_GAP
 from service.notification.facade import notify_58k_defense
 
 if not SSL_VERIFY:
@@ -38,7 +38,7 @@ def _load_state() -> dict:
                 return json.load(f)
         except Exception:
             pass
-    return {"last_58k_date": None}
+    return {"last_58k_date": None}  # armed_58k 缺鍵時由呼叫端 .get(..., True) 視為已武裝
 
 
 def _save_state(state: dict) -> None:
@@ -74,21 +74,27 @@ def main() -> None:
         print("無法取得現價，本次跳過警報檢查。")
         sys.exit(0)
 
-    state   = _load_state()
-    today   = str(date.today())
-    changed = False
+    state = _load_state()
+    today = str(date.today())
+    armed = state.get("armed_58k", True)  # 舊 state 檔無此鍵 → 視為已武裝
 
-    # ── 觸發事件二：$58,000 防守警報 ──────────────────────────────────────
+    # ── 觸發事件二：$58,000 防守警報（遲滯：單次跌破只推一次，回升超過門檻+GAP 才重新武裝）──
+    rearm_price = ALERT_PRICE_LOW + ALERT_PRICE_REARM_GAP
     if price <= ALERT_PRICE_LOW:
-        if _should_alert(state.get("last_58k_date")):
+        if armed and _should_alert(state.get("last_58k_date")):
             print(f"🛡️  觸發事件二：BTC ${price:,.0f} <= ${ALERT_PRICE_LOW:,.0f}，發送防守警報")
             notify_58k_defense(price)
             state["last_58k_date"] = today
-            changed = True
+            state["armed_58k"] = False  # 解除武裝：持續低於門檻不再重複推播
         else:
-            print(f"ℹ️  BTC ${price:,.0f} <= ${ALERT_PRICE_LOW:,.0f}，今日已推播防守警報，略過。")
+            reason = "今日已推播" if armed else f"已解除武裝（回升至 ${rearm_price:,.0f} 才重新武裝）"
+            print(f"ℹ️  BTC ${price:,.0f} <= ${ALERT_PRICE_LOW:,.0f}，{reason}，略過。")
     else:
-        print(f"✓ BTC ${price:,.0f} > ${ALERT_PRICE_LOW:,.0f}，未觸及防守門檻。")
+        if not armed and price >= rearm_price:
+            state["armed_58k"] = True
+            print(f"🔄 BTC ${price:,.0f} >= ${rearm_price:,.0f}，防守警報重新武裝。")
+        else:
+            print(f"✓ BTC ${price:,.0f} > ${ALERT_PRICE_LOW:,.0f}，未觸及防守門檻。")
 
     _save_state(state)
 

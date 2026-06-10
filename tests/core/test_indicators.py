@@ -11,5 +11,9 @@ def test_calculate_technical_indicators():
     })
     df.index = pd.date_range('2025-01-01', periods=50)
     df = calculate_technical_indicators(df)
-    assert 'SMA_20' in df.columns
+    assert 'SMA_200' in df.columns
     assert 'RSI_14' in df.columns
+    # 短資料（50 根 < SMA200 視窗）時欄位應為 NaN float，而非 object None（pandas-ta 0.4.x 回 None）
+    assert df['SMA_200'].dtype == 'float64'
+    assert 'SMA_200_Slope' in df.columns
+    assert 'RSI_Weekly' in df.columns

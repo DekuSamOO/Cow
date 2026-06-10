@@ -50,3 +50,15 @@ jobs:
           path: alert_state.json
           retention-days: 2
         continue-on-error: true
+
+      # 任一步驟失敗時推 LINE 文字告警，避免排程靜默失敗無人知
+      - name: Alert on failure
+        if: failure()
+        env:
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+        run: |
+          curl -sS -X POST https://api.line.me/v2/bot/message/push \
+            -H "Authorization: Bearer $LINE_CHANNEL_ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"to\":\"$LINE_USER_ID\",\"messages\":[{\"type\":\"text\",\"text\":\"⚠️ GitHub Actions「${{ github.workflow }}」執行失敗\n${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}]}"

@@ -1,5 +1,17 @@
+import json
+import logging
 from datetime import datetime
+from config import ESCAPE_ALERT_TIERS
 from core.season_forecast import STATS as _SEASON_STATS
+
+logger = logging.getLogger(__name__)
+
+# LINE Flex 單則硬上限 50KB（超限為 400 推播失敗）；超過軟上限即先砍新聞區塊自保。
+_FLEX_SOFT_LIMIT_BYTES = 40 * 1024
+
+
+def _payload_size_bytes(obj) -> int:
+    return len(json.dumps(obj, ensure_ascii=False).encode("utf-8"))
 
 SEASON_BG_COLOR = {
     "spring": "#27AE60",
@@ -232,13 +244,17 @@ def _build_trend_strip(s):
     }
 
 
-def _swing_side(title, score, level, light_color, dom):
-    """波段雷達單側（逃頂或抄底）：標題 + 分數 + 等級 + 分數條 + 主導維度。"""
+def _swing_side(title, score, level, light_color, dom, delta=None):
+    """波段雷達單側（逃頂或抄底）：標題 + 分數（含昨日 Δ）+ 等級 + 分數條 + 主導維度。"""
     bar = max(1, min(99, int(score)))
+    score_text = f"{score}/100"
+    if delta is not None:
+        arrow = "↑" if delta > 0 else ("↓" if delta < 0 else "→")
+        score_text += f"（{arrow}{delta:+d}）"
     return {
         "type": "box", "layout": "vertical", "flex": 1, "contents": [
             {"type": "text", "text": title, "weight": "bold", "color": light_color, "size": "sm"},
-            {"type": "text", "text": f"{score}/100", "color": light_color, "size": "xl", "weight": "bold"},
+            {"type": "text", "text": score_text, "color": light_color, "size": "xl", "weight": "bold"},
             {"type": "text", "text": level, "color": light_color, "size": "xxs", "wrap": True},
             {"type": "box", "layout": "horizontal", "margin": "sm", "height": "6px", "contents": [
                 {"type": "box", "layout": "vertical", "flex": bar, "backgroundColor": light_color, "contents": []},
@@ -258,9 +274,11 @@ def _build_swing_radar_box(s):
     e_score = s.get("escape_score", 0) or 0
     l_score = s.get("low_score", 0) or 0
     left = _swing_side("🚨 逃頂", e_score, s.get("escape_level", ""),
-                       _escape_color(e_score), _dominant_dim(esig, _ESCAPE_DIM_NAMES))
+                       _escape_color(e_score), _dominant_dim(esig, _ESCAPE_DIM_NAMES),
+                       delta=s.get("escape_delta"))
     right = _swing_side("🟢 抄底", l_score, s.get("low_level", ""),
-                        _low_color(l_score), _dominant_dim(lsig, _LOW_DIM_NAMES))
+                        _low_color(l_score), _dominant_dim(lsig, _LOW_DIM_NAMES),
+                        delta=s.get("low_delta"))
     contents = [
         {"type": "text", "text": "📍 波段雷達", "weight": "bold", "color": "#2C3E50", "size": "sm"},
     ]
@@ -293,30 +311,56 @@ def _build_advice_box(label, text, color):
     }
 
 
+# 逃頂警報分級樣式：等級名 → (header 標題, header 底色)。等級門檻見 config.ESCAPE_ALERT_TIERS。
+_ESCAPE_TIER_STYLE = {
+    "危急": ("🔥 BTC 逃頂危急", "#7B241C"),
+    "警報": ("🚨 BTC 逃頂警報", "#C0392B"),
+    "預警": ("⚠️ BTC 逃頂預警", "#E67E22"),
+}
+
+
+def escape_alert_tier(score):
+    """逃頂警報分級：回傳 (tier_rank, tier_name)；未達最低門檻回 (0, None)。
+    rank = 該級下限分數，數字越大越嚴重，供「升級才再推」比較用。"""
+    for floor, name in ESCAPE_ALERT_TIERS:
+        if score >= floor:
+            return floor, name
+    return 0, None
+
+
 def build_escape_alert_flex(s):
-    """≥ 門檻時的獨立逃頂警報，用與每日 Flex 同一個 _build_escape_box，外加紅色 header。
+    """≥ 門檻時的獨立逃頂警報，用與每日 Flex 同一個 _build_escape_box，header 依分級配色。
     回傳完整 flex message；無 escape_signals 時回 None。"""
     box = _build_escape_box(s)
     if box is None:
         return None
     date_str = datetime.now().strftime('%Y-%m-%d %H:%M')
     score = s.get("escape_score", 0) or 0
+    _, tier_name = escape_alert_tier(score)
+    title, header_color = _ESCAPE_TIER_STYLE.get(tier_name, _ESCAPE_TIER_STYLE["警報"])
 
     body_contents = [
         {"type": "text", "text": f"💰 BTC {s.get('price', '')}", "weight": "bold",
          "size": "lg", "color": "#E74C3C"},
-        box,
     ]
+    prev = s.get("escape_prev_score")
+    if prev is not None:
+        delta = score - prev
+        body_contents.append({
+            "type": "text", "text": f"較上次警報 {delta:+d} 分（{prev} → {score}）",
+            "color": "#888888", "size": "xs", "margin": "sm",
+        })
+    body_contents.append(box)
     if s.get("escape_action"):
-        body_contents.append(_build_advice_box("💡 操作建議", s["escape_action"], "#C0392B"))
+        body_contents.append(_build_advice_box("💡 操作建議", s["escape_action"], header_color))
 
     bubble = {
         "type": "bubble", "size": "giga",
         "header": {
-            "type": "box", "layout": "vertical", "backgroundColor": "#C0392B",
+            "type": "box", "layout": "vertical", "backgroundColor": header_color,
             "paddingAll": "16px",
             "contents": [
-                {"type": "text", "text": "🚨 BTC 逃頂警報", "weight": "bold",
+                {"type": "text", "text": title, "weight": "bold",
                  "color": "#FFFFFF", "size": "xl"},
                 {"type": "text", "text": f"更新時間: {date_str}", "color": "#FFFFFF",
                  "size": "xs", "margin": "sm"},
@@ -327,7 +371,7 @@ def build_escape_alert_flex(s):
             "spacing": "sm", "contents": body_contents,
         },
     }
-    return {"type": "flex", "altText": f"🚨 BTC 逃頂警報 {score}/100", "contents": bubble}
+    return {"type": "flex", "altText": f"{title} {score}/100", "contents": bubble}
 
 
 def _build_forecast_box(s):
@@ -596,6 +640,14 @@ def build_flex_message(s):
          "size": "xxl", "color": "#27AE60"},
     ]
 
+    # 0. 健康檢查：本機 OI 快照排程靜默失敗時，從卡片直接看到
+    stale_days = s.get("snapshot_stale_days")
+    if stale_days is not None and stale_days > 2:
+        body_contents.append({
+            "type": "text", "text": f"⚠️ OI 快照已 {stale_days} 天未更新（檢查本機排程）",
+            "color": "#E74C3C", "size": "xs", "wrap": True, "margin": "sm",
+        })
+
     # 1. 季節徽章（冬季 — 深熊底部）
     season_box = _build_season_box(s)
     if season_box:
@@ -653,4 +705,18 @@ def build_flex_message(s):
             "contents": body_contents,
         },
     }
-    return {"type": "flex", "altText": f"🦅 決策速報: BTC {s['price']}", "contents": flex_bubble}
+    msg = {"type": "flex", "altText": f"🦅 決策速報: BTC {s['price']}", "contents": flex_bubble}
+
+    # 大小防線：超過軟上限先移除新聞區塊（資訊性最低、體積最大的區塊）
+    size = _payload_size_bytes(msg)
+    if size > _FLEX_SOFT_LIMIT_BYTES and news_box is not None:
+        body_contents.remove(news_box)
+        new_size = _payload_size_bytes(msg)
+        logger.warning(f"[flex] payload {size}B 超過軟上限 {_FLEX_SOFT_LIMIT_BYTES}B，"
+                       f"已移除新聞區塊 → {new_size}B")
+        size = new_size
+    if size > _FLEX_SOFT_LIMIT_BYTES:
+        logger.warning(f"[flex] payload {size}B 仍超過軟上限（LINE 硬上限 50KB），推播可能失敗")
+    else:
+        logger.info(f"[flex] payload size = {size} bytes")
+    return msg

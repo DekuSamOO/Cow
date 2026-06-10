@@ -10,15 +10,16 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 單一真實來源：path import Cow 的相對高點/相對底部評分（同一 Anaconda 環境）
+# 單一真實來源：import 同 repo 的相對高點/相對底部評分（正本即在 Cow 根目錄）
 #   逃頂五維（relative_high）+ 抄底六維（relative_low）+ 動態地板（bottom_floors）
 #   的閾值與評分邏輯只存在 Cow core 一份，Cow 一改這裡立即吃到，杜絕兩邊漂移。
-#   ImportError fallback：換機/路徑變動時退化為極簡模式（僅價格/資金費率/OI，無評分）。
+#   路徑取自本檔案所在目錄（換機/搬資料夾不需改碼）；
+#   ImportError fallback：環境缺套件時退化為極簡模式（僅價格/資金費率/OI，無評分）。
 # ──────────────────────────────────────────────────────────────────────────────
-_COW = r"D:\Users\63191\Documents\GitHub\Cow"
+_COW = os.path.dirname(os.path.abspath(__file__))
 _COW_OK = False
 try:
-    if os.path.isdir(_COW) and _COW not in sys.path:
+    if _COW not in sys.path:
         sys.path.insert(0, _COW)
     from core.indicators import calculate_technical_indicators, calculate_ahr999
     from core.bear_bottom import calculate_bear_bottom_indicators

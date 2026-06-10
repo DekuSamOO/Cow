@@ -181,6 +181,21 @@ def get_snapshot_history() -> dict:
     return {k: v for k, v in _load().items() if not k.startswith("_")}
 
 
+def get_snapshot_staleness_days():
+    """
+    最近一筆快照距今天數（0=今天有快照）；無資料回 None。
+    供每日推播健康檢查：本機 OI 快照排程靜默失敗時，讓使用者從 LINE 卡片看到警告。
+    """
+    hist = get_snapshot_history()
+    if not hist:
+        return None
+    try:
+        last = max(datetime.strptime(d, "%Y-%m-%d").date() for d in hist)
+    except ValueError:
+        return None
+    return (datetime.now(timezone.utc).date() - last).days
+
+
 def _series(field: str):
     """回傳依日期升冪排序的數值序列（呼叫端只需值，不需日期）。"""
     hist = get_snapshot_history()
