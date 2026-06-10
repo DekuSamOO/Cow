@@ -182,16 +182,54 @@ _LOW_DIM_NAMES = {"cycle": "長週期深跌", "derivatives": "合約超冷", "te
 
 
 def _dominant_dim(signals, names) -> str:
-    """得分比例最高的維度顯示名（資料不足回 —）。"""
-    best, best_r = "—", -1.0
+    """|score|/max 比例最高的維度顯示名（資料不足回 —）。
+    逃頂/抄底各維分數皆 ≥0，取絕對值不影響；趨勢分數有號，取 |score| 找主導維度。"""
+    best, best_r = "—", 0.0
     for k, nm in names.items():
         v = (signals or {}).get(k, {})
         mx = v.get("max", 0)
         if mx:
-            r = v.get("score", 0) / mx
+            r = abs(v.get("score", 0)) / mx
             if r > best_r:
                 best_r, best = r, nm
-    return best if best_r > 0 else "—"
+    return best
+
+
+_TREND_DIM_NAMES = {"ma_structure": "均線結構", "macd": "MACD動能",
+                    "slope": "斜率動能", "adx": "ADX確信"}
+
+
+def _build_trend_strip(s):
+    """🧭 趨勢方向橫幅（波段雷達第三軸）：等級 + 有號分數 + 置中方向條（左空右多）。
+    與 dashboard、BTC_WATCH 同源 core/trend_direction。無 trend_signals 時回 None。"""
+    sig = s.get("trend_signals")
+    if not sig:
+        return None
+    net = int(s.get("trend_score", 0) or 0)
+    color = s.get("trend_color") or "#9E9E9E"
+    mag = max(1, min(99, abs(net)))
+    gray = {"type": "box", "layout": "vertical", "flex": 100, "backgroundColor": "#E0E0E0", "contents": []}
+    fill = {"type": "box", "layout": "vertical", "flex": mag, "backgroundColor": color, "contents": []}
+    rest = {"type": "box", "layout": "vertical", "flex": 100 - mag, "backgroundColor": "#E0E0E0", "contents": []}
+    if net >= 0:
+        half_l, half_r = [dict(gray)], [fill, rest]
+    else:
+        half_l, half_r = [rest, fill], [dict(gray)]
+    return {
+        "type": "box", "layout": "vertical", "margin": "sm", "contents": [
+            {"type": "box", "layout": "horizontal", "contents": [
+                {"type": "text", "text": "🧭 趨勢", "size": "xxs", "color": "#888888", "flex": 2},
+                {"type": "text", "text": f"{s.get('trend_level', '')} {net:+d}",
+                 "size": "xxs", "weight": "bold", "color": color, "flex": 6, "align": "end"},
+            ]},
+            {"type": "box", "layout": "horizontal", "margin": "sm", "height": "6px", "spacing": "xs", "contents": [
+                {"type": "box", "layout": "horizontal", "flex": 1, "contents": half_l},
+                {"type": "box", "layout": "horizontal", "flex": 1, "contents": half_r},
+            ]},
+            {"type": "text", "text": f"主導：{_dominant_dim(sig, _TREND_DIM_NAMES)}｜{s.get('trend_action', '')}",
+             "color": "#888888", "size": "xxs", "margin": "sm", "wrap": True},
+        ],
+    }
 
 
 def _swing_side(title, score, level, light_color, dom):
@@ -223,15 +261,22 @@ def _build_swing_radar_box(s):
                        _escape_color(e_score), _dominant_dim(esig, _ESCAPE_DIM_NAMES))
     right = _swing_side("🟢 抄底", l_score, s.get("low_level", ""),
                         _low_color(l_score), _dominant_dim(lsig, _LOW_DIM_NAMES))
+    contents = [
+        {"type": "text", "text": "📍 波段雷達", "weight": "bold", "color": "#2C3E50", "size": "sm"},
+    ]
+    trend_strip = _build_trend_strip(s)
+    if trend_strip:
+        contents.append(trend_strip)
+        contents.append({"type": "separator", "margin": "sm"})
+    contents += [
+        {"type": "box", "layout": "horizontal", "margin": "sm", "spacing": "md", "contents": [left, right]},
+        {"type": "text", "text": "≥60 觸發逃頂／抄底警報 · 風險量表非精準擇時",
+         "color": "#AAAAAA", "size": "xxs", "margin": "sm", "wrap": True},
+    ]
     return {
         "type": "box", "layout": "vertical", "margin": "lg",
         "backgroundColor": "#F8F9FA", "cornerRadius": "8px", "paddingAll": "md",
-        "contents": [
-            {"type": "text", "text": "📍 波段雷達", "weight": "bold", "color": "#2C3E50", "size": "sm"},
-            {"type": "box", "layout": "horizontal", "margin": "sm", "spacing": "md", "contents": [left, right]},
-            {"type": "text", "text": "≥60 觸發逃頂／抄底警報 · 風險量表非精準擇時",
-             "color": "#AAAAAA", "size": "xxs", "margin": "sm", "wrap": True},
-        ],
+        "contents": contents,
     }
 
 

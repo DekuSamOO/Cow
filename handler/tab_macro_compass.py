@@ -40,6 +40,7 @@ from core.bottom_floors import compute_all_bottom_estimates
 from core.relative_high import (compute_relative_high, compute_cycle_top_estimates,
                                 compute_cycle_top_state)
 from core.relative_low import compute_relative_low
+from core.trend_direction import compute_trend_direction
 from service.bottom_metrics import get_latest_bottom_metrics, fetch_hashrate_history_ths
 from service.etf_flow import get_etf_flow_summary
 from service.market_snapshot import get_oi_stats, get_btcd_trend
@@ -179,6 +180,49 @@ def _gather_radar_externals(cache_key: str) -> dict:
     except Exception:
         pass
     return out
+
+
+def _render_trend_banner(btc, curr):
+    """🧭 趨勢方向橫幅 — 波段雷達第三軸（風往哪吹）。與 LINE 推播、BTC_WATCH 同源 core/trend_direction。"""
+    st.markdown('##### 🧭 目前趨勢方向（日線）')
+    try:
+        td = compute_trend_direction(curr, btc)   # curr=row, btc=df（與逃頂/抄底同參數）
+    except Exception as e:
+        st.caption(f'趨勢方向暫不可用：{type(e).__name__}: {e}')
+        return
+
+    net = td['trend_score']
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=net,
+        number={'suffix': ' 分', 'font': {'size': 26}},
+        gauge={
+            'axis': {'range': [-100, 100], 'tickvals': [-100, -50, -20, 20, 50, 100]},
+            'bar': {'color': td['trend_color'], 'thickness': 0.28},
+            'steps': [
+                {'range': [-100, -50], 'color': '#3a1518'},
+                {'range': [-50, -20], 'color': '#3a2415'},
+                {'range': [-20, 20], 'color': '#2a2a2a'},
+                {'range': [20, 50], 'color': '#15321f'},
+                {'range': [50, 100], 'color': '#0f3d2a'},
+            ],
+            'threshold': {'line': {'color': 'white', 'width': 3}, 'thickness': 0.85, 'value': net},
+        },
+        title={'text': f"<b>{td['trend_level']}</b><br>"
+                       f"<span style='font-size:0.8em;color:gray'>Trend Direction（多頭+／空頭−）</span>"},
+    ))
+    fig.update_layout(height=240, margin=dict(t=70, b=10, l=30, r=30))
+    st.plotly_chart(fig, use_container_width=True, key='trend_dir_gauge')
+    st.caption(f"操作意涵：{td['trend_action']}")
+
+    sig = td['trend_signals']
+    cols = st.columns(4)
+    _dim_zh = {'ma_structure': '均線結構', 'macd': 'MACD 動能',
+               'slope': '斜率動能', 'adx': 'ADX 確信'}
+    for col, key in zip(cols, ['ma_structure', 'macd', 'slope', 'adx']):
+        d = sig[key]
+        col.metric(f"{_dim_zh[key]} ({d['score']:+d}/±{d['max']})", d['value'])
+        col.caption(d['label'])
 
 
 def _render_escape_block(btc, curr, funding_rate, fng_val, realtime_data):
@@ -401,6 +445,8 @@ def _render_swing_radar(btc, curr, funding_rate, fng_val, realtime_data):
     st.subheader('📍 波段雷達 (Swing Radar)')
     st.caption('短中期擇時的**雙向量表**：逃頂（過熱該止盈）＋ 抄底（低估可進場）。兩側天生非對稱——'
                '逃頂靠「合約過熱」、抄底靠「長週期深跌」。≥60 觸發對應 LINE 警報；為風險/估值量表，非精準擇時工具。')
+    _render_trend_banner(btc, curr)
+    st.markdown('')
     _render_escape_block(btc, curr, funding_rate, fng_val, realtime_data)
     st.markdown('')
     _render_dip_block(btc, curr, funding_rate, fng_val, realtime_data)

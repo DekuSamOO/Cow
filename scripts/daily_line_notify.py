@@ -289,6 +289,7 @@ def _compute_radars(btc_df, curr, latest_funding, price) -> dict:
     """
     from core.relative_high import compute_relative_high
     from core.relative_low import compute_relative_low
+    from core.trend_direction import compute_trend_direction
     from service.bottom_metrics import get_latest_bottom_metrics
     from service.market_snapshot import get_btcd_trend
     from service.etf_flow import get_etf_flow_summary
@@ -329,6 +330,7 @@ def _compute_radars(btc_df, curr, latest_funding, price) -> dict:
                   sopr=sopr, fng=fng, btc_d_trend=btcd, macro=macro)
     rh = compute_relative_high(price, curr, btc_df, **common)
     rl = compute_relative_low(price, curr, btc_df, **common)
+    td = compute_trend_direction(curr, btc_df)
     ct_state = rh["cycle_top"]
     return {
         # 波段雷達 · 逃頂
@@ -339,6 +341,9 @@ def _compute_radars(btc_df, curr, latest_funding, price) -> dict:
         "low_score": rl["low_score"], "low_level": rl["low_level"],
         "low_color": rl["low_color"], "low_action": rl["low_action"],
         "low_signals": rl["low_signals"],
+        "trend_score": td["trend_score"], "trend_level": td["trend_level"],
+        "trend_color": td["trend_color"], "trend_action": td["trend_action"],
+        "trend_signals": td["trend_signals"],
         # 四季雷達 · 週期頂錨 + 牛頂/熊底分（cycle_top 只取可序列化的純量欄位）
         "top_estimates": rh["top_estimates"],
         "cycle_top": {"bull_total": ct_state.get("bull_total", 0),

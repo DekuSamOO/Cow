@@ -1,4 +1,4 @@
-# Cow — 比特幣投資戰情室 v3.8
+# Cow — 比特幣投資戰情室 v3.11
 
 > 比特幣多週期量化分析工具，整合技術指標、鏈上數據、期權與波段策略。
 
@@ -25,6 +25,7 @@
 app.py              入口點（組合各層，不含業務邏輯；今日大盤速覽 6 大 Metric 以 @st.fragment(run_every=60) 每 60 秒自動更新）
 config.py           集中設定（均線週期、交易成本、倉位風控參數、WALK_FORWARD_EXIT_MODES）
 data_manager.py     根層級數據管理器（TVL/穩定幣/資金費率歷史 SQLite 快取、指數退避重試、增量模式）
+BTC_WATCH.py        BTC 雙向監控終端儀表板**正本**（2026-06-10 起由 Crypto repo 移入本 repo 維護）：純幣安 fapi/dapi + path import core 的逃頂五維/抄底六維/趨勢方向四維評分，60 秒刷新
 
 collector/
   btc_price_collector.py  本地端 15m K 線收集器（Binance + Kraken 雙源，年度 SQLite 分割，支援 --push）
@@ -45,6 +46,7 @@ core/
   divergence.py       價格 vs 動能（RSI/MACD）頂/底背離偵測（純 pandas/numpy，無 Streamlit 依賴；detect_top/bottom_divergence_combo 供逃頂與抄底雷達共用）
   relative_high.py    相對高點（逃頂雷達）單一真實來源：Layer A 五維逃頂評分(0-100，合約/技術/鏈上/情緒/總經) + Layer B 長週期大頂 + 高點價位錨；常數 WEIGHTS/FUNDING_ANN_RED 供 BTC_WATCH path import，無 Streamlit 依賴
   relative_low.py     相對底部（抄底雷達）單一真實來源：六維抄底評分(0-100，長週期深跌25/合約超冷20/技術回穩20/情緒恐慌15/鏈上10/總經10，權重經 relative_low_backtest 拍板)；compute_relative_low_score/relative_low_meta 供 BTC_WATCH path import，無 Streamlit 依賴
+  trend_direction.py  趨勢方向（波段雷達第三軸）單一真實來源：四維**有號**評分（均線結構±40/MACD±30/斜率±15/ADX±15）→ 淨分 [-100,+100]，ADX<20 方向三維打 0.6 折防盤整假突破；compute_trend_score/trend_meta/compute_trend_direction 供 dashboard/BTC_WATCH/LINE 共用，無 Streamlit 依賴
 
 service/
   local_db_reader.py  讀取本地 SQLite（15m 原始 / 重採樣日線），TTL 快取，全面 UTC 時區
@@ -76,7 +78,7 @@ scripts/
 
 handler/
   layout.py          頁面設置、側欄（只保留日期區間，策略參數移至各 Tab）
-  tab_macro_compass.py Tab 1：長週期羅盤（雙 Gauge + 評分公式 expander + 三層框架 + 底部 8 指標 + 四季季節徽章/時間軸 + D2 底部支撐綜合評估 + D3 目標價走勢圖，與 LINE 推播同源 core/bottom_floors）
+  tab_macro_compass.py Tab 1：長週期羅盤（雙 Gauge + 評分公式 expander + 三層框架 + 底部 8 指標 + 四季季節徽章/時間軸 + D2 底部支撐綜合評估 + D3 目標價走勢圖 + 波段雷達三軸：趨勢方向橫幅/逃頂/抄底，與 LINE 推播同源 core）
   tab_swing.py       Tab 2：波段狙擊（3 行式 K 線子圖、2x3 條件儀表板、動態建議、倉位計算）
   tab_dual_invest.py Tab 3：雙幣理財（行權價梯形視覺化）
   tab_backtest.py    Tab 4：時光機回測（5 個子 Tab：波段 PnL、雙幣滾倉、牛市雷達、多週期回測、Walk-Forward 無先視）
@@ -89,6 +91,7 @@ tests/
   core/test_bottom_floors.py  最低價綜合評估離線單元測試（礦工成本/趨勢外插/final_low/可靠度加權中位數 ensemble/_weighted_median，注入 onchain/hashrate，8 passed）
   core/test_divergence.py     頂/底背離偵測單元測試（合成雙峰資料，確定性，4 passed）
   core/test_relative_high.py  相對高點逃頂評分單元測試（年化資費/極端高分/平靜低分/缺料 graceful/維度上限/價位錨排序，8 passed）
+  core/test_trend_direction.py 趨勢方向評分單元測試（權重總和/強多/強空/盤整折扣/clamp/缺料 graceful/介面 shape，8 passed）
   bottom_floors_backtest.py   最低價地板回測（2015/2018/2022 熊底 vs 礦工電費/all-in 驗證）
   relative_high_backtest.py   逃頂權重敏感度分析（分層 train/test，AUC 以 Mann-Whitney U；僅擬合資費/技術/F&G 三維，OI/ETF/總經維持專家權重）
   relative_low_backtest.py    抄底權重敏感度分析（鏡像逃頂版；swing low+60日反彈≥18% 為正樣本，擬合負費率/技術/F&G/長週期四維，grid 過擬合→採專家配重。長週期深跌 AUC 0.662 最強）
@@ -343,6 +346,13 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 ---
 
 ## 版本紀錄
+
+### v3.11 (2026-06-10)
+- **feat(core)**: 新增 `core/trend_direction.py`（波段雷達第三軸「趨勢方向」單一真實來源，鏡像 `relative_low.py` 結構但分數**有號**）。四維評分：均線結構 ±40（close/SMA50/SMA200 排列）/ MACD ±30（零軸×金叉死叉）/ 斜率 ±15（SMA200 標準化斜率+SMA50 近20日）/ ADX ±15（強度×前三維方向）→ 淨分 [-100,+100]；ADX<20 時方向三維打 0.6 折（盤整防假突破內生到分數）。與逃頂/抄底正交：「貴不貴」之外補「風往哪吹」，可同時「強多頭+逃頂高」或「空頭+抄底高」（勿純憑估值接刀）。
+- **feat(dashboard)**: `handler/tab_macro_compass.py` 波段雷達頂部新增 `_render_trend_banner`（Plotly gauge ±100 五色帶 + 四維 metric + 操作意涵）。
+- **feat(notify)**: `scripts/daily_line_notify.py` `_compute_radars` 增算 trend 五欄位；`service/notification/builders.py` 新增 `_build_trend_strip`（等級+有號分數+置中方向條，左空右多）嵌入波段雷達 box 頂部，無 `trend_signals` 時自動省略；`_dominant_dim` 泛化為取 |score|/max（逃頂/抄底分數皆 ≥0 行為不變），三雷達共用主導維度邏輯。
+- **feat(BTC_WATCH)**: `BTC_WATCH.py` **正本自 Crypto repo 移入本 repo 根目錄**維護（Crypto 那份已刪除）；新增 `_bar_signed`（±100 置中條）與 `_panel_trend`（有號分數面板），主迴圈接 `compute_trend_score`，趨勢面板顯示於逃頂/抄底之上。
+- **test**: 新增 `tests/core/test_trend_direction.py`（8 個確定性離線測試：權重總和 100/強多 ≥50/強空 ≤-50/盤整帶/弱趨勢折扣/clamp/缺料 graceful/介面 shape）。
 
 ### v3.10 (2026-06-09)
 - **feat(core)**: 新增 `core/relative_low.py`（相對底部抄底雷達，鏡像 `relative_high.py`）。六維抄底評分(0-100)：長週期深跌 25 / 合約超冷 20 / 技術回穩 20 / 情緒恐慌 15 / 鏈上 10 / 總經 10，`compute_relative_low_score`/`relative_low_meta`/`compute_relative_low` 供 dashboard 與 Crypto/BTC_WATCH.py path import。`UNFITTED_DIMS_LOW=("onchain","macro")`、負費率閾值標未擬合。

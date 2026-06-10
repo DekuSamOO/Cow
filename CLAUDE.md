@@ -81,8 +81,9 @@ all-in = 電費 × 1.6。
 
 ## 相對高/低點雷達（逃頂 + 抄底，2026-06-08~09）
 
-**單一真實來源**：`core/relative_high.py`（逃頂五維）＋ `core/relative_low.py`（抄底六維），
-dashboard、Crypto/BTC_WATCH.py（path import）、LINE 推播共用，杜絕兩邊閾值漂移。
+**單一真實來源**：`core/relative_high.py`（逃頂五維）＋ `core/relative_low.py`（抄底六維）＋
+`core/trend_direction.py`（趨勢方向四維，第三軸），dashboard、BTC_WATCH.py（**正本在本 repo
+根目錄**，2026-06-10 起不再維護 Crypto repo 那份）、LINE 推播共用，杜絕兩邊閾值漂移。
 
 - **逃頂五維（30/25/20/15/10）**：合約過熱 / 技術衰竭 / 鏈上派發 / 情緒過熱 / 總經逆風。
   `compute_escape_top_score` + `escape_top_meta`。
@@ -93,6 +94,10 @@ dashboard、Crypto/BTC_WATCH.py（path import）、LINE 推播共用，杜絕兩
   grid search）。**樣本少 → grid 必過擬合 → 採專家配重 + 單維 AUC 排序微調**。
 - **兩側天生非對稱**：底部最強維度是「長週期深跌」(AUC 0.662)，頂部是「合約過熱」——
   底部靠估值便宜、頂部靠槓桿過熱。這不是設計缺陷，是市場結構。
+- **趨勢方向第三軸（2026-06-09）**：逃頂/抄底是「貴不貴」相對估值量表，`trend_direction`
+  補正交的「風往哪吹」：均線結構±40 / MACD±30 / 斜率±15 / ADX±15 → 有號淨分 [-100,+100]。
+  ADX<20 時方向三維打 0.6 折（盤整防假突破）。可同時「強多頭＋逃頂高」或「空頭＋抄底高」
+  （勿純憑估值接刀），三軸合看。LINE Flex 顯示在波段雷達 box 頂部橫幅。
 - **未擬合維度**標 `UNFITTED_DIMS` / `UNFITTED_DIMS_LOW`：OI 自建快照、ETF(2024+)、
   負費率、總經（需行事曆）。
 
