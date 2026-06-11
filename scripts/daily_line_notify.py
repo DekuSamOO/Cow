@@ -11,7 +11,7 @@ import json
 import urllib3
 import requests
 from core.http_client import safe_get, safe_post
-from datetime import datetime, timezone, date
+from datetime import datetime, timezone, timedelta, date
 
 SEASON_BG_COLOR = {
     "spring": "#27AE60",
@@ -135,6 +135,13 @@ def get_decision_data():
 
             curr['close'] = current_price
             summary["price"] = f"${current_price:,.0f}"
+
+            # 週報用：近 7 日價格統計（週日傍晚場次 maybe_send_weekly_summary 取用）
+            wk = btc_df.tail(7)
+            if len(wk) >= 2:
+                summary["week_high"] = float(wk["high"].max())
+                summary["week_low"] = float(wk["low"].min())
+                summary["week_change_pct"] = (current_price / float(wk["close"].iloc[0]) - 1) * 100
             summary["current_price"] = current_price
             curr['funding_rate'] = latest_funding
 
@@ -413,7 +420,7 @@ def attach_score_deltas(data: dict) -> None:
         if prev.get("low") is not None and data.get("low_score") is not None:
             data["low_delta"] = int(data["low_score"]) - int(prev["low"])
     hist[today] = {"escape": data.get("escape_score"), "low": data.get("low_score")}
-    state["score_history"] = {d: hist[d] for d in sorted(hist)[-3:]}  # 留近 3 日即可
+    state["score_history"] = {d: hist[d] for d in sorted(hist)[-8:]}  # 留近 8 日（Δ 用昨日、週報用整週）
     _save_escape_state(state)
 
 
@@ -472,6 +479,49 @@ def maybe_send_escape_alert(data: dict) -> None:
         print(f"❌ 逃頂警報發送失敗: {e}")
 
 
+def maybe_send_weekly_summary(data: dict, now=None) -> None:
+    """
+    週日傍晚場次（台灣 ≥17 時，即 18:27 推播）加推一則文字週報，每週最多一次（state 去重）。
+    內容：本週價格區間/漲跌、逃頂/抄底分數週高低（score_history 近 8 日）、趨勢與今日行動。
+    """
+    tw_now = now or datetime.now(timezone(timedelta(hours=8)))
+    if tw_now.weekday() != 6 or tw_now.hour < 17:
+        return
+    state = _load_escape_state()
+    today = tw_now.strftime("%Y-%m-%d")
+    if state.get("last_weekly_date") == today:
+        print("ℹ️ 本週週報已推播，略過。")
+        return
+
+    lines = [f"📒 BTC 週報（{today}）", "━━━━━━━━━━━━━━━━"]
+    if data.get("week_change_pct") is not None:
+        arrow = "📈" if data["week_change_pct"] >= 0 else "📉"
+        lines.append(f"{arrow} 本週 {data['week_change_pct']:+.1f}%　現價 {data.get('price', '—')}")
+        lines.append(f"週高 ${data['week_high']:,.0f}｜週低 ${data['week_low']:,.0f}")
+    hist_vals = [v for _, v in sorted((state.get("score_history") or {}).items())]
+    esc = [v["escape"] for v in hist_vals if v.get("escape") is not None]
+    low = [v["low"] for v in hist_vals if v.get("low") is not None]
+    if esc:
+        lines.append(f"🚨 逃頂分：週高 {max(esc):.0f}／週低 {min(esc):.0f}（現 {esc[-1]:.0f}，n={len(esc)}日）")
+    if low:
+        lines.append(f"🟢 抄底分：週高 {max(low):.0f}／週低 {min(low):.0f}（現 {low[-1]:.0f}）")
+    if data.get("trend_level"):
+        lines.append(f"🧭 趨勢：{data['trend_level']}")
+    if data.get("composite_action"):
+        lines.append(f"🎯 行動：{data['composite_action']}｜{data.get('composite_pos', '')}")
+    if len(lines) <= 2:
+        print("ℹ️ 週報資料不足，略過。")
+        return
+
+    try:
+        send_line_message({"type": "text", "text": "\n".join(lines)})
+        state["last_weekly_date"] = today
+        _save_escape_state(state)
+        print("📒 已發送週報。")
+    except Exception as e:
+        print(f"❌ 週報發送失敗: {e}")
+
+
 if __name__ == "__main__":
     from dotenv import load_dotenv
     from service.notification.builders import build_flex_message
@@ -482,3 +532,5 @@ if __name__ == "__main__":
     send_line_message(build_flex_message(data))
     # 逃頂警報：抖進每日推播，超門檻才額外推一則（分級 + 去重 + 遲滯）
     maybe_send_escape_alert(data)
+    # 週報：週日傍晚場次加推一則（每週一次）
+    maybe_send_weekly_summary(data)

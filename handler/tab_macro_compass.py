@@ -183,13 +183,18 @@ def _gather_radar_externals(cache_key: str) -> dict:
     return out
 
 
+def _warn_unavailable(name: str, e: Exception) -> None:
+    """核心區塊計算失敗時的統一警示（保留例外型別＋訊息，方便回報）。"""
+    st.warning(f'⚠️ {name}暫不可用（{type(e).__name__}: {e}）')
+
+
 def _render_trend_banner(btc, curr):
     """🧭 趨勢方向橫幅 — 波段雷達第三軸（風往哪吹）。與 LINE 推播、BTC_WATCH 同源 core/trend_direction。"""
     st.markdown('##### 🧭 目前趨勢方向（日線）')
     try:
         td = compute_trend_direction(curr, btc)   # curr=row, btc=df（與逃頂/抄底同參數）
     except Exception as e:
-        st.caption(f'趨勢方向暫不可用：{type(e).__name__}: {e}')
+        _warn_unavailable('趨勢方向', e)
         return
 
     net = td['trend_score']
@@ -246,7 +251,7 @@ def _render_escape_block(btc, curr, funding_rate, fng_val, realtime_data):
             macro=ext.get('macro'),
         )
     except Exception as e:
-        st.caption(f'逃頂評分暫不可用：{type(e).__name__}: {e}')
+        _warn_unavailable('逃頂評分', e)
         return
 
     score = rh['escape_score']
@@ -332,7 +337,7 @@ def _render_dip_block(btc, curr, funding_rate, fng_val, realtime_data):
             macro=ext.get('macro'),   # 同時含 cool/weak 欄位，抄底側取順風項
         )
     except Exception as e:
-        st.caption(f'抄底評分暫不可用：{type(e).__name__}: {e}')
+        _warn_unavailable('抄底評分', e)
         return
 
     score = rl['low_score']
@@ -471,9 +476,12 @@ def _render_swing_radar(btc, curr, funding_rate, fng_val, realtime_data):
                '逃頂靠「合約過熱」、抄底靠「長週期深跌」。≥60 觸發對應 LINE 警報；為風險/估值量表，非精準擇時工具。')
     td = _render_trend_banner(btc, curr)
     st.markdown('')
-    rh = _render_escape_block(btc, curr, funding_rate, fng_val, realtime_data)
-    st.markdown('')
-    rl = _render_dip_block(btc, curr, funding_rate, fng_val, realtime_data)
+    # 逃頂/抄底改分頁呈現（降低首屏滾動負擔）；兩側仍各自完整計算，三軸合成在分頁外恆顯
+    esc_tab, dip_tab = st.tabs(['🚨 逃頂評分', '🟢 抄底評分'])
+    with esc_tab:
+        rh = _render_escape_block(btc, curr, funding_rate, fng_val, realtime_data)
+    with dip_tab:
+        rl = _render_dip_block(btc, curr, funding_rate, fng_val, realtime_data)
     _render_composite_action(td, rh, rl)
     with st.expander('📖 完整評分標準與計分方式（逃頂五維 ＋ 抄底六維，每一檔門檻）', expanded=False):
         st.markdown(_ESCAPE_RUBRIC_MD)
@@ -491,7 +499,7 @@ def _render_season_radar(btc, fc, be, price):
         tops = compute_cycle_top_estimates(price, btc)
         cyc = compute_cycle_top_state(btc.iloc[-1], btc, price)
     except Exception as e:
-        st.caption(f'四季雷達暫不可用：{type(e).__name__}: {e}')
+        _warn_unavailable('四季雷達', e)
         return
 
     top_vals = sorted(e['value'] for e in tops) if tops else []
@@ -579,7 +587,7 @@ def _render_season_radar(btc, fc, be, price):
         st.markdown(f"**週期定位**：{_pos}")
 
 
-def render(btc, chart_df, tvl_hist, stable_hist, fund_hist, curr, dxy, funding_rate, tvl_val, fng_val, fng_state, fng_source, proxies, realtime_data):
+def render(btc, chart_df, tvl_hist, stable_hist, fund_hist, curr, dxy, ov, proxies, realtime_data):
     """
     長週期週期羅盤 (Macro Cycle Compass)
 
@@ -588,6 +596,10 @@ def render(btc, chart_df, tvl_hist, stable_hist, fund_hist, curr, dxy, funding_r
     """
     st.subheader('🧭 長週期羅盤 (Macro Cycle Compass)')
     st.caption('整合長週期技術指標、鏈上數據與宏觀環境，量化市場所處的週期位置')
+    # ov = service/overview.OverviewMetrics（含 fallback 解析後的速覽指標）；此處 unpack
+    # 維持下方既有變數名，避免大面積改動
+    funding_rate, tvl_val = ov.funding_rate, ov.tvl
+    fng_val, fng_state, fng_source = ov.fng_val, ov.fng_state, ov.fng_source
     market_score, _bear_total, _bull_total, _breakdown_rows = calculate_market_cycle_score_breakdown(curr)
     bear_score_now, _ = calculate_bear_bottom_score(curr)
     price = curr['close']
@@ -1037,7 +1049,7 @@ def render(btc, chart_df, tvl_hist, stable_hist, fund_hist, curr, dxy, funding_r
             be = compute_all_bottom_estimates(current_price, df=btc, hashrate_ths=_lh,
                                               onchain=get_latest_bottom_metrics())
         except Exception as _be_err:
-            st.caption(f'底部資料暫不可用：{type(_be_err).__name__}: {_be_err}')
+            _warn_unavailable('底部資料', _be_err)
 
         # ── 🗓️ 四季雷達 · 本輪頂底定位（週期頂錨 + 四季論底 + 牛頂/熊底分，整合原 C5-B）──
         _render_season_radar(btc, fc, be, current_price)
@@ -1063,29 +1075,31 @@ def render(btc, chart_df, tvl_hist, stable_hist, fund_hist, curr, dxy, funding_r
                     <div style="color:#66bb6a;font-size:1.8rem;font-weight:800;">${en:,.0f}</div>
                     <div style="color:#666;font-size:0.72rem;">可靠度加權中位數</div>
                 </div>""" if en else '—', unsafe_allow_html=True)
-            _rows = ''
-            for e in sorted(be['estimates'], key=lambda x: -x['value']):
-                buf = (current_price - e['value']) / e['value'] * 100 if e['value'] else 0
-                bclr = '#66bb6a' if buf >= 0 else '#ef5350'
-                rel = e.get('reliability', 50)
-                rclr = '#66bb6a' if rel >= 75 else '#ffd54f' if rel >= 62 else '#ff8a65'
-                _rows += (f"<tr><td style='padding:4px 8px;color:{_kc.get(e['kind'],'#ccc')};'>{e['label']}</td>"
-                          f"<td style='padding:4px 8px;text-align:right;color:#fff;font-weight:600;'>${e['value']:,.0f}</td>"
-                          f"<td style='padding:4px 8px;text-align:right;color:{bclr};'>{'+' if buf>=0 else ''}{buf:.0f}%</td>"
-                          f"<td style='padding:4px 8px;text-align:right;color:{rclr};'>{rel}</td>"
-                          f"<td style='padding:4px 8px;color:#777;font-size:0.72rem;'>{e['note']}</td></tr>")
-            st.markdown(f"""<table style="width:100%;border-collapse:collapse;font-size:0.85rem;margin-top:8px;">
-                <tr style="color:#aaa;border-bottom:1px solid #444;">
-                  <th style="text-align:left;padding:4px 8px;">算法</th><th style="text-align:right;padding:4px 8px;">最低價</th>
-                  <th style="text-align:right;padding:4px 8px;">現價距此</th><th style="text-align:right;padding:4px 8px;">可靠度</th>
-                  <th style="text-align:left;padding:4px 8px;">說明</th></tr>
-                {_rows}</table>
-                <div style="color:#777;font-size:0.72rem;margin-top:6px;">
-                紅=四季論趨勢底　藍=硬地板　黃=鏈上/技術錨　橙=警示(牛末常被跌破至~0.67×)。
-                final_low = max(四季論趨勢底, 礦工電費硬地板)——歷史三輪熊底從未跌破純電費。</div>""",
-                unsafe_allow_html=True)
-            if be.get('asof'):
-                st.caption(f"鏈上資料 as of {be['asof']}（bitcoin-data.com）")
+            # 各算法明細預設收起（總結兩卡已給結論，明細供查證用）
+            with st.expander(f"📋 各算法明細（{len(be['estimates'])} 個底部錨）", expanded=False):
+                _rows = ''
+                for e in sorted(be['estimates'], key=lambda x: -x['value']):
+                    buf = (current_price - e['value']) / e['value'] * 100 if e['value'] else 0
+                    bclr = '#66bb6a' if buf >= 0 else '#ef5350'
+                    rel = e.get('reliability', 50)
+                    rclr = '#66bb6a' if rel >= 75 else '#ffd54f' if rel >= 62 else '#ff8a65'
+                    _rows += (f"<tr><td style='padding:4px 8px;color:{_kc.get(e['kind'],'#ccc')};'>{e['label']}</td>"
+                              f"<td style='padding:4px 8px;text-align:right;color:#fff;font-weight:600;'>${e['value']:,.0f}</td>"
+                              f"<td style='padding:4px 8px;text-align:right;color:{bclr};'>{'+' if buf>=0 else ''}{buf:.0f}%</td>"
+                              f"<td style='padding:4px 8px;text-align:right;color:{rclr};'>{rel}</td>"
+                              f"<td style='padding:4px 8px;color:#777;font-size:0.72rem;'>{e['note']}</td></tr>")
+                st.markdown(f"""<table style="width:100%;border-collapse:collapse;font-size:0.85rem;margin-top:8px;">
+                    <tr style="color:#aaa;border-bottom:1px solid #444;">
+                      <th style="text-align:left;padding:4px 8px;">算法</th><th style="text-align:right;padding:4px 8px;">最低價</th>
+                      <th style="text-align:right;padding:4px 8px;">現價距此</th><th style="text-align:right;padding:4px 8px;">可靠度</th>
+                      <th style="text-align:left;padding:4px 8px;">說明</th></tr>
+                    {_rows}</table>
+                    <div style="color:#777;font-size:0.72rem;margin-top:6px;">
+                    紅=四季論趨勢底　藍=硬地板　黃=鏈上/技術錨　橙=警示(牛末常被跌破至~0.67×)。
+                    final_low = max(四季論趨勢底, 礦工電費硬地板)——歷史三輪熊底從未跌破純電費。</div>""",
+                    unsafe_allow_html=True)
+                if be.get('asof'):
+                    st.caption(f"鏈上資料 as of {be['asof']}（bitcoin-data.com）")
         else:
             st.caption('底部綜合評估暫不可用')
 

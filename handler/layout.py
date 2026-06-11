@@ -51,6 +51,18 @@ CUSTOM_CSS = """
         padding: 14px 18px;
         text-align: center;
     }
+
+    /* 行動裝置/窄幅可讀性：5-6 欄（速覽、逃頂五維、抄底六維）在中等寬度會擠壓截斷。
+       Streamlit 超窄屏會自動堆疊，這裡補中間區間：允許欄位換行 + 縮小數值字級。 */
+    @media (max-width: 880px) {
+        div[data-testid="stHorizontalBlock"] { flex-wrap: wrap; }
+        div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {
+            flex: 1 1 calc(33.3% - 1rem) !important;
+            min-width: 150px !important;
+        }
+        .metric-value { font-size: 1.15rem !important; }
+        div[data-testid="stMetricValue"] { font-size: 1.2rem !important; }
+    }
 </style>
 """
 

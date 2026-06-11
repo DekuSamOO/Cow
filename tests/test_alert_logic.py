@@ -3,6 +3,7 @@ import sys
 import os
 import json
 import importlib.util
+from datetime import datetime, timezone, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -116,3 +117,48 @@ def test_attach_score_deltas_first_run_no_delta(notify, patched_state):
     data = {"escape_score": 62, "low_score": 35}
     notify.attach_score_deltas(data)
     assert "escape_delta" not in data and "low_delta" not in data
+
+
+# ── 週報 ──────────────────────────────────────────────────────────────────────
+_TW = timezone(timedelta(hours=8))
+_SUN_EVE = datetime(2026, 6, 14, 18, 30, tzinfo=_TW)   # 週日 18:30
+
+
+def _weekly_data():
+    return {"price": "$100,000", "week_change_pct": 3.2, "week_high": 105000.0,
+            "week_low": 98000.0, "trend_level": "🟢 多頭趨勢",
+            "composite_action": "順勢持有", "composite_pos": "建議倉位 60–80%（未擬合）"}
+
+
+def test_weekly_summary_only_sunday_evening(notify, patched_state):
+    _, sent = patched_state
+    notify.maybe_send_weekly_summary(_weekly_data(), now=datetime(2026, 6, 10, 18, 30, tzinfo=_TW))  # 週三
+    notify.maybe_send_weekly_summary(_weekly_data(), now=datetime(2026, 6, 14, 8, 30, tzinfo=_TW))   # 週日早上
+    assert sent == []
+    notify.maybe_send_weekly_summary(_weekly_data(), now=_SUN_EVE)
+    assert len(sent) == 1
+    text = sent[0][0]["text"]
+    assert "BTC 週報" in text and "+3.2%" in text and "今日行動" not in text
+
+
+def test_weekly_summary_dedupe_and_scores(notify, patched_state):
+    state_file, sent = patched_state
+    import json as _json
+    state_file.write_text(_json.dumps({"score_history": {
+        "2026-06-12": {"escape": 30, "low": 50},
+        "2026-06-13": {"escape": 45, "low": 40},
+        "2026-06-14": {"escape": 38, "low": 42},
+    }}))
+    notify.maybe_send_weekly_summary(_weekly_data(), now=_SUN_EVE)
+    assert len(sent) == 1
+    text = sent[0][0]["text"]
+    assert "週高 45／週低 30" in text and "n=3日" in text
+    # 同日再呼叫 → 去重
+    notify.maybe_send_weekly_summary(_weekly_data(), now=_SUN_EVE)
+    assert len(sent) == 1
+
+
+def test_weekly_summary_insufficient_data_skipped(notify, patched_state):
+    _, sent = patched_state
+    notify.maybe_send_weekly_summary({}, now=_SUN_EVE)   # 無價格也無分數史
+    assert sent == []

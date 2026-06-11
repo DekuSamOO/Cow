@@ -1,4 +1,4 @@
-# Cow — 比特幣投資戰情室 v3.14
+# Cow — 比特幣投資戰情室 v3.15
 
 > 比特幣多週期量化分析工具，整合技術指標、鏈上數據、期權與波段策略。
 
@@ -76,14 +76,14 @@ strategy/
   notifier.py           LINE Bot 主動推播通知模組
 
 scripts/
-  daily_line_notify.py     GitHub Actions 雲端自動推播腳本（Kraken 備援，台灣 08:23 / 13:39 / 18:27 三時段，含新聞輿情、逃頂警報分級/分數Δ/遲滯狀態機、OI 快照過期警告）
+  daily_line_notify.py     GitHub Actions 雲端自動推播腳本（Kraken 備援，台灣 08:23 / 13:39 / 18:27 三時段，含新聞輿情、逃頂警報分級/分數Δ/遲滯狀態機、OI 快照過期警告、週日傍晚場次加推文字週報）
   price_alert.py           GitHub Actions 每小時價格警報（防守線 $54k＝config.ALERT_PRICE_LOW 單一來源，含同日去重 + armed 遲滯：跌破推一次、回升門檻+$500 才重新武裝）
   test_flex_message.py     本地端測試 LINE Flex Message 排版的除錯腳本
   test_compare_backtest.py 驗證腳本：對相同參數同時執行 swing.py 與 Walk-Forward，確認結果量級一致
 
 handler/
-  layout.py          頁面設置、側欄（只保留日期區間，策略參數移至各 Tab）
-  tab_macro_compass.py Tab 1：長週期羅盤（雙 Gauge + 評分公式 expander + 三層框架 + 底部 8 指標 + 四季季節徽章/時間軸 + D2 底部支撐綜合評估 + D3 目標價走勢圖 + 波段雷達三軸：趨勢方向橫幅/逃頂/抄底 + 三軸合成今日行動橫幅，與 LINE 推播同源 core）
+  layout.py          頁面設置、側欄（只保留日期區間，策略參數移至各 Tab）、行動裝置窄幅 CSS（≤880px 欄位換行＋字級縮小）
+  tab_macro_compass.py Tab 1：長週期羅盤（雙 Gauge + 評分公式 expander + 三層框架 + 底部 8 指標 + 四季季節徽章/時間軸 + D2 底部支撐綜合評估（明細表收進 expander）+ D3 目標價走勢圖 + 波段雷達三軸：趨勢方向橫幅/逃頂與抄底分頁/三軸合成今日行動橫幅，與 LINE 推播同源 core）
   tab_swing.py       Tab 2：波段狙擊（3 行式 K 線子圖、2x3 條件儀表板、動態建議、倉位計算）
   tab_dual_invest.py Tab 3：雙幣理財（行權價梯形視覺化）
   tab_backtest.py    Tab 4：時光機回測（6 個子 Tab：波段 PnL、雙幣滾倉、牛市雷達、多週期回測、Walk-Forward 無先視、波段雷達回放）
@@ -364,6 +364,14 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 ---
 
 ## 版本紀錄
+
+### v3.15 (2026-06-11)
+- **feat(dashboard)**: Tab 1 資訊架構收合 —— 波段雷達逃頂/抄底兩區改 `st.tabs` 分頁（趨勢橫幅與三軸合成橫幅在分頁外恆顯）；D2 底部支撐「各算法明細表」收進 `st.expander`（總結兩卡維持可見）。
+- **feat(dashboard)**: 核心區塊（趨勢/逃頂/抄底/四季雷達/底部資料）計算失敗時由 `st.caption` 升級 `st.warning`，統一走 `_warn_unavailable` helper（保留例外型別＋訊息）；次要備註維持 caption。
+- **refactor(dashboard)**: `tab_macro_compass.render` 簽名 14 → 10 參數 —— 5 個速覽解析值（funding_rate/tvl/fng×3，來自 `service/overview.resolve_overview_metrics`）合併為 1 個 `ov`（OverviewMetrics），render 開頭 unpack 回既有變數名；`app.py` 呼叫端同步並移除 4 個死變數。
+- **feat(ui)**: `handler/layout.py` CUSTOM_CSS 加 `@media (max-width: 880px)` —— 5-6 欄區塊允許換行（min-width 150px）＋ metric 字級縮小，改善行動裝置可讀性（視覺效果待手機實測）。
+- **feat(notify)**: 週日 LINE 週報 —— `maybe_send_weekly_summary` 於台灣週日 ≥17 時場次（18:27）加推一則文字週報（週價格區間/漲跌 + 逃頂/抄底分數週高低 + 趨勢 + 行動），state `last_weekly_date` 每週去重、資料不足自動跳過；`get_decision_data` 增算近 7 日 week_high/week_low/week_change_pct；`attach_score_deltas` score_history 保留 3 → 8 天（Δ 用昨日、週報用整週；artifact retention 2 天但每日 3 次 run 重新上傳，鏈不會斷）。
+- **test**: `tests/test_alert_logic.py` 新增 3 個週報測試（非週日/週日早上不發、週日傍晚發＋內容與去重斷言、資料不足跳過），11 passed。
 
 ### v3.14 (2026-06-10)
 - **feat(core)**: 新增 `core/radar_replay.py`（三雷達歷史每日分數回放：escape/low/trend score series，DIV_WINDOW 視窗切片避免 O(n²)；`threshold_forward_stats` 門檻向上跨越事件 → 其後 60 日報酬分布，±18% 命中定義與權重擬合一致 + cooldown 防重複計數）；`service/realtime.py` 新增 `fetch_fng_history()`（F&G 全史，收斂原本散落兩個回測腳本的 ad hoc 抓取）。

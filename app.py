@@ -285,11 +285,7 @@ with st.spinner("正在連線至戰情室數據庫..."):
         sma50=float(curr['SMA_50']) if 'SMA_50' in curr.index else float(curr['close']),
     )
     current_price = _ov.price
-    funding_rate  = _ov.funding_rate
-    tvl_val       = _ov.tvl
-    fng_val       = _ov.fng_val
-    fng_state     = _ov.fng_state
-    fng_source    = _ov.fng_source
+    funding_rate  = _ov.funding_rate   # tab2（波段狙擊）仍以純量取用；tab1 改傳整顆 _ov
 
     proxies = get_realtime_proxies(current_price, curr['close'])
 
@@ -341,8 +337,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
 with tab1:
     tab1_handler.render(
         btc, chart_df, tvl_hist, stable_hist, fund_hist,
-        curr, dxy, funding_rate, tvl_val,
-        fng_val, fng_state, fng_source, proxies, realtime_data,
+        curr, dxy, _ov, proxies, realtime_data,
     )
 
 with tab2:
