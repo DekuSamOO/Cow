@@ -377,12 +377,18 @@ def _render_dip_block(btc, curr, funding_rate, fng_val, realtime_data):
     dim_names = {'cycle': '① 長週期深跌', 'derivatives': '② 合約超冷', 'technical': '③ 技術回穩',
                  'sentiment': '④ 情緒恐慌', 'onchain': '⑤ 鏈上吸籌', 'macro': '⑥ 總經順風'}
     unfitted = set(rl.get('unfitted_dims', []))
+    rule_based = set(rl.get('rule_based_dims', []))   # 規則式維度（如 macro 事件臨近）不可統計擬合
     cols = st.columns(6)
     accumulating = []
     for col, (key, name) in zip(cols, dim_names.items()):
         s = sig[key]
         bar_pct = (s['score'] / s['max'] * 100) if s['max'] else 0
-        tag = " <span style='color:#ff9800;font-size:0.7rem;'>(未擬合)</span>" if key in unfitted else ""
+        if key in unfitted:
+            tag = " <span style='color:#ff9800;font-size:0.7rem;'>(未擬合)</span>"
+        elif key in rule_based:
+            tag = " <span style='color:#5dade2;font-size:0.7rem;'>(規則式)</span>"
+        else:
+            tag = ""
         if '累積中' in s['label'] or '無資料' in s['label']:
             accumulating.append(name.split(' ')[-1] if ' ' in name else name)
         col.markdown(f"""
@@ -457,14 +463,17 @@ _LOW_RUBRIC_MD = """
 | | RSI_14 超賣 (6) | ≤20→6｜≤25→4｜≤30→2｜其餘→0 |
 | ④ 情緒恐慌 **15** | F&G 恐懼 (10) | ≤10→10｜≤20→8｜≤25→5｜≤30→3｜其餘→0 |
 | | BTC.D 上升 (5) | 上升 / ≥1.0pp→5｜≥0.5pp→3｜其餘→0 |
-| ⑤ 鏈上吸籌 **10**〔灰燈〕 | ETF 連續流入 (6) | ≥7日→6｜≥5日→4｜≥3日→2｜其餘→0 |
+| ⑤ 鏈上吸籌 **10**〔SOPR已驗·ETF灰燈〕 | ETF 連續流入 (6) | ≥7日→6｜≥5日→4｜≥3日→2｜其餘→0 |
 | | SOPR 割肉 (4) | ≤0.92→4｜≤0.95→3｜≤0.98→2｜其餘→0 |
-| ⑥ 總經順風 **10**〔灰燈〕 | 通膨/就業 dovish (7) | 通膨降溫 +4、就業轉弱 +3（上限 7） |
-| | 事件臨近 (3) | ≤1日→3｜≤3日→2｜≤7日→1｜無→0 |
+| ⑥ 總經順風 **10**〔規則式＋待FRED〕 | 通膨/就業 dovish (7)〔待FRED回補驗證〕 | 通膨降溫 +4、就業轉弱 +3（上限 7） |
+| | 事件臨近 (3)〔規則式·不可擬合〕 | ≤1日→3｜≤3日→2｜≤7日→1｜無→0 |
 
 等級：≥75 強力抄底｜≥60 明確低估（觸發 LINE 抄底訊號）｜≥45 偏冷觀察｜≥25 中性｜<25 無底部訊號
 
-〔未擬合〕＝權重採專家設定、歷史樣本不足無法回測驗證；〔灰燈〕＝同未擬合，且資料源在純幣安環境可能缺漏。
+〔未擬合〕＝權重採專家設定、歷史樣本不足「待累積後可回測」（如 OI 自建快照）；〔灰燈〕＝資料源在純幣安環境可能缺漏。
+〔SOPR已驗〕＝SOPR 子項 2026-06 敏感度驗證通過（方向正確、加入無害；ETF 子項 2024+ 資料薄沿用專家權重）。
+〔規則式〕＝event-window 事件臨近本質為規則式風險旗標、**永久不可統計擬合**，由規則正確性背書（非權重存疑）。
+〔待FRED〕＝dovish flags（通膨/就業）可擬合，但無歷史源（FRED 公司網路被擋）→ 待雲端/家用網路回補後 backtest。
 """
 
 

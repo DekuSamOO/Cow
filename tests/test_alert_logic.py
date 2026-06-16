@@ -130,6 +130,23 @@ def _weekly_data():
             "composite_action": "順勢持有", "composite_pos": "建議倉位 60–80%（未擬合）"}
 
 
+def _flex_text(msg):
+    """攤平 Flex 訊息所有 text 欄位 + altText 成單一字串，供子字串斷言。"""
+    out = [msg.get("altText", "")]
+
+    def walk(o):
+        if isinstance(o, dict):
+            if o.get("type") == "text" and "text" in o:
+                out.append(o["text"])
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+    walk(msg)
+    return " ".join(out)
+
+
 def test_weekly_summary_only_sunday_evening(notify, patched_state):
     _, sent = patched_state
     notify.maybe_send_weekly_summary(_weekly_data(), now=datetime(2026, 6, 10, 18, 30, tzinfo=_TW))  # 週三
@@ -137,7 +154,9 @@ def test_weekly_summary_only_sunday_evening(notify, patched_state):
     assert sent == []
     notify.maybe_send_weekly_summary(_weekly_data(), now=_SUN_EVE)
     assert len(sent) == 1
-    text = sent[0][0]["text"]
+    msg = sent[0][0]
+    assert msg["type"] == "flex"          # 已改 Flex Message（非純文字）
+    text = _flex_text(msg)
     assert "BTC 週報" in text and "+3.2%" in text and "今日行動" not in text
 
 
@@ -151,8 +170,12 @@ def test_weekly_summary_dedupe_and_scores(notify, patched_state):
     }}))
     notify.maybe_send_weekly_summary(_weekly_data(), now=_SUN_EVE)
     assert len(sent) == 1
-    text = sent[0][0]["text"]
-    assert "週高 45／週低 30" in text and "n=3日" in text
+    msg = sent[0][0]
+    assert msg["type"] == "flex"
+    text = _flex_text(msg)
+    # 逃頂分週高/低（max 45 / min 30）與抄底分週高/低（max 50 / min 40）入卡
+    assert "逃頂分" in text and "45" in text and "30" in text
+    assert "抄底分" in text and "50" in text
     # 同日再呼叫 → 去重
     notify.maybe_send_weekly_summary(_weekly_data(), now=_SUN_EVE)
     assert len(sent) == 1

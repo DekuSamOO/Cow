@@ -383,6 +383,91 @@ def build_escape_alert_flex(s):
     return {"type": "flex", "altText": f"{title} {score}/100", "contents": bubble}
 
 
+def _weekly_stat_box(title, hi, lo, cur, cur_color, hi_is_good):
+    """週報單一分數區塊：週高/週低/現值三格橫排。
+    hi_is_good=True（抄底，高=低估=機會）週高綠；False（逃頂，高=過熱=風險）週高紅。"""
+    def cell(lbl, val, color):
+        return {"type": "box", "layout": "vertical", "flex": 1, "contents": [
+            {"type": "text", "text": lbl, "color": "#888888", "size": "xxs", "align": "center"},
+            {"type": "text", "text": f"{val:.0f}", "color": color, "size": "lg",
+             "weight": "bold", "align": "center"},
+        ]}
+    hi_color = "#27AE60" if hi_is_good else "#C0392B"
+    return {
+        "type": "box", "layout": "vertical", "margin": "md", "backgroundColor": "#F8F9FA",
+        "cornerRadius": "8px", "paddingAll": "md", "contents": [
+            {"type": "text", "text": title, "weight": "bold", "color": "#2C3E50", "size": "sm"},
+            {"type": "box", "layout": "horizontal", "margin": "sm", "contents": [
+                cell("週高", hi, hi_color), cell("週低", lo, "#888888"),
+                cell("現值", cur, cur_color),
+            ]},
+        ],
+    }
+
+
+def build_weekly_flex(data, esc, low, today):
+    """
+    週日傍晚週報 Flex（giga 單 bubble）。內容＝本週價格區間 + 逃頂/抄底分週高低 + 趨勢 + 行動。
+    esc / low：本週逃頂 / 抄底分數序列（list，最後一筆為現值）；可為空。
+    資料完全不足（無價格且無任何分數）時回 None → 呼叫端退回文字版。
+    """
+    has_price = data.get("week_change_pct") is not None
+    if not has_price and not esc and not low:
+        return None
+
+    header_color = "#2C3E50"
+    body = []
+
+    if has_price:
+        chg = data["week_change_pct"]
+        arrow = "📈" if chg >= 0 else "📉"
+        chg_color = "#27AE60" if chg >= 0 else "#E74C3C"
+        body.append({"type": "box", "layout": "vertical", "contents": [
+            {"type": "box", "layout": "horizontal", "contents": [
+                {"type": "text", "text": f"{arrow} 本週 {chg:+.1f}%", "color": chg_color,
+                 "size": "xl", "weight": "bold", "flex": 0},
+                {"type": "text", "text": f"現價 {data.get('price', '—')}", "color": "#2C3E50",
+                 "size": "sm", "align": "end", "gravity": "bottom"},
+            ]},
+            {"type": "text", "text": f"週高 ${data['week_high']:,.0f}　週低 ${data['week_low']:,.0f}",
+             "color": "#888888", "size": "xs", "margin": "xs"},
+        ]})
+
+    if esc:
+        body.append(_weekly_stat_box("🚨 逃頂分（週）", max(esc), min(esc), esc[-1],
+                                     _escape_color(int(esc[-1])), hi_is_good=False))
+    if low:
+        body.append(_weekly_stat_box("🟢 抄底分（週）", max(low), min(low), low[-1],
+                                     _low_color(int(low[-1])), hi_is_good=True))
+    if data.get("trend_level"):
+        body.append({"type": "text", "text": f"🧭 趨勢：{data['trend_level']}",
+                     "color": "#2C3E50", "size": "sm", "margin": "md", "wrap": True})
+    if data.get("composite_action"):
+        body.append(_build_advice_box(
+            "🎯 本週行動",
+            f"{data['composite_action']}｜{data.get('composite_pos', '')}", header_color))
+
+    bubble = {
+        "type": "bubble", "size": "giga",
+        "header": {
+            "type": "box", "layout": "vertical", "backgroundColor": header_color,
+            "paddingAll": "16px", "contents": [
+                {"type": "text", "text": "📒 BTC 週報", "weight": "bold",
+                 "color": "#FFFFFF", "size": "xl"},
+                {"type": "text", "text": today, "color": "#FFFFFF", "size": "xs", "margin": "sm"},
+            ],
+        },
+        "body": {
+            "type": "box", "layout": "vertical", "backgroundColor": "#FFFFFF",
+            "spacing": "sm", "contents": body,
+        },
+    }
+    msg = {"type": "flex", "altText": f"📒 BTC 週報 {today}", "contents": bubble}
+    if _payload_size_bytes(msg) > _FLEX_SOFT_LIMIT_BYTES:
+        logger.warning("[weekly_flex] payload 超軟上限（週報無新聞區塊可砍），仍送出")
+    return msg
+
+
 def _build_forecast_box(s):
     is_bear = s["forecast_type"] == "bear_bottom"
     title = "❄️ 熊市最低價預測" if is_bear else "🚀 牛市最高價預測"

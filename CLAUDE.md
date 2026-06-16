@@ -98,13 +98,22 @@ all-in = 電費 × 1.6。
   補正交的「風往哪吹」：均線結構±40 / MACD±30 / 斜率±15 / ADX±15 → 有號淨分 [-100,+100]。
   ADX<20 時方向三維打 0.6 折（盤整防假突破）。可同時「強多頭＋逃頂高」或「空頭＋抄底高」
   （勿純憑估值接刀），三軸合看。LINE Flex 顯示在波段雷達 box 頂部橫幅。
-- **未擬合維度**標 `UNFITTED_DIMS` / `UNFITTED_DIMS_LOW`：OI 自建快照、ETF(2024+)、
-  負費率、總經（需行事曆）。
+- **維度狀態三分類**（抄底側 `core/relative_low`）：`UNFITTED_DIMS_LOW`（待累積後可回測，如 OI）、
+  `RULE_BASED_DIMS_LOW`（規則式不可統計擬合）、`PENDING_FIT_SUBDIMS_LOW`（可擬合但缺歷史源）。
+  - onchain：2026-06 敏感度驗證通過，已不在任一清單（SOPR 單維 AUC 0.585、加入合成無害且隨權重
+    單調有益，見 `tests/relative_low_backtest.py::validate_unfitted_dims`）。ETF 子項 2024+ 資料薄沿用專家權重。
+  - macro **拆兩子維**：event-window（事件臨近）＝規則式、永久不可擬合 → `RULE_BASED_DIMS_LOW`；
+    dovish flags（通膨/就業）＝可擬合但無歷史源（FRED 被擋）→ `PENDING_FIT_SUBDIMS_LOW`，待雲端/家用
+    網路回補 FRED 後 backtest。`UNFITTED_DIMS_LOW` 因此清空。UI 以〔規則式〕（藍）/〔未擬合〕（橘）兩種 tag 區分。
+  - 逃頂側 `UNFITTED_DIMS=("onchain",)` 不變。
 
-**BTC_WATCH.py 共用**：純幣安環境只連 fapi/dapi + path import 算分。OI 用
+**BTC_WATCH.py 共用**：純幣安環境連 fapi/dapi + path import 算分。OI 用
 `openInterestHist`（5m×13 滾動清洗 + 1d×30 分位）取代失效的相鄰 60s 差值；防線用
-`bottom_floors.final_low`（fallback 54000）。可得天花板：逃頂 65、抄底 75
-（已接 alternative.me F&G；BTC.D/ETF/SOPR/總經無資料源 → 灰燈）。
+`bottom_floors.final_low`（fallback 54000）。**外部維度（2026-06-16 補）**：隨日線每小時
+刷新一次抓 ETF（`get_etf_flow_summary` 讀 committed `etf_flow.json`，Farside 403 備援）、
+SOPR（`get_latest_bottom_metrics`，bitcoin-data 12h 快取）、BTC.D 趨勢（`get_btcd_trend`，
+本地 OI 快照）、總經事件（`get_next_macro_event`，本地 `macro_events.json`，**不打被擋的 FRED**）。
+可得天花板升至 **逃頂/抄底各 93**（唯缺 macro 通膨/就業 dovish/hawkish flags 需 FRED → 缺 7 分）。
 
 詳見 PLAN：`Obsidian/Github/Cow/20260608plan_相對高點判斷.md`、`20260609plan_相對底部判斷.md`。
 

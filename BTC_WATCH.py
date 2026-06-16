@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import logging
 import datetime
 import unicodedata
 import requests
@@ -8,6 +9,9 @@ import urllib3
 
 # 依據公司本地端網路環境需求，完整關閉 SSL 驗證並忽略警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+# service 層部分函式掛 @st.cache_data，無 Streamlit runtime 時會降級記憶體快取並印警告（功能正常）。
+# BTC_WATCH 每秒清屏顯示，抑制這些警告避免洗版。
+logging.getLogger("streamlit").setLevel(logging.ERROR)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 單一真實來源：import 同 repo 的相對高點/相對底部評分（正本即在 Cow 根目錄）
@@ -112,9 +116,10 @@ class BitcoinMonitor:
 
     FALLBACK_SUPPORT = 54000   # 動態地板算不出時的靜態防線（2026/5 的 0.618 值）
 
-    # 純幣安 + F&G 可得維度（ETF/SOPR/BTC.D/總經 仍無資料源）
-    TOP_CAP = 65               # 逃頂可得滿分：derivatives30 + technical25 + F&G10
-    LOW_CAP = 75               # 抄底可得滿分：cycle25 + derivatives20 + technical20 + F&G10
+    # 可得天花板（純幣安 + F&G + 本地快取 ETF/SOPR/BTC.D + 本地總經事件行事曆）。
+    # 唯一缺項：macro 的通膨/就業 dovish/hawkish flags（FRED 被公司網路封鎖）= 7 分 → 100-7=93。
+    TOP_CAP = 93               # derivatives30 + technical25 + onchain20 + sentiment15 + macro事件3
+    LOW_CAP = 93               # cycle25 + derivatives20 + technical20 + sentiment15 + onchain10 + macro事件3
 
     def __init__(self):
         self.fapi_url = "https://fapi.binance.com/fapi/v1"
@@ -125,6 +130,7 @@ class BitcoinMonitor:
         self._daily_cache = None
         self._floors_cache = None
         self._fng_cache = None
+        self._ext_cache = None     # ETF/SOPR/BTC.D/macro 外部維度（每小時隨日線刷新一次）
         self._daily_ts = 0.0
 
     # ── 即時資料 ──────────────────────────────────────────────────────────────
@@ -237,9 +243,42 @@ class BitcoinMonitor:
                 print(f"動態地板計算失敗：{e}")
                 self._floors_cache = None
             self._fng_cache = self.get_fng()
+            self._ext_cache = self._gather_externals()
             self._daily_ts = now
         except Exception as e:
             print(f"日線刷新失敗：{e}")
+
+    def _gather_externals(self):
+        """
+        ETF / SOPR / BTC.D / macro 外部維度（隨日線每小時刷新一次，避免 60s 迴圈與 bitcoin-data 限流）。
+        全 best-effort：抓不到的維度回 None → 評分自動灰燈、不 crash。皆為本地快取或輕量單點，
+        **不打被公司網路封鎖的 FRED**（macro 僅取本地事件行事曆 event_within_days；
+        通膨/就業 dovish/hawkish flags 需 FRED → 略，故 cap=93 而非 100）。
+        dashboard `_gather_radar_externals` 的精簡鏡像（同 service 單一來源）。
+        """
+        ext = {"etf": None, "sopr": None, "btcd": None, "macro": None}
+        try:
+            from service.etf_flow import get_etf_flow_summary
+            ext["etf"] = get_etf_flow_summary()              # committed db/etf_flow.json（Farside 403 備援）
+        except Exception as e:
+            print(f"ETF 摘要取得失敗：{e}")
+        try:
+            from service.bottom_metrics import get_latest_bottom_metrics
+            ext["sopr"] = get_latest_bottom_metrics().get("sopr")   # bitcoin-data，12h json 持久化快取
+        except Exception as e:
+            print(f"SOPR 取得失敗：{e}")
+        try:
+            from service.market_snapshot import get_btcd_trend
+            ext["btcd"] = get_btcd_trend()                   # 本地 OI 快照累積的 BTC.D 趨勢（change_pp）
+        except Exception as e:
+            print(f"BTC.D 趨勢取得失敗：{e}")
+        try:
+            from service.macro_data import get_next_macro_event
+            days = get_next_macro_event().get("days")        # db/macro_events.json（本地，不碰 FRED）
+            ext["macro"] = {"event_within_days": days} if days is not None else None
+        except Exception as e:
+            print(f"總經事件取得失敗：{e}")
+        return ext
 
     def _support_line(self):
         """主防線：動態 final_low，取不到時退回靜態 54000。回傳 (value, basis, ensemble)。"""
@@ -360,10 +399,15 @@ class BitcoinMonitor:
                 if df is not None and not df.empty:
                     row = df.iloc[-1]
                     funding_8h = funding   # 已是 %（×100 過）
-                    top = compute_escape_top_score(row, df, funding_8h=funding_8h,
-                                                   oi_stats=oi_stats, fng=self._fng_cache)
-                    low = compute_relative_low_score(row, df, funding_8h=funding_8h,
-                                                     oi_stats=oi_stats, fng=self._fng_cache)
+                    ext = self._ext_cache or {}
+                    top = compute_escape_top_score(
+                        row, df, funding_8h=funding_8h, oi_stats=oi_stats, fng=self._fng_cache,
+                        etf_summary=ext.get("etf"), sopr=ext.get("sopr"),
+                        btc_d_trend=ext.get("btcd"), macro=ext.get("macro"))
+                    low = compute_relative_low_score(
+                        row, df, funding_8h=funding_8h, oi_stats=oi_stats, fng=self._fng_cache,
+                        etf_summary=ext.get("etf"), sopr=ext.get("sopr"),
+                        btc_d_trend=ext.get("btcd"), macro=ext.get("macro"))
                     trend = compute_trend_score(row, df)
                 self.render(md, funding, oi_stats, top, low, trend)
             else:

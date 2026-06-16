@@ -493,33 +493,49 @@ def maybe_send_weekly_summary(data: dict, now=None) -> None:
         print("ℹ️ 本週週報已推播，略過。")
         return
 
-    lines = [f"📒 BTC 週報（{today}）", "━━━━━━━━━━━━━━━━"]
-    if data.get("week_change_pct") is not None:
-        arrow = "📈" if data["week_change_pct"] >= 0 else "📉"
-        lines.append(f"{arrow} 本週 {data['week_change_pct']:+.1f}%　現價 {data.get('price', '—')}")
-        lines.append(f"週高 ${data['week_high']:,.0f}｜週低 ${data['week_low']:,.0f}")
     hist_vals = [v for _, v in sorted((state.get("score_history") or {}).items())]
     esc = [v["escape"] for v in hist_vals if v.get("escape") is not None]
     low = [v["low"] for v in hist_vals if v.get("low") is not None]
-    if esc:
-        lines.append(f"🚨 逃頂分：週高 {max(esc):.0f}／週低 {min(esc):.0f}（現 {esc[-1]:.0f}，n={len(esc)}日）")
-    if low:
-        lines.append(f"🟢 抄底分：週高 {max(low):.0f}／週低 {min(low):.0f}（現 {low[-1]:.0f}）")
-    if data.get("trend_level"):
-        lines.append(f"🧭 趨勢：{data['trend_level']}")
-    if data.get("composite_action"):
-        lines.append(f"🎯 行動：{data['composite_action']}｜{data.get('composite_pos', '')}")
-    if len(lines) <= 2:
-        print("ℹ️ 週報資料不足，略過。")
-        return
 
-    try:
-        send_line_message({"type": "text", "text": "\n".join(lines)})
-        state["last_weekly_date"] = today
-        _save_escape_state(state)
-        print("📒 已發送週報。")
-    except Exception as e:
-        print(f"❌ 週報發送失敗: {e}")
+    # 優先 Flex 週報；資料不足回 None、或發送失敗 → 退回文字版（保留既有純文字格式）
+    from service.notification.builders import build_weekly_flex
+    flex = build_weekly_flex(data, esc, low, today)
+    sent = False
+    if flex is not None:
+        try:
+            send_line_message(flex)
+            sent = True
+            print("📒 已發送週報（Flex）。")
+        except Exception as e:
+            print(f"⚠️ 週報 Flex 發送失敗，改用文字版：{e}")
+
+    if not sent:
+        lines = [f"📒 BTC 週報（{today}）", "━━━━━━━━━━━━━━━━"]
+        if data.get("week_change_pct") is not None:
+            arrow = "📈" if data["week_change_pct"] >= 0 else "📉"
+            lines.append(f"{arrow} 本週 {data['week_change_pct']:+.1f}%　現價 {data.get('price', '—')}")
+            lines.append(f"週高 ${data['week_high']:,.0f}｜週低 ${data['week_low']:,.0f}")
+        if esc:
+            lines.append(f"🚨 逃頂分：週高 {max(esc):.0f}／週低 {min(esc):.0f}（現 {esc[-1]:.0f}，n={len(esc)}日）")
+        if low:
+            lines.append(f"🟢 抄底分：週高 {max(low):.0f}／週低 {min(low):.0f}（現 {low[-1]:.0f}）")
+        if data.get("trend_level"):
+            lines.append(f"🧭 趨勢：{data['trend_level']}")
+        if data.get("composite_action"):
+            lines.append(f"🎯 行動：{data['composite_action']}｜{data.get('composite_pos', '')}")
+        if len(lines) <= 2:
+            print("ℹ️ 週報資料不足，略過。")
+            return
+        try:
+            send_line_message({"type": "text", "text": "\n".join(lines)})
+            sent = True
+            print("📒 已發送週報（文字）。")
+        except Exception as e:
+            print(f"❌ 週報發送失敗: {e}")
+            return
+
+    state["last_weekly_date"] = today
+    _save_escape_state(state)
 
 
 if __name__ == "__main__":

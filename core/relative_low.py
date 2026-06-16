@@ -12,8 +12,13 @@ core/relative_low.py  ·  v1.0
 
 ⚠️ 維度權重狀態：
   - cycle（長週期深跌）/ technical / sentiment 為可回測維度（見 backtest）。
-  - derivatives 的負費率子項 + onchain（ETF/SOPR）+ macro 為**未擬合**（負費率歷史判別力弱、
-    OI 清洗與 ETF/SOPR 歷史不足或無資料源），介面以 UNFITTED_DIMS_LOW 標示。
+  - onchain（SOPR）2026-06 敏感度驗證通過：單維方向正確（AUC 0.585）、加入合成無害且隨
+    onchain 權重單調有益、門檻命中穩定（tests/relative_low_backtest.py::validate_unfitted_dims）
+    → 已移出 UNFITTED；ETF 子項僅 2024+ 資料薄，沿用專家權重。
+  - macro 拆兩子維：event-window（事件臨近）為規則式、永久不可統計擬合 → RULE_BASED_DIMS_LOW；
+    dovish flags（通膨/就業）可擬合但無歷史源（FRED 被擋）→ 待回補（PENDING_FIT_SUBDIMS_LOW）。
+    UNFITTED_DIMS_LOW 因此清空（onchain 已驗、macro 改規則式分類）。
+  - derivatives 負費率子項歷史判別力弱（不單列標示）。
 """
 import math
 from typing import Optional, Dict, Any, Tuple
@@ -43,8 +48,16 @@ WEIGHTS_LOW = {
     "macro":       10,   # 六、總經順風（降息/鴿派 7 + 事件臨近 3）灰燈
 }
 
-# 權重未經回測擬合 / 無資料源的維度（介面需標示）
-UNFITTED_DIMS_LOW = ("onchain", "macro")   # ETF/SOPR 無源、總經需行事曆 → 視為未擬合灰燈
+# 維度狀態標示（兩種不同性質，介面以不同 tag 呈現）：
+#   UNFITTED_DIMS_LOW   ＝權重採專家設定、歷史樣本不足「待累積後回測」即可擬合（如 OI 自建快照）。
+#   RULE_BASED_DIMS_LOW ＝子項本質為規則式、不可統計擬合（macro 的 event-window 事件臨近）。
+# onchain：2026-06 敏感度驗證通過，已不在任一清單（見 backtest validate_unfitted_dims）。
+# macro：拆兩子維 — event-window(事件臨近)＝規則式(永久不可擬合)；dovish flags(通膨/就業)＝
+#        可擬合但目前無歷史源（FRED 公司網路被擋），待雲端/家用網路回補 FRED 後以 backtest 驗證。
+UNFITTED_DIMS_LOW = ()
+RULE_BASED_DIMS_LOW = ("macro",)
+# 待 FRED 歷史回補後可擬合的子項（文件用；非介面 tag 清單）
+PENDING_FIT_SUBDIMS_LOW = {"macro": "dovish flags（通膨/就業）待 FRED 歷史回補後回測"}
 
 
 def _nan(v) -> bool:
@@ -221,7 +234,7 @@ def _score_onchain_low(etf_summary, sopr) -> dict:
         "value": f"ETF {e_val}｜SOPR {s_val}",
         "score": e_s + s_s, "max": WEIGHTS_LOW["onchain"],
         "label": f"ETF {e_lbl}；{s_lbl}",
-        "note": "⚠️ 無資料源（BTC_WATCH 環境）：ETF 連續淨流入 + SOPR 割肉投降",
+        "note": "SOPR 方向驗證 2026-06（AUC 0.585，無害有益）；ETF 連續淨流入 2024+ 資料薄沿用專家權重",
         "sub": {"etf_consecutive_inflow": (etf_summary or {}).get("consecutive_inflow_days"),
                 "etf_score": e_s, "sopr": (None if _nan(sopr) else float(sopr)),
                 "sopr_score": s_s},
@@ -236,7 +249,8 @@ def _score_macro_low(macro) -> dict:
     """
     if not macro:
         return {"value": "—", "score": 0, "max": WEIGHTS_LOW["macro"],
-                "label": "⚪ 無資料源", "note": "通膨/就業 dovish + 事件臨近（Notion 行事曆）",
+                "label": "⚪ 無資料源",
+                "note": "事件臨近=規則式(不可擬合)；通膨/就業 dovish=待 FRED 回補驗證",
                 "sub": {}}
     h_s = 0
     bits = []
@@ -257,7 +271,7 @@ def _score_macro_low(macro) -> dict:
         "value": "｜".join(bits) if bits else "中性",
         "score": h_s + e_s, "max": WEIGHTS_LOW["macro"],
         "label": ("🟢 " + "、".join(bits)) if bits else "⚪ 中性",
-        "note": "通膨/就業 dovish + 事件臨近（Notion 行事曆）",
+        "note": "事件臨近=規則式(不可擬合)；通膨/就業 dovish=待 FRED 回補驗證",
         "sub": {"dovish_score": h_s, "event_score": e_s, "event_within_days": ev},
     }
 
@@ -323,4 +337,5 @@ def compute_relative_low(
         "low_action":  action,
         "low_signals": signals,
         "unfitted_dims": list(UNFITTED_DIMS_LOW),
+        "rule_based_dims": list(RULE_BASED_DIMS_LOW),
     }

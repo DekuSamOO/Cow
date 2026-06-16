@@ -271,6 +271,117 @@ def main():
         print(f"  門檻 {thr:.2f}: 底部命中率 {hit:.0f}%  非底誤報率 {fp:.0f}%")
     print("  （僅含負費率/技術/F&G/長週期 四維；實際系統再疊加 onchain/總經，僅作灰燈展示）")
 
+    # ── 未擬合兩維（onchain / macro）驗證（2026-06-16；專家配重 + 敏感度）──────────
+    validate_unfitted_dims(btc, fit_bottoms, neg_idx, fund_daily, fng_map)
+
+
+def _load_sopr_cache():
+    """讀 committed db/bottom_metrics_cache.json 的 SOPR 歷史（避免再打 bitcoin-data 觸發 429）。"""
+    p = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                     "db", "bottom_metrics_cache.json")
+    try:
+        import json
+        c = json.load(open(p, encoding="utf-8"))
+        return {d: float(v) for d, v in (c.get("sopr") or {}).items()}
+    except Exception as e:
+        print("  SOPR 快取讀取失敗：", e)
+        return {}
+
+
+def validate_unfitted_dims(btc, fit_bottoms, neg_idx, fund_daily, fng_map):
+    """
+    抄底雷達兩處未擬合維度（onchain=鏈上吸籌、macro=總經順風）的「專家配重 + 敏感度」驗證。
+
+    方法（資料受限下能做的最誠實驗證）：
+      onchain：直接呼叫真正的 compute_relative_low_score，餵歷史 SOPR（committed 快取，
+               2022-06+），比較
+                 (1) onchain 子分數單維 AUC（方向是否正確：底部 SOPR 子分應較高）
+                 (2) 合成分數「加 onchain vs 不加」的 AUC（增量是否無害/有益）
+                 (3) onchain 權重擾動（×0 / ×0.5 / ×1 / ×1.5）下合成 AUC 與門檻命中穩定性
+               ETF：歷史僅 2024+ 且無逐日歷史快照 → 標資料不足，僅現役方向檢查（不納 AUC）。
+      macro ：無歷史事件 flag 源 → 回測樣本中 macro 子分恆 0，無法影響歷史判別；
+               其 live 值為「event-window 規則式」(deterministic by design)，非統計可擬合。
+    結論據此決定是否移除 core/relative_low.UNFITTED_DIMS_LOW 標記。
+    """
+    from core.relative_low import compute_relative_low_score
+
+    print("\n" + "=" * 72)
+    print("未擬合兩維驗證（onchain / macro）— 專家配重 + 敏感度")
+    print("=" * 72)
+
+    sopr_map = _load_sopr_cache()
+    if not sopr_map:
+        print("無 SOPR 快取 → onchain 無法驗證，維持 UNFITTED。")
+        return
+    sopr_start = pd.Timestamp(min(sopr_map))
+    print(f"SOPR 歷史：n={len(sopr_map)}，{min(sopr_map)} ~ {max(sopr_map)}")
+
+    def sample(k):
+        """回傳 (合成分_with_onchain, onchain子分, 是否在SOPR期內)。onchain 僅 SOPR（etf=None→0）。"""
+        d = btc.index[k]
+        ds = d.strftime("%Y-%m-%d")
+        f8 = None
+        if not fund_daily.empty:
+            fv = float(fund_daily.get(d.normalize(), np.nan))
+            f8 = None if np.isnan(fv) else fv
+        fng_val = fng_map.get(ds)
+        in_sopr = d >= sopr_start
+        sopr_val = sopr_map.get(ds) if in_sopr else None
+        sc, sig = compute_relative_low_score(btc.iloc[k], btc.iloc[:k + 1],
+                                             funding_8h=f8, fng=fng_val, sopr=sopr_val)
+        return sc, sig["onchain"]["score"], in_sopr
+
+    pos = [sample(k) for k in fit_bottoms]
+    neg = [sample(k) for k in neg_idx]
+    # 僅 SOPR 期內樣本做 onchain 比較（公平）
+    pos_s = [(sc, oc) for sc, oc, ok in pos if ok]
+    neg_s = [(sc, oc) for sc, oc, ok in neg if ok]
+    print(f"SOPR 期內樣本：底 {len(pos_s)} / 非底 {len(neg_s)}")
+    if len(pos_s) < 4 or len(neg_s) < 4:
+        print("SOPR 期內樣本過少（<4），onchain 驗證不可靠 → 維持 UNFITTED。")
+        macro_note()
+        return
+
+    # (1) onchain 子分數單維 AUC（方向）
+    oc_auc = auc([o for _, o in pos_s], [o for _, o in neg_s])
+    print(f"\n[onchain 方向] SOPR 子分 底均 {np.mean([o for _,o in pos_s]):.2f} / "
+          f"非底均 {np.mean([o for _,o in neg_s]):.2f}  AUC={oc_auc:.3f}  "
+          f"（>0.5＝底部 SOPR 子分較高，方向正確）")
+
+    # (2) 合成分數「加 onchain vs 不加」AUC（onchain 子分僅 SOPR，故 without = with − onchain子分）
+    with_auc = auc([sc for sc, _ in pos_s], [sc for sc, _ in neg_s])
+    wo_auc = auc([sc - o for sc, o in pos_s], [sc - o for sc, o in neg_s])
+    print(f"[onchain 增量] 合成 AUC：加 onchain {with_auc:.3f} vs 不加 {wo_auc:.3f}  "
+          f"Δ={with_auc - wo_auc:+.3f}（≥-0.005＝無害）")
+
+    # (3) onchain 權重擾動（子分 × factor），看 AUC 與門檻 60 命中穩定
+    print("[onchain 擾動] onchain 權重 ×factor 下合成 AUC / 門檻60底部命中率：")
+    for fac in (0.0, 0.5, 1.0, 1.5):
+        pv = [sc - o + o * fac for sc, o in pos_s]
+        nv = [sc - o + o * fac for sc, o in neg_s]
+        a = auc(pv, nv)
+        hit = np.mean([v >= 60 for v in pv]) * 100
+        print(f"    ×{fac:<3}  AUC={a:.3f}  底部≥60 命中 {hit:.0f}%")
+
+    macro_note()
+
+    # ── 結論判定 ────────────────────────────────────────────────────────────────
+    onchain_ok = (oc_auc > 0.5) and (with_auc - wo_auc >= -0.005)
+    print("\n" + "-" * 72)
+    print("結論：")
+    print(f"  onchain（鏈上吸籌/SOPR）：方向 {'正確' if oc_auc > 0.5 else '不正確'}"
+          f"（AUC {oc_auc:.3f}）、增量 {'無害' if with_auc - wo_auc >= -0.005 else '有害'}"
+          f"（Δ {with_auc - wo_auc:+.3f}）→ "
+          f"{'可移除 UNFITTED（標 SOPR 方向驗證 2026-06）' if onchain_ok else '維持 UNFITTED'}")
+    print("  macro（總經順風）：無歷史事件源、回測恆 0 不影響判別；live 為 event-window 規則式，"
+          "敏感度上對歷史合成無害 → 由規則正確性背書（非統計擬合）。")
+    print("  → 建議：onchain 依驗證結果處置；macro 改標『規則式/敏感度檢核』而非『無資料源』。")
+
+
+def macro_note():
+    print("\n[macro] 回測樣本 macro=None（無歷史 CPI/就業/事件 flag 源）→ macro 子分恆 0，"
+          "對歷史 AUC 無任何影響；其判別力來自 live event-window 規則，非可回測量。")
+
 
 if __name__ == "__main__":
     main()
