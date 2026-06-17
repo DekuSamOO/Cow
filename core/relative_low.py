@@ -18,7 +18,7 @@ core/relative_low.py  ·  v1.0
   - macro 拆兩子維：event-window（事件臨近）為規則式、永久不可統計擬合 → RULE_BASED_DIMS_LOW；
     dovish flags（通膨/就業）可擬合但無歷史源（FRED 被擋）→ 待回補（PENDING_FIT_SUBDIMS_LOW）。
     UNFITTED_DIMS_LOW 因此清空（onchain 已驗、macro 改規則式分類）。
-  - derivatives 負費率子項歷史判別力弱（不單列標示）。
+  - derivatives 負費率子項 2026-06 已回歸重校門檻（AUC 0.626，判別帶在淺負；見 funding_threshold_calib）。
 """
 import math
 from typing import Optional, Dict, Any, Tuple
@@ -34,9 +34,11 @@ from core.relative_high import annualize_funding
 # 常數（單一來源；BTC_WATCH.py path import 直接取用，杜絕兩邊閾值漂移）
 # ══════════════════════════════════════════════════════════════════════════════
 
-# 負資金費率年化閾值（空方付費 = 槓桿空頭過載，底部前兆）。未擬合（判別力弱）。
-FUNDING_ANN_LOW_YELLOW = -15.0   # 年化 % — 明顯空方付費（黃）
-FUNDING_ANN_LOW_RED    = -30.0   # 年化 % — 極端空方付費（紅）
+# 負資金費率年化門檻（2026-06 回歸重校，見 tests/funding_threshold_calib.py）：
+# 負費率→底 AUC 0.626，但判別力在「淺負」(Youden 最佳 ≤-3%)；≤-15/-20/-30% 歷史僅 8/4/3 日(危機)，
+# 召回崩到 3% → 大分不該鎖在深負。主判別帶下移至 -2~-5%、滿分線上修至 -20%（仍給危機級洗盤最高分）。
+FUNDING_ANN_LOW_YELLOW = -5.0    # 年化 % — 明顯空方付費（主判別帶；黃）
+FUNDING_ANN_LOW_RED    = -20.0   # 年化 % — 極端空方付費（危機級洗盤；紅）
 
 # 六維權重（各維最高分；總和 100）— 經 relative_low_backtest 拍板（實證導向）
 WEIGHTS_LOW = {
@@ -120,11 +122,12 @@ def _score_derivatives_low(funding_8h, oi_stats) -> dict:
         f_s, f_lbl, f_val = 0, "⚪ 無資料", "—"
     else:
         f_val = f"{ann:.0f}% (年化)"
-        if   ann <= FUNDING_ANN_LOW_RED:    f_s, f_lbl = 10, "🟢 極端空方付費 (≤-30% 年化)"
-        elif ann <= -20:                    f_s, f_lbl = 8,  "🟢 嚴重空方付費 (≤-20%)"
-        elif ann <= FUNDING_ANN_LOW_YELLOW: f_s, f_lbl = 6,  "🟡 空方付費 (≤-15%)"
-        elif ann <= -5:                     f_s, f_lbl = 3,  "🟡 偏空 (≤-5%)"
-        elif ann < 0:                       f_s, f_lbl = 2,  "⚪ 微負費率"
+        # 階梯由 funding_threshold_calib.py 回歸：判別帶在淺負(≤-2~-5%)，深負(≤-20%)為危機級洗盤滿分
+        if   ann <= FUNDING_ANN_LOW_RED:    f_s, f_lbl = 10, "🟢 極端空方付費 (≤-20% 年化, 危機洗盤)"
+        elif ann <= -10:                    f_s, f_lbl = 8,  "🟢 嚴重空方付費 (≤-10%)"
+        elif ann <= FUNDING_ANN_LOW_YELLOW: f_s, f_lbl = 6,  "🟡 空方付費 (≤-5%)"
+        elif ann <= -2:                     f_s, f_lbl = 3,  "🟡 偏空 (≤-2%)"
+        elif ann < 0:                       f_s, f_lbl = 1,  "⚪ 微負費率"
         else:                               f_s, f_lbl = 0,  "⚪ 多方付費/中性"
 
     # OI 滾動清洗（1h 窗 ΔOI，呼叫端以 openInterestHist 算好注入 oi_stats）

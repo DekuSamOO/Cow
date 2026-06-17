@@ -33,9 +33,11 @@ from core.season_forecast import forecast_price, get_current_season
 # 常數（單一來源；BTC_WATCH.py path import 直接取用，杜絕兩邊閾值漂移）
 # ══════════════════════════════════════════════════════════════════════════════
 
-# 資金費率年化閾值（來源筆記：年化 50% = 0.0457%/8h；年化 90% = 0.083%/8h）
-FUNDING_ANN_YELLOW = 50.0    # 年化 % — 過熱起點（黃）
-FUNDING_ANN_RED    = 90.0    # 年化 % — 極端逃頂（紅）
+# 資金費率年化門檻（2026-06 以幣安資費史回歸重校，見 tests/funding_threshold_calib.py）：
+# 後60日最大回撤在年化≥30% 由 ~-10% 翻倍至 ~-18%（轉折），≥50% 飽和(~-19%)，≥70% 未更深；
+# 年化≥90% 僅 35 日(1.76%)且全在 2021 狂熱、不更準 → 滿分線由舊 90% 下修至 50%、過熱起點由 50% 下修至 30%。
+FUNDING_ANN_YELLOW = 30.0    # 年化 % — 過熱起點（回撤轉折；黃）
+FUNDING_ANN_RED    = 50.0    # 年化 % — 極端/滿分（回撤飽和；紅）
 
 # Layer A 五維權重（各維最高分；總和 100）
 WEIGHTS = {
@@ -73,11 +75,12 @@ def _score_derivatives(funding_8h, oi_stats) -> dict:
         f_s, f_lbl, f_val = 0, "⚪ 無資料", "—"
     else:
         f_val = f"{ann:.0f}% (年化)"
-        if   ann >= FUNDING_ANN_RED:    f_s, f_lbl = 20, "🔴 極端過熱 (≥90% 年化)"
-        elif ann >= 70:                 f_s, f_lbl = 16, "🔴 嚴重過熱 (≥70%)"
-        elif ann >= FUNDING_ANN_YELLOW: f_s, f_lbl = 12, "🟠 過熱 (≥50%)"
-        elif ann >= 30:                 f_s, f_lbl = 6,  "🟡 偏熱 (≥30%)"
-        elif ann >= 15:                 f_s, f_lbl = 3,  "⚪ 偏多 (≥15%)"
+        # 階梯由 funding_threshold_calib.py 回歸：滿分 ≥50%（回撤飽和）、轉折 ≥30%（回撤翻倍）
+        if   ann >= FUNDING_ANN_RED:    f_s, f_lbl = 20, "🔴 極端過熱 (≥50% 年化, 回撤飽和)"
+        elif ann >= 40:                 f_s, f_lbl = 17, "🔴 嚴重過熱 (≥40%)"
+        elif ann >= FUNDING_ANN_YELLOW: f_s, f_lbl = 14, "🟠 過熱 (≥30%, 回撤轉折)"
+        elif ann >= 20:                 f_s, f_lbl = 6,  "🟡 偏熱 (≥20%)"
+        elif ann >= 12:                 f_s, f_lbl = 2,  "⚪ 偏多 (≥12%)"
         elif ann >= 0:                  f_s, f_lbl = 0,  "⚪ 中性"
         else:                           f_s, f_lbl = 0,  "🟢 空方付費 (負費率)"
 
