@@ -165,6 +165,11 @@ def calculate_ladder_strategy(row, product_type, t_days=3):
     生成 3 檔梯形行權價建議 (含 BS APY 預估)
     product_type: 'SELL_HIGH' | 'BUY_LOW'
     t_days: 產品期限（天），用於計算 APY，預設 3 天
+
+    資金權重 激進30%/中性30%/保守40%：2026-06-17 已回測（tests/dual_invest_ladder_calib.py）並
+    經使用者拍板**維持**。實證權利金懸崖——僅激進檔賺真權利金（SELL_HIGH~25.6%/BUY_LOW~10.4%），
+    中性/保守貼 APY 地板~5%（太價外）。偏保守權重＝把雙幣當「紀律性買低賣高」工具而非收益工具，
+    少被行權、保部位為刻意取捨（非未擬合疏漏）。要改偏好重跑 calib 即可。
     """
     atr = row['ATR']
     close = row['close']
