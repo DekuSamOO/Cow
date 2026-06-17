@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import math
 import logging
 import datetime
 import unicodedata
@@ -64,9 +65,9 @@ def _dw(s):
     return w
 
 
-def _row(content, W):
-    """左右框 + 內容補空格對齊到顯示寬度 W。"""
-    return "│" + content + " " * max(0, W - _dw(content)) + "│"
+def _row(content, W, v="│"):
+    """左右框 + 內容補空格對齊到顯示寬度 W。v 為側框字元（雙線表頭用 ║）。"""
+    return v + content + " " * max(0, W - _dw(content)) + v
 
 
 def _edge(left, fill, right, W):
@@ -99,6 +100,44 @@ def _bar_signed(net):
     return "░" * (5 - mag) + "█" * mag + "│" + "░" * 5
 
 
+def _short_momentum(df):
+    """
+    短線動能（補趨勢方向中長期軸缺的「這週」尺度）：近 7 日報酬 + 價 vs EMA_20 + RSI_14。
+    純取已算好的日線欄位（每小時刷新一次的 df），不發網路請求；資料不足回 None。
+    與趨勢方向軸正交：可「中期空頭 + 短線偏多」（短線反彈），正是區分「全面下跌 vs 反彈」之用。
+    """
+    if df is None or len(df) < 8:
+        return None
+    close = float(df["close"].iloc[-1])
+    prev7 = float(df["close"].iloc[-8])
+    ret7 = (close / prev7 - 1) * 100 if prev7 else 0.0
+
+    def _last(col):
+        if col not in getattr(df, "columns", []):
+            return None
+        v = df[col].iloc[-1]
+        return None if v is None or (isinstance(v, float) and math.isnan(v)) else float(v)
+
+    ema20 = _last("EMA_20")
+    rsi = _last("RSI_14")
+    above = None if ema20 is None else close > ema20
+
+    # 近 7 日方向與價對 EMA20 一致才表態（above is False 僅在 ema20 存在時成立）
+    if ret7 > 0 and above is True:
+        lbl = "🟢 短線偏多"
+    elif ret7 < 0 and above is False:
+        lbl = "🔴 短線偏空"
+    else:
+        lbl = "⚪ 短線中性"
+
+    parts = [f"近7日 {ret7:+.1f}%"]
+    if above is not None:
+        parts.append("價>EMA20" if above else "價<EMA20")
+    if rsi is not None:
+        parts.append(f"RSI {rsi:.0f}")
+    return f"{lbl}  " + "｜".join(parts)
+
+
 def _panel_trend(result, name, dims):
     """趨勢方向專用：分數有號（多+/空−），不適用 0-100 進度條與「可得≤」語意。"""
     if result is None:
@@ -115,6 +154,7 @@ class BitcoinMonitor:
     """BTC 雙向監控儀表板：逃頂五維（relative_high）+ 抄底六維（relative_low）。"""
 
     FALLBACK_SUPPORT = 54000   # 動態地板算不出時的靜態防線（2026/5 的 0.618 值）
+    DAILY_REFRESH_SEC = 3600   # 日線/地板/外部維度刷新間隔（即時項仍每 60s）
 
     # 可得天花板（純幣安 + F&G + 本地快取 ETF/SOPR/BTC.D + 本地總經事件行事曆）。
     # 唯一缺項：macro 的通膨/就業 dovish/hawkish flags（FRED 被公司網路封鎖）= 7 分 → 100-7=93。
@@ -219,7 +259,7 @@ class BitcoinMonitor:
         if not _COW_OK:
             return
         now = time.time()
-        if self._daily_cache is not None and (now - self._daily_ts) < 3600:
+        if self._daily_cache is not None and (now - self._daily_ts) < self.DAILY_REFRESH_SEC:
             return
         try:
             import pandas as pd
@@ -288,7 +328,7 @@ class BitcoinMonitor:
         return self.FALLBACK_SUPPORT, "fallback 靜態防線", None
 
     # ── 畫面 ────────────────────────────────────────────────────────────────────
-    def render(self, md, funding, oi_stats, top, low, trend=None):
+    def render(self, md, funding, oi_stats, top, low, trend=None, mom=None):
         os.system("cls" if os.name == "nt" else "clear")
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         nxt = (datetime.datetime.now() + datetime.timedelta(seconds=60)).strftime("%H:%M:%S")
@@ -297,10 +337,23 @@ class BitcoinMonitor:
         sup, basis, ens = self._support_line()
         ch = oi_stats.get("change_1h_pct")
         pct = oi_stats.get("percentile")
-        fr_txt = "—" if funding is None else f"{funding:.4f}%/8h"
-        ann = annualize_funding(funding) if funding is not None else None
-        ann_txt = "—" if ann is None else f"年化 {ann:.0f}%"
+        # D：擷取失敗（except → None）與真正中性值區分，失敗用 ✕ 不混為市場訊號
+        if funding is None:
+            fr_txt, ann_txt = "✕ 擷取失敗", ""
+        else:
+            fr_txt = f"{funding:.4f}%/8h"
+            ann = annualize_funding(funding)
+            ann_txt = "—" if ann is None else f"年化 {ann:.0f}%"
         drop_to = (sup / md["close"] - 1) * 100 if md["close"] else 0.0
+
+        # A：日線/地板/外部維度最後刷新時間（每小時一次）+ 漏刷警示
+        if self._daily_ts:
+            stale_sec = 2 * self.DAILY_REFRESH_SEC   # 漏刷一次（逾兩個刷新週期）才警示
+            stamp = datetime.datetime.fromtimestamp(self._daily_ts).strftime("%H:%M:%S")
+            warn = f"  ⚠ 已逾{stale_sec // 3600}h未更新" if time.time() - self._daily_ts > stale_sec else ""
+            data_age = f"{stamp} 刷新{warn}"
+        else:
+            data_age = "尚未刷新"
 
         header = [
             "  BTC 雙向監控儀表板 · 逃頂五維 + 抄底六維",
@@ -315,10 +368,15 @@ class BitcoinMonitor:
         if ens:
             quote.append(f"  多錨中位      ${ens:>12,.0f}   （需 {(ens/md['close']-1)*100:+.1f}% 觸及）")
         quote.append(f"  總持倉量      {md['total_oi']:>12,.0f} BTC （U {md['u_oi']:,.0f} + 幣本位 {md['coin_oi_btc']:,.0f}）")
-        oi_line = "—" if ch is None else f"{ch:+.2f}% (1h滾動)"
+        oi_line = "✕ 擷取失敗" if ch is None else f"{ch:+.2f}% (1h滾動)"
         pct_line = "" if pct is None else f"  |  近30日分位 {pct:.0f}%"
         quote.append(f"  OI 變化       {oi_line}{pct_line}")
         quote.append(f"  資金費率      {fr_txt}   {ann_txt}")
+        # C：短線動能（補趨勢中長期軸缺的「這週」尺度，與順勢軸正交）
+        if mom:
+            quote.append(f"  短線動能      {mom}")
+        # A：即時項每 60s 更新；日線/地板/外部維度每小時刷新一次
+        quote.append(f"  數據時效      即時 60s｜日線·地板·外部 {data_age}")
 
         top_title, top_rows = _panel(top, escape_top_meta, self.TOP_CAP, "逃頂訊號（出貨）",
                                      ("derivatives", "technical", "onchain", "sentiment", "macro"))
@@ -333,10 +391,10 @@ class BitcoinMonitor:
         W = max(content_w, title_w) + 2
 
         print(_edge("╔", "═", "╗", W))
-        print(_row(header[0], W))
+        print(_row(header[0], W, "║"))
         print(_edge("╠", "═", "╣", W))
-        print(_row(header[1], W))
-        print(_row(header[2], W))
+        print(_row(header[1], W, "║"))
+        print(_row(header[2], W, "║"))
         print(_edge("╚", "═", "╝", W))
 
         print()
@@ -392,7 +450,7 @@ class BitcoinMonitor:
             funding = self.get_funding_rate()
             oi_stats = self.get_oi_stats()
 
-            top = low = trend = None
+            top = low = trend = mom = None
             if _COW_OK:
                 self._refresh_daily()
                 df = self._daily_cache
@@ -409,7 +467,8 @@ class BitcoinMonitor:
                         etf_summary=ext.get("etf"), sopr=ext.get("sopr"),
                         btc_d_trend=ext.get("btcd"), macro=ext.get("macro"))
                     trend = compute_trend_score(row, df)
-                self.render(md, funding, oi_stats, top, low, trend)
+                    mom = _short_momentum(df)
+                self.render(md, funding, oi_stats, top, low, trend, mom)
             else:
                 self.render_simple(md, funding, oi_stats)
 
