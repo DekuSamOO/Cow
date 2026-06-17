@@ -67,13 +67,15 @@ def auc(pos, neg):
 
 # ── 各維度子分數（與 core/relative_high 同邏輯）────────────────────────────────
 def funding_score(ann):
+    # 階梯與 core/relative_high._score_derivatives 對齊（2026-06 回歸重校；
+    # 滿分線 FUNDING_ANN_RED=50、轉折 FUNDING_ANN_YELLOW=30，中間階距 40/20/12）
     if ann is None or np.isnan(ann):
         return 0
     if   ann >= FUNDING_ANN_RED:    return 20
-    elif ann >= 70:                 return 16
-    elif ann >= FUNDING_ANN_YELLOW: return 12
-    elif ann >= 30:                 return 6
-    elif ann >= 15:                 return 3
+    elif ann >= 40:                 return 17
+    elif ann >= FUNDING_ANN_YELLOW: return 14
+    elif ann >= 20:                 return 6
+    elif ann >= 12:                 return 2
     return 0
 
 

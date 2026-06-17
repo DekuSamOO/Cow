@@ -1,4 +1,4 @@
-# Cow — 比特幣投資戰情室 v3.15
+# Cow — 比特幣投資戰情室 v3.16
 
 > 比特幣多週期量化分析工具，整合技術指標、鏈上數據、期權與波段策略。
 
@@ -44,7 +44,7 @@ core/
   miner_cost.py       礦工成本純數學模型（btc_per_day 依減半切換、eff_jth 分段插值、電費盈虧/all-in 成本，無 IO 依賴）
   gemini_client.py    Gemini REST API 輕量封裝（關閉 thinking budget 省 token、x-goog-api-key header，供新聞中文化）
   divergence.py       價格 vs 動能（RSI/MACD）頂/底背離偵測（純 pandas/numpy，無 Streamlit 依賴；detect_top/bottom_divergence_combo 供逃頂與抄底雷達共用）
-  relative_high.py    相對高點（逃頂雷達）單一真實來源：Layer A 五維逃頂評分(0-100，合約/技術/鏈上/情緒/總經) + Layer B 長週期大頂 + 高點價位錨；常數 WEIGHTS/FUNDING_ANN_RED 供 BTC_WATCH path import，無 Streamlit 依賴
+  relative_high.py    相對高點（逃頂雷達）單一真實來源：Layer A 五維逃頂評分(0-100，合約/技術/鏈上/情緒/總經) + Layer B 長週期大頂 + 高點價位錨；常數 WEIGHTS/FUNDING_ANN_YELLOW(過熱起點 30%)/FUNDING_ANN_RED(滿分線 50%，2026-06 以幣安資費史回歸重校) 供 BTC_WATCH path import，無 Streamlit 依賴
   relative_low.py     相對底部（抄底雷達）單一真實來源：六維抄底評分(0-100，長週期深跌25/合約超冷20/技術回穩20/情緒恐慌15/鏈上10/總經10，權重經 relative_low_backtest 拍板)；compute_relative_low_score/relative_low_meta 供 BTC_WATCH path import，無 Streamlit 依賴
   trend_direction.py  趨勢方向（波段雷達第三軸）單一真實來源：四維**有號**評分（均線結構±40/MACD±30/斜率±15/ADX±15）→ 淨分 [-100,+100]，ADX<20 方向三維打 0.6 折防盤整假突破；compute_trend_score/trend_meta/compute_trend_direction 供 dashboard/BTC_WATCH/LINE 共用，無 Streamlit 依賴
   radar_replay.py     三雷達歷史每日分數回放（逐日重放逃頂/抄底/趨勢分數，DIV_WINDOW 視窗切片避免 O(n²)）+ threshold_forward_stats（門檻向上跨越事件 → 其後 60 日報酬分布，±18% 命中定義與權重擬合一致、cooldown 防重複計數）；僅用歷史可得輸入（OI/ETF/SOPR/BTC.D/總經與線上灰燈一致給 0 → 分數為保守下界），無 Streamlit 依賴
@@ -100,6 +100,7 @@ tests/
   bottom_floors_backtest.py   最低價地板回測（2015/2018/2022 熊底 vs 礦工電費/all-in 驗證）
   relative_high_backtest.py   逃頂權重敏感度分析（分層 train/test，AUC 以 Mann-Whitney U；僅擬合資費/技術/F&G 三維，OI/ETF/總經維持專家權重）
   relative_low_backtest.py    抄底權重敏感度分析（鏡像逃頂版；swing low+60日反彈≥18% 為正樣本，擬合負費率/技術/F&G/長週期四維，grid 過擬合→採專家配重。長週期深跌 AUC 0.662 最強）
+  funding_threshold_calib.py  資費門檻校準（離線手動跑，非 pytest）：以幣安資費史(2020-12+, ~2000日)回歸，各年化資費桶→其後60日最大回撤/反彈 + 頂/底單維 AUC + Youden 門檻，重訂逃頂正費率/抄底負費率給分階梯
   test_alert_logic.py         逃頂警報分級/去重/遲滯與分數Δ狀態機測試（monkeypatch 攔截 LINE 發送，8 passed）
   test_flex_size.py           build_flex_message 40KB 大小防線、OI 快照過期/ETF 過舊警告與今日行動行測試（5 passed）
   core/test_radar_replay.py   三雷達歷史回放單元測試（合成資料：序列因果性/F&G 與資費注入/門檻事件統計，4 passed）
@@ -364,6 +365,12 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 ---
 
 ## 版本紀錄
+
+### v3.16 (2026-06-17)
+- **feat(radar)**: 資費門檻以幣安資費史回歸重校（取代鎖在罕見極值的舊階梯）。新增 `tests/funding_threshold_calib.py`（離線手動跑，非 pytest）：以幣安資費史(2020-12+, ~2000日)回歸，各年化資費桶 → 其後 60 日最大回撤/反彈 + 頂/底單維 AUC + Youden 門檻。關鍵發現——後 60 日回撤在年化 ≥30% 由 ~-10% 翻倍至 ~-18%（轉折）、≥50% 飽和、≥70% 未更深；年化 ≥90% 僅 35 日(1.76%)全在 2021 狂熱且不更準。負費率判別力在「淺負」(Youden 最佳 ≤-3%)；≤-15/-20/-30% 僅 8/4/3 日(危機)、召回崩到 3%。
+- **feat(core)**: `core/relative_high._score_derivatives` 逃頂正費率階梯重校為 `≥50→20 | ≥40→17 | ≥30→14 | ≥20→6 | ≥12→2`（滿分線 90%→50%、過熱起點 50%→30%）；常數 `FUNDING_ANN_YELLOW` 50→30、`FUNDING_ANN_RED` 90→50。`core/relative_low._score_derivatives_low` 抄底負費率階梯重校為 `≤-20→10 | ≤-10→8 | ≤-5→6 | ≤-2→3 | <0→1`（判別帶下移至淺負）；常數 `FUNDING_ANN_LOW_YELLOW` -15→-5、`FUNDING_ANN_LOW_RED` -30→-20。三端（dashboard / LINE 推播 / BTC_WATCH）path import 同源自動同步。
+- **refactor(test)**: `tests/relative_high_backtest.py::funding_score` 階梯與正本 `_score_derivatives` 對齊（消除常數語意翻轉後遺留的兩處死碼），維持「與 core 同邏輯」承諾、杜絕兩邊閾值漂移。
+- **test**: 全套 pytest 142 passed（2 yfinance 為環境性 Yahoo 阻擋，非本次改動）。
 
 ### v3.15 (2026-06-11)
 - **feat(dashboard)**: Tab 1 資訊架構收合 —— 波段雷達逃頂/抄底兩區改 `st.tabs` 分頁（趨勢橫幅與三軸合成橫幅在分頁外恆顯）；D2 底部支撐「各算法明細表」收進 `st.expander`（總結兩卡維持可見）。
