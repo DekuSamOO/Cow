@@ -145,7 +145,7 @@ def _score_derivatives_low(funding_8h, oi_stats) -> dict:
         "value": f"資費 {f_val}｜OI {o_val}",
         "score": f_s + o_s, "max": WEIGHTS_LOW["derivatives"],
         "label": f"資費 {f_lbl}；OI {o_lbl}",
-        "note": "⚠️ 未擬合：負費率(判別力弱) + OI 1h 滾動清洗(歷史不足)",
+        "note": "OI 1h 滾動清洗未擬合(歷史不足)；負費率已回歸重校(AUC 0.626，判別帶在淺負)",
         "sub": {"funding_ann": ann, "funding_score": f_s,
                 "oi_change_1h_pct": chg, "oi_score": o_s},
     }
