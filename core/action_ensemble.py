@@ -10,8 +10,14 @@ core/action_ensemble.py
 決策矩陣依 CLAUDE.md 既有原則：順勢為主（趨勢軸優先分流）、
 「空頭＋抄底高」勿純憑估值接刀、「強多＋逃頂高」分批止盈不加倉。
 
-⚠️ 建議倉位區間為**專家設定（未擬合）**：待雷達歷史回放（core/radar_replay）
-   累積驗證後再校準，介面需標示。
+⚠️ 建議倉位區間為**專家設定（未擬合）**。2026-06 已用 radar_replay 回放嘗試擬合
+   （tests/position_calib.py），結論「暫無法可靠擬合，維持專家階梯」：
+     (1) 逃頂≥60/抄底≥75 的 estimation-gated 分支在回放保守下界（OI/ETF/SOPR=0，分數
+         天花板 ~55）中幾乎不觸發、樣本不足；
+     (2) 趨勢淨分 → 其後60日報酬呈 U 型（強空 +3.6% / 中性 -6.0% / 強多 +8.7%），非單調，
+         無法簡單線性映射倉位（強空因均值回歸亦正報酬，但回撤風險高，不宜據此加倉）。
+   現行階梯方向（強多倉位最高）與最佳報酬一致，故維持；待 OI/ETF/SOPR 歷史補齊（Phase 3）
+   解除回放下界後重跑 position_calib 再校準。
 
 dashboard（tab_macro_compass）、LINE 推播（daily_line_notify/builders）共用本檔，
 杜絕兩邊行動建議漂移。
@@ -26,7 +32,7 @@ ESCAPE_WARM = 45     # 逃頂偏熱
 LOW_STRONG = 75      # 強力抄底
 LOW_VALUE = 60       # 明確低估
 
-POSITION_NOTE = "倉位區間為專家設定（未擬合），僅供方向參考"
+POSITION_NOTE = "倉位區間為專家設定（未擬合），僅供方向參考"  # 回放校準受限，見 tests/position_calib.py
 
 
 def compute_composite_action(
