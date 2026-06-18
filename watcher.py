@@ -153,13 +153,27 @@ def main():
     except ValueError as e:
         print(f"[錯誤] {e}")
         return
-    label = "BTC 完整雙向雷達" if info["is_btc"] else f"{KIND_LABEL.get(info['kind'])} 通用軸"
+    if info["is_btc"]:
+        label = "BTC 完整雙向雷達（逃頂五維＋抄底六維）"
+    elif info["kind"] == "crypto":
+        label = f"{info['base']} 加密雙向雷達（逃頂/抄底，停用 BTC 專屬維度）"
+    else:
+        label = f"{KIND_LABEL.get(info['kind'])} 通用軸（趨勢方向）"
     print(f"\n→ 判定：{info['display']}（{KIND_LABEL.get(info['kind'])}）→ {label}\n")
     time.sleep(0.8)
+
     if info["is_btc"]:
-        BitcoinMonitor().run()          # 完整逃頂五維＋抄底六維（原封不動）
+        BitcoinMonitor().run()                      # 完整逃頂五維＋抄底六維（原封不動）
+    elif info["kind"] == "crypto":
+        # 非 BTC 幣對：完整逃頂/抄底，但停用 BTC 專屬維度（ETF/SOPR/BTC.D/四季論/礦工/冪律）
+        # 可得天花板：逃頂 derivatives30+technical25+F&G10+事件3=68；抄底 cycle19+deriv20+tech20+F&G10+事件3=72
+        BitcoinMonitor(
+            symbol=info["binance"], coin_symbol=info["coin"], is_btc=False,
+            top_cap=68, low_cap=72, oi_unit=info["base"],
+            title=f"{info['base']} 加密雙向監控 · 逃頂(可得≤68) + 抄底(可得≤72)",
+        ).run()
     else:
-        UniversalMonitor(info).run()
+        UniversalMonitor(info).run()                # 股票：通用軸（趨勢方向＋技術＋短線動能）
 
 
 if __name__ == "__main__":

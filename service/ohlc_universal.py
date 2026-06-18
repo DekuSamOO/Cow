@@ -27,12 +27,12 @@ KIND_LABEL = {"crypto": "加密貨幣", "tw_stock": "台股", "us_stock": "美�
 
 def classify_symbol(raw: str) -> dict:
     """
-    自動判定輸入代號的市場類別並映射到 Yahoo v8 symbol。
+    自動判定輸入代號的市場類別並映射到各資料源 symbol。
 
     規則：純數字 4–6 碼 / 帶 .TW → 台股（補 .TW）；含 USDT/USD/-USD → 加密幣對；
     其餘英文字母 → 美股。BTC 各種寫法統一標記 is_btc=True（路由到完整 BitcoinMonitor）。
 
-    回傳 {kind, display, yahoo, is_btc}。
+    回傳 {kind, display, yahoo, is_btc}；加密另含 {base, binance, coin}（幣安 U本位/幣本位 symbol）。
     """
     s = (raw or "").strip().upper()
     if not s:
@@ -46,16 +46,29 @@ def classify_symbol(raw: str) -> dict:
 
     # 加密（BTC 各寫法 → 完整 BitcoinMonitor）
     if s in ("BTCUSDT", "BTC", "BTCUSD", "XBTUSD", "BTC-USD"):
-        return {"kind": "crypto", "display": "BTCUSDT", "yahoo": "BTC-USD", "is_btc": True}
+        return _crypto_info("BTC", is_btc=True)
     if s.endswith("-USD"):
-        return {"kind": "crypto", "display": s, "yahoo": s, "is_btc": False}
+        return _crypto_info(s[:-4], is_btc=False)
     if s.endswith("USDT"):
-        return {"kind": "crypto", "display": s, "yahoo": f"{s[:-4]}-USD", "is_btc": False}
+        return _crypto_info(s[:-4], is_btc=False)
     if s.endswith("USD"):
-        return {"kind": "crypto", "display": s, "yahoo": f"{s[:-3]}-USD", "is_btc": False}
+        return _crypto_info(s[:-3], is_btc=False)
 
     # 其餘視為美股
     return {"kind": "us_stock", "display": s, "yahoo": s, "is_btc": False}
+
+
+def _crypto_info(base: str, is_btc: bool) -> dict:
+    """以幣別基礎（BTC/ETH/SOL）組出幣安 U本位/幣本位 symbol 與 Yahoo symbol。"""
+    return {
+        "kind": "crypto",
+        "display": f"{base}USDT",
+        "yahoo": f"{base}-USD",
+        "base": base,
+        "binance": f"{base}USDT",        # 幣安 U 本位永續（funding/OI/klines）
+        "coin": f"{base}USD_PERP",       # 幣安幣本位永續（部分幣別才有，抓不到自動略過）
+        "is_btc": is_btc,
+    }
 
 
 def fetch_ohlc(yahoo_symbol: str, rng: str = "2y") -> pd.DataFrame:

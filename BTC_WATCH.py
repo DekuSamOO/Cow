@@ -161,10 +161,17 @@ class BitcoinMonitor:
     TOP_CAP = 93               # derivatives30 + technical25 + onchain20 + sentiment15 + macro事件3
     LOW_CAP = 93               # cycle25 + derivatives20 + technical20 + sentiment15 + onchain10 + macro事件3
 
-    def __init__(self):
+    def __init__(self, symbol="BTCUSDT", coin_symbol="BTCUSD_PERP", is_btc=True,
+                 top_cap=93, low_cap=93, title=None, oi_unit="BTC"):
         self.fapi_url = "https://fapi.binance.com/fapi/v1"
         self.fdata_url = "https://fapi.binance.com/futures/data"
-        self.symbol = "BTCUSDT"
+        self.symbol = symbol
+        self.coin_symbol = coin_symbol   # 幣本位永續 symbol（None=該標的無幣本位合約 → 略過）
+        self.is_btc = is_btc             # False=非 BTC 幣對：停用 ETF/SOPR/BTC.D/四季論/礦工/冪律
+        self.TOP_CAP = top_cap           # 實例級可得天花板（覆蓋下方 class 預設）
+        self.LOW_CAP = low_cap
+        self.title = title or "BTC 雙向監控儀表板 · 逃頂五維 + 抄底六維"
+        self.oi_unit = oi_unit           # 總持倉量單位標籤（BTC / ETH / SOL…）
 
         # 日線 DataFrame + 動態地板每小時刷新一次（避免 60s 迴圈重抓重算）
         self._daily_cache = None
@@ -192,10 +199,16 @@ class BitcoinMonitor:
             u_oi = float(s.get(f"{self.fapi_url}/openInterest",
                                params={"symbol": self.symbol}, timeout=10).json()
                          .get("openInterest", 0))
-            coin_contracts = float(s.get("https://dapi.binance.com/dapi/v1/openInterest",
-                                         params={"symbol": "BTCUSD_PERP"}, timeout=10).json()
-                                   .get("openInterest", 0))
-            coin_oi_btc = (coin_contracts * 100) / close_price if close_price else 0.0
+            # 幣本位永續 OI（僅部分標的有；coin_symbol=None 或抓取失敗 → 計 0 略過）
+            coin_oi_btc = 0.0
+            if self.coin_symbol:
+                try:
+                    coin_contracts = float(s.get("https://dapi.binance.com/dapi/v1/openInterest",
+                                                 params={"symbol": self.coin_symbol}, timeout=10)
+                                           .json().get("openInterest", 0))
+                    coin_oi_btc = (coin_contracts * 100) / close_price if close_price else 0.0
+                except Exception:
+                    coin_oi_btc = 0.0
             return {"close": close_price, "low4h": low_price,
                     "u_oi": u_oi, "coin_oi_btc": coin_oi_btc,
                     "total_oi": u_oi + coin_oi_btc}
@@ -274,13 +287,21 @@ class BitcoinMonitor:
             df = calculate_technical_indicators(df)
             df = calculate_ahr999(df)
             df = calculate_bear_bottom_indicators(df)
+            if not self.is_btc:
+                # 冪律/AHR999 為 BTC 校準 → 其他幣對 NaN 化，使 cycle 冪律子維優雅停用（給 0 分）
+                for col in ("PowerLaw_Ratio", "PowerLaw_Support", "AHR999"):
+                    if col in df.columns:
+                        df[col] = float("nan")
             self._daily_cache = df
-            # 動態地板（hashrate/onchain 無源 → 函式自動略過，退化為四季論趨勢底）
-            try:
-                self._floors_cache = compute_all_bottom_estimates(
-                    float(df.iloc[-1]["close"]), df=df, hashrate_ths=None, onchain=None)
-            except Exception as e:
-                print(f"動態地板計算失敗：{e}")
+            # 動態地板（四季論/礦工/冪律皆 BTC 專屬）→ 僅 BTC 計算；其他幣對於 _support_line 改用 Mayer 估值底
+            if self.is_btc:
+                try:
+                    self._floors_cache = compute_all_bottom_estimates(
+                        float(df.iloc[-1]["close"]), df=df, hashrate_ths=None, onchain=None)
+                except Exception as e:
+                    print(f"動態地板計算失敗：{e}")
+                    self._floors_cache = None
+            else:
                 self._floors_cache = None
             self._fng_cache = self.get_fng()
             self._ext_cache = self._gather_externals()
@@ -297,6 +318,15 @@ class BitcoinMonitor:
         dashboard `_gather_radar_externals` 的精簡鏡像（同 service 單一來源）。
         """
         ext = {"etf": None, "sopr": None, "btcd": None, "macro": None}
+        if not self.is_btc:
+            # 非 BTC 幣對：ETF(Farside BTC)/SOPR(bitcoin-data BTC)/BTC.D 皆 BTC 專屬 → 僅取本地總經事件
+            try:
+                from service.macro_data import get_next_macro_event
+                days = get_next_macro_event().get("days")
+                ext["macro"] = {"event_within_days": days} if days is not None else None
+            except Exception as e:
+                print(f"總經事件取得失敗：{e}")
+            return ext
         try:
             from service.etf_flow import get_etf_flow_summary
             ext["etf"] = get_etf_flow_summary()              # committed db/etf_flow.json（Farside 403 備援）
@@ -325,6 +355,14 @@ class BitcoinMonitor:
         f = self._floors_cache
         if f and f.get("final_low"):
             return f["final_low"], f.get("final_low_basis", "動態地板"), f.get("ensemble_low")
+        if not self.is_btc:
+            # 非 BTC 幣對無 BTC 動態地板 → 改用 Mayer 估值底（2年均×0.6）；算不出則不顯示
+            df = self._daily_cache
+            if df is not None and not df.empty:
+                sma730 = df.iloc[-1].get("SMA_730")
+                if sma730 is not None and not (isinstance(sma730, float) and math.isnan(sma730)) and sma730 > 0:
+                    return float(sma730) * 0.6, "Mayer 估值底(2年均×0.6)", None
+            return None, None, None
         return self.FALLBACK_SUPPORT, "fallback 靜態防線", None
 
     # ── 畫面 ────────────────────────────────────────────────────────────────────
@@ -344,7 +382,6 @@ class BitcoinMonitor:
             fr_txt = f"{funding:.4f}%/8h"
             ann = annualize_funding(funding)
             ann_txt = "—" if ann is None else f"年化 {ann:.0f}%"
-        drop_to = (sup / md["close"] - 1) * 100 if md["close"] else 0.0
 
         # A：日線/地板/外部維度最後刷新時間（每小時一次）+ 漏刷警示
         if self._daily_ts:
@@ -356,18 +393,21 @@ class BitcoinMonitor:
             data_age = "尚未刷新"
 
         header = [
-            "  BTC 雙向監控儀表板 · 逃頂五維 + 抄底六維",
+            f"  {self.title}",
             f"  監測時間  {now}     邏輯來源  {src}",
             f"  交易對    {self.symbol}     刷新週期  60 秒",
         ]
         quote = [
             f"  現價          ${md['close']:>12,.0f}",
             f"  4h 最低       ${md['low4h']:>12,.0f}",
-            f"  動態地板      ${sup:>12,.0f}   （{basis}，需 {drop_to:+.1f}% 觸及）",
         ]
+        # 地板僅在算得出時顯示（非 BTC 幣對可能無估值底）
+        if sup is not None:
+            drop_to = (sup / md["close"] - 1) * 100 if md["close"] else 0.0
+            quote.append(f"  動態地板      ${sup:>12,.0f}   （{basis}，需 {drop_to:+.1f}% 觸及）")
         if ens:
             quote.append(f"  多錨中位      ${ens:>12,.0f}   （需 {(ens/md['close']-1)*100:+.1f}% 觸及）")
-        quote.append(f"  總持倉量      {md['total_oi']:>12,.0f} BTC （U {md['u_oi']:,.0f} + 幣本位 {md['coin_oi_btc']:,.0f}）")
+        quote.append(f"  總持倉量      {md['total_oi']:>12,.0f} {self.oi_unit} （U {md['u_oi']:,.0f} + 幣本位 {md['coin_oi_btc']:,.0f}）")
         oi_line = "✕ 擷取失敗" if ch is None else f"{ch:+.2f}% (1h滾動)"
         pct_line = "" if pct is None else f"  |  近30日分位 {pct:.0f}%"
         quote.append(f"  OI 變化       {oi_line}{pct_line}")
