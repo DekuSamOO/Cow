@@ -30,9 +30,9 @@ if _COW not in sys.path:
 from core.indicators import calculate_technical_indicators          # noqa: E402
 from core.trend_direction import compute_trend_score                # noqa: E402
 from service.ohlc_universal import classify_symbol, fetch_ohlc, KIND_LABEL  # noqa: E402
-# 重用 BTC_WATCH 既有的畫框 / 面板 helper（單一真實來源，不重造）
+# 重用 BTC_WATCH 既有的畫框 / 面板 / 等待 helper（單一真實來源，不重造）
 from BTC_WATCH import (BitcoinMonitor, _title, _row, _edge, _dw,     # noqa: E402
-                       _short_momentum, _panel_trend)
+                       _short_momentum, _panel_trend, interruptible_wait)
 
 
 def _fmt_price(v: float) -> str:
@@ -128,7 +128,7 @@ class UniversalMonitor:
             print(_row(r, W))
         print(_edge("└", "─", "┘", W))
 
-        print(f"\n  下次刷新 {nxt}    （Ctrl+C 結束）")
+        print(f"\n  下次刷新 {nxt}    （b 重選代號｜q 結束）")
 
     def run(self):
         while True:
@@ -143,7 +143,9 @@ class UniversalMonitor:
                 print(f"擷取失敗（{self.yahoo}）：{e}\n10 秒後重試…")
                 time.sleep(10)
                 continue
-            time.sleep(self.REFRESH_SEC)
+            cmd = interruptible_wait(self.REFRESH_SEC, nav=True)
+            if cmd:
+                return cmd          # 'back'（回上層重選）/ 'quit'（結束）
 
 
 def _prompt_symbol() -> str:
@@ -154,35 +156,51 @@ def _prompt_symbol() -> str:
     return input("  代號 > ").strip()
 
 
-def main():
-    raw = sys.argv[1] if len(sys.argv) > 1 else _prompt_symbol()
-    try:
-        info = classify_symbol(raw)
-    except ValueError as e:
-        print(f"[錯誤] {e}")
-        return
-    kind_label = KIND_LABEL.get(info["kind"], info["kind"])
+def _build_monitor(info: dict):
+    """依市場類別建對應 monitor（nav=True → 儀表板內可按鍵回上層/結束）。"""
     if info["is_btc"]:
-        label = "BTC 完整雙向雷達（逃頂五維＋抄底六維）"
-    elif info["kind"] == "crypto":
-        label = f"{info['base']} 加密雙向雷達（逃頂/抄底，停用 BTC 專屬維度）"
-    else:
-        label = f"{kind_label} 通用軸（趨勢方向）"
-    print(f"\n→ 判定：{info['display']}（{kind_label}）→ {label}\n")
-    time.sleep(0.8)
-
-    if info["is_btc"]:
-        BitcoinMonitor().run()                      # 完整逃頂五維＋抄底六維（原封不動）
-    elif info["kind"] == "crypto":
+        return BitcoinMonitor(nav=True)             # 完整逃頂五維＋抄底六維（原封不動）
+    if info["kind"] == "crypto":
         # 非 BTC 幣對：完整逃頂/抄底，但停用 BTC 專屬維度（ETF/SOPR/BTC.D/四季論/礦工/冪律）
         # 可得天花板：逃頂 derivatives30+technical25+F&G10+事件3=68；抄底 cycle19+deriv20+tech20+F&G10+事件3=72
-        BitcoinMonitor(
+        return BitcoinMonitor(
             symbol=info["binance"], coin_symbol=info["coin"], is_btc=False,
-            top_cap=68, low_cap=72, oi_unit=info["base"],
+            top_cap=68, low_cap=72, oi_unit=info["base"], nav=True,
             title=f"{info['base']} 加密雙向監控 · 逃頂(可得≤68) + 抄底(可得≤72)",
-        ).run()
-    else:
-        UniversalMonitor(info).run()                # 股票：通用軸（趨勢方向＋技術＋短線動能）
+        )
+    return UniversalMonitor(info)                   # 股票：通用軸（趨勢方向＋技術＋短線動能）
+
+
+def main():
+    """輸入代號 → 進儀表板；儀表板內按 b 回此處重選、q 結束（Ctrl+C 亦可強制結束）。"""
+    argv_raw = sys.argv[1] if len(sys.argv) > 1 else None
+    while True:
+        raw = argv_raw or _prompt_symbol()
+        argv_raw = None                             # 命令列代號只用第一次；回上層後一律重新提示
+        try:
+            info = classify_symbol(raw)
+        except ValueError as e:
+            print(f"[錯誤] {e}")
+            continue
+        kind_label = KIND_LABEL.get(info["kind"], info["kind"])
+        if info["is_btc"]:
+            label = "BTC 完整雙向雷達（逃頂五維＋抄底六維）"
+        elif info["kind"] == "crypto":
+            label = f"{info['base']} 加密雙向雷達（逃頂/抄底，停用 BTC 專屬維度）"
+        else:
+            label = f"{kind_label} 通用軸（趨勢方向）"
+        print(f"\n→ 判定：{info['display']}（{kind_label}）→ {label}\n")
+        time.sleep(0.8)
+
+        try:
+            cmd = _build_monitor(info).run()
+        except KeyboardInterrupt:
+            print("\n結束。")
+            return
+        if cmd == "quit":
+            print("\n結束。")
+            return
+        # cmd == 'back'（或 None）→ 回到迴圈頂端重選代號
 
 
 if __name__ == "__main__":

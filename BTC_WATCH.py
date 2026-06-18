@@ -150,6 +150,32 @@ def _panel_trend(result, name, dims):
     return title, rows
 
 
+def interruptible_wait(seconds, nav=False):
+    """
+    等待 seconds 秒。nav=True（由 watcher 進入）時偵測鍵盤指令並提早返回：
+      b / Enter → 'back'（回上層重選代號）；q → 'quit'（結束）。回傳指令字串或 None。
+    nav=False（BTC_WATCH 單獨執行）或非 Windows 無 msvcrt → 純 sleep、不收指令（行為不變）。
+    """
+    if not nav:
+        time.sleep(seconds)
+        return None
+    try:
+        import msvcrt
+    except ImportError:
+        time.sleep(seconds)
+        return None
+    end = time.time() + seconds
+    while time.time() < end:
+        if msvcrt.kbhit():
+            ch = msvcrt.getch()
+            if ch in (b"b", b"B", b"\r", b"\n"):
+                return "back"
+            if ch in (b"q", b"Q"):
+                return "quit"
+        time.sleep(0.1)
+    return None
+
+
 class BitcoinMonitor:
     """BTC 雙向監控儀表板：逃頂五維（relative_high）+ 抄底六維（relative_low）。"""
 
@@ -162,7 +188,7 @@ class BitcoinMonitor:
     LOW_CAP = 93               # cycle25 + derivatives20 + technical20 + sentiment15 + onchain10 + macro事件3
 
     def __init__(self, symbol="BTCUSDT", coin_symbol="BTCUSD_PERP", is_btc=True,
-                 top_cap=93, low_cap=93, title=None, oi_unit="BTC"):
+                 top_cap=93, low_cap=93, title=None, oi_unit="BTC", nav=False):
         self.fapi_url = "https://fapi.binance.com/fapi/v1"
         self.fdata_url = "https://fapi.binance.com/futures/data"
         self.symbol = symbol
@@ -172,6 +198,7 @@ class BitcoinMonitor:
         self.LOW_CAP = low_cap
         self.title = title or "BTC 雙向監控儀表板 · 逃頂五維 + 抄底六維"
         self.oi_unit = oi_unit           # 總持倉量單位標籤（BTC / ETH / SOL…）
+        self.nav = nav                   # True=由 watcher 進入 → 儀表板內可按鍵回上層/結束
 
         # 日線 DataFrame + 動態地板每小時刷新一次（避免 60s 迴圈重抓重算）
         self._daily_cache = None
@@ -464,7 +491,8 @@ class BitcoinMonitor:
                 print(_row(r, W))
             print(_edge("└", "─", "┘", W))
 
-        print(f"\n  下次刷新 {nxt}    （Ctrl+C 結束）")
+        hint = "b 重選代號｜q 結束" if self.nav else "Ctrl+C 結束"
+        print(f"\n  下次刷新 {nxt}    （{hint}）")
 
     def render_simple(self, md, funding, oi_stats):
         """Cow 不可用時的極簡畫面。"""
@@ -512,7 +540,9 @@ class BitcoinMonitor:
             else:
                 self.render_simple(md, funding, oi_stats)
 
-            time.sleep(60)
+            cmd = interruptible_wait(60, nav=self.nav)
+            if cmd:
+                return cmd          # 'back'（回上層重選）/ 'quit'（結束）→ 交給 watcher 處理
 
 
 if __name__ == "__main__":
