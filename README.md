@@ -25,8 +25,8 @@
 app.py              入口點（組合各層，不含業務邏輯；今日大盤速覽 6 大 Metric 以 @st.fragment(run_every=60) 每 60 秒自動更新）
 config.py           集中設定（均線週期、交易成本、倉位風控參數、WALK_FORWARD_EXIT_MODES、警報門檻/分級/遲滯常數、底部模型演算法參數：可靠度權重/礦工電價/效率 anchors 等單一可調來源）
 data_manager.py     根層級數據管理器（TVL/穩定幣/資金費率歷史 SQLite 快取、指數退避重試、增量模式）
-BTC_WATCH.py        BTC 雙向監控終端儀表板**正本**（2026-06-10 起由 Crypto repo 移入本 repo 維護）：純幣安 fapi/dapi + path import core 的逃頂五維/抄底六維/趨勢方向四維評分，60 秒刷新。`BitcoinMonitor` 已參數化（symbol/coin_symbol/is_btc/top_cap/low_cap/title/oi_unit，全部預設 BTC 向後相容）：非 BTC 時停用 ETF/SOPR/BTC.D/四季論/礦工/冪律等 BTC 專屬維度、地板改 Mayer 估值底
-watcher.py          通用標的監控入口：`python watcher.py` 輸入代號 → classify_symbol 自動判市場路由 —— BTC→完整 BitcoinMonitor；其他幣對→參數化 BitcoinMonitor(is_btc=False, top_cap=68/low_cap=72) 跑逃頂/抄底；美股/台股→UniversalMonitor（僅通用軸：趨勢方向±100＋技術＋短線動能，日線每小時快取）。畫框/面板 helper 重用 BTC_WATCH 單一來源
+BTC_WATCH.py        BTC 雙向監控終端儀表板**正本**（2026-06-10 起由 Crypto repo 移入本 repo 維護）：純幣安 fapi/dapi + path import core 的逃頂五維/抄底六維/趨勢方向四維評分，60 秒刷新。頂部「操作訊號（三軸融合）」banner 由 composite_signal 算出（三軸皆有才顯示）。`BitcoinMonitor` 已參數化（symbol/coin_symbol/is_btc/top_cap/low_cap/title/oi_unit/nav，全部預設 BTC 向後相容）：非 BTC 時停用 ETF/SOPR/BTC.D/四季論/礦工/冪律等 BTC 專屬維度、地板改 Mayer 估值底；nav=True（由 watcher 進入）時 interruptible_wait 偵測鍵盤 b 回上層／q 結束（單獨執行 nav=False 純 sleep，行為不變）
+watcher.py          通用標的監控入口：`python watcher.py` 輸入代號 → classify_symbol 自動判市場路由 —— BTC→完整 BitcoinMonitor；其他幣對→參數化 BitcoinMonitor(is_btc=False, top_cap=68/low_cap=72) 跑逃頂/抄底；美股/台股→UniversalMonitor（通用軸：趨勢方向±100＋技術＋短線動能＋趨勢×短線操作訊號 banner，日線每小時快取）。main 為 while 迴圈（儀表板內 b 重選代號／q 結束）；畫框/面板/操作訊號 helper（_panel_stance 等）重用 BTC_WATCH 單一來源
 
 collector/
   btc_price_collector.py  本地端 15m K 線收集器（Binance + Kraken 雙源，年度 SQLite 分割，支援 --push；每日市場快照末順手強制刷新 db/etf_flow.json，git_push 一併提交）
@@ -50,6 +50,7 @@ core/
   trend_direction.py  趨勢方向（波段雷達第三軸）單一真實來源：四維**有號**評分（均線結構±40/MACD±30/斜率±15/ADX±15）→ 淨分 [-100,+100]，ADX<20 方向三維打 0.6 折防盤整假突破；compute_trend_score/trend_meta/compute_trend_direction 供 dashboard/BTC_WATCH/LINE 共用，無 Streamlit 依賴
   radar_replay.py     三雷達歷史每日分數回放（逐日重放逃頂/抄底/趨勢分數，DIV_WINDOW 視窗切片避免 O(n²)）+ threshold_forward_stats（門檻向上跨越事件 → 其後 60 日報酬分布，±18% 命中定義與權重擬合一致、cooldown 防重複計數）；僅用歷史可得輸入（OI/ETF/SOPR/BTC.D/總經與線上灰燈一致給 0 → 分數為保守下界），無 Streamlit 依賴
   action_ensemble.py  三軸合成行動建議單一真實來源 compute_composite_action（趨勢方向 × 逃頂 × 抄底 → 11 種行動 + 建議倉位區間【專家設定，未擬合】）；dashboard 與 LINE 推播共用，邊界與 trend_meta/escape_top_meta/relative_low_meta/ESCAPE_ALERT_THRESHOLD 對齊，無 Streamlit 依賴
+  composite_signal.py 監控終端用三軸融合操作訊號（純函數、零網路）：compute_composite_signal（逃頂×抄底×趨勢→5 態 stance：估值到底·等止穩/分批進場/減碼出場/順勢持有/觀望，切點全沿用各軸既有等級 TREND_STRONG_BEAR/BULL ±50/+20、TOP_OVERHEAT/LOW_UNDERVALUED 60、CYCLE_DEEP_VALUE 22，不新增門檻擬合）；compute_trend_stance（股票/無衍生品標的精簡版：趨勢×短線動能）。供 BTC_WATCH/watcher 終端 banner 共用
 
 service/
   local_db_reader.py  讀取本地 SQLite（15m 原始 / 重採樣日線），TTL 快取，全面 UTC 時區
@@ -371,6 +372,8 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 ### v3.17 (2026-06-18)
 - **feat(watch)**: 新增「通用標的監控」—— `watcher.py` 入口輸入代號後自動判市場路由：BTC→完整 BitcoinMonitor、其他幣對→參數化 BitcoinMonitor(is_btc=False, top_cap=68/low_cap=72) 跑逃頂/抄底但停用 BTC 專屬維度、美股/台股→`UniversalMonitor`（僅通用軸：趨勢方向±100＋技術＋短線動能）。新增 `service/ohlc_universal.py`（classify_symbol 判市場 + fetch_ohlc 直連 Yahoo v8 chart，避 yfinance 公司 IP 429）與 PoC `scripts/universal_watch_poc.py`。`BTC_WATCH.BitcoinMonitor` 參數化（symbol/coin_symbol/is_btc/top_cap/low_cap/title/oi_unit 全部預設 BTC 向後相容）。
 - **refactor(simplify)**: PoC 移除自帶的 `_short_momentum`/`_bar_signed` 改 import BTC_WATCH 單一來源（消兩邊漂移、刪未用 `math`）；`UniversalMonitor` 日線改每小時快取（比照 BitcoinMonitor，避 60s 迴圈重抓 2y OHLC＋重算指標）；`watcher.main` 收斂重複的 `KIND_LABEL.get`。
+- **feat(watch)**: 新增 `core/composite_signal.py`（三軸融合操作訊號，純函數零網路）：`compute_composite_signal`（逃頂×抄底×趨勢→5 態 stance，切點全沿用各軸既有等級不新增門檻擬合）＋ `compute_trend_stance`（股票精簡版：趨勢×短線動能）。`BitcoinMonitor.render` 頂部加「操作訊號（三軸融合）」banner（三軸皆有才顯示）、`UniversalMonitor.render` 加「操作訊號（趨勢×短線）」banner。儀表板內按鍵導覽：`interruptible_wait` 偵測 b 回上層／q 結束（`BitcoinMonitor(nav=...)`，nav=False 純 sleep 向後相容）；`watcher.main` 改 while 迴圈。新增離線回測 `scripts/backtest_composite.py`（2 年 composite 前瞻報酬）、`scripts/backtest_radar_at_date.py`（指定日期回算逃頂/抄底）。
+- **refactor(simplify)**: 抽 `BTC_WATCH._panel_stance` 收斂 BitcoinMonitor/UniversalMonitor 重複的「stance→banner」格式化（gate 各自保留）；`composite_signal` 補 `TREND_STRONG_BULL` 常數取代裸字面；`backtest_radar_at_date` F&G 改 `fetch_fng_map` 在 main 抓一次傳入（消多日期重複下載）。
 
 ### v3.16 (2026-06-17)
 - **feat(radar)**: 資費門檻以幣安資費史回歸重校（取代鎖在罕見極值的舊階梯）。新增 `tests/funding_threshold_calib.py`（離線手動跑，非 pytest）：以幣安資費史(2020-12+, ~2000日)回歸，各年化資費桶 → 其後 60 日最大回撤/反彈 + 頂/底單維 AUC + Youden 門檻。關鍵發現——後 60 日回撤在年化 ≥30% 由 ~-10% 翻倍至 ~-18%（轉折）、≥50% 飽和、≥70% 未更深；年化 ≥90% 僅 35 日(1.76%)全在 2021 狂熱且不更準。負費率判別力在「淺負」(Youden 最佳 ≤-3%)；≤-15/-20/-30% 僅 8/4/3 日(危機)、召回崩到 3%。

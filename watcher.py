@@ -33,7 +33,7 @@ from core.composite_signal import compute_trend_stance              # noqa: E402
 from service.ohlc_universal import classify_symbol, fetch_ohlc, KIND_LABEL  # noqa: E402
 # 重用 BTC_WATCH 既有的畫框 / 面板 / 等待 helper（單一真實來源，不重造）
 from BTC_WATCH import (BitcoinMonitor, _title, _row, _edge, _dw,     # noqa: E402
-                       _short_momentum, _panel_trend, interruptible_wait)
+                       _short_momentum, _panel_trend, _panel_stance, interruptible_wait)
 
 
 def _fmt_price(v: float) -> str:
@@ -98,8 +98,7 @@ class UniversalMonitor:
                                                ("ma_structure", "macd", "slope", "adx"))
         # 頭條操作訊號：趨勢方向（中長期）× 短線動能（這週，正交）→ stance
         _, st_lvl, _, st_act = compute_trend_stance(trend[0], mom)
-        comp_title = f"操作訊號（趨勢×短線）  {st_lvl}"
-        comp_rows = [f"  → {st_act}"]
+        comp_title, comp_rows = _panel_stance("操作訊號（趨勢×短線）", st_lvl, st_act)
         note = [
             "  ⚠ 非 BTC 標的：逃頂/抄底雙向雷達需加密永續(資金費率/OI)與 BTC 鏈上/減半",
             "     週期資料，股票無對應 → 本版僅通用軸（股票版逃頂抄底列為後續 Phase）。",

@@ -68,14 +68,12 @@ def funding_at(s, date):
     return float(r[-1]["fundingRate"]) * 100 if r else None
 
 
-def fng_at(s, date):
-    """當日恐懼貪婪指數（alternative.me 歷史 ~400 天）。"""
-    r = s.get("https://api.alternative.me/fng/", params={"limit": 400, "format": "json"},
+def fetch_fng_map(s, limit=400):
+    """{date: 恐懼貪婪指數}（alternative.me 歷史 ~400 天）。多日期回測時只抓一次。"""
+    r = s.get("https://api.alternative.me/fng/", params={"limit": limit, "format": "json"},
               timeout=15).json()
-    for d in r.get("data", []):
-        if dt.datetime.fromtimestamp(int(d["timestamp"]), _UTC).date() == date:
-            return float(d["value"])
-    return None
+    return {dt.datetime.fromtimestamp(int(d["timestamp"]), _UTC).date(): float(d["value"])
+            for d in r.get("data", [])}
 
 
 def _print_panel(name, result, meta_fn, cap, dims):
@@ -87,14 +85,14 @@ def _print_panel(name, result, meta_fn, cap, dims):
     print(f"    → {action}")
 
 
-def backtest(s, df, date):
+def backtest(s, df, date, fng_map):
     df_t = df.loc[:f"{date} 23:59"]
     if df_t.empty:
         print(f"[{date}] 無日線資料"); return
     row = df_t.iloc[-1]
     close = float(row["close"])
     funding = funding_at(s, date)
-    fng = fng_at(s, date)
+    fng = fng_map.get(date)
 
     # 歷史不可重建的維度一律 None（OI/onchain/BTC.D/macro）
     common = dict(funding_8h=funding, oi_stats=None, fng=fng,
@@ -117,9 +115,10 @@ def main():
     dates = sys.argv[1:] or ["2026-05-06", "2026-06-05"]
     s = _session()
     df = fetch_daily(s)
+    fng_map = fetch_fng_map(s)
     print(f"日線 {len(df)} 根，{df.index[0].date()} ~ {df.index[-1].date()}")
     for d in dates:
-        backtest(s, df, dt.date.fromisoformat(d))
+        backtest(s, df, dt.date.fromisoformat(d), fng_map)
     print(f"\n{'═' * 64}")
     print("  註：OI/onchain/BTC.D/macro 歷史不可重建 → 灰燈(0)；分數為「可重建子集」，"
           "故與即時版（可得≤93）不可直接相比，看絕對高低與維度分佈即可。")

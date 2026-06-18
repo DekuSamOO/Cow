@@ -151,6 +151,11 @@ def _panel_trend(result, name, dims):
     return title, rows
 
 
+def _panel_stance(prefix, level, action):
+    """操作訊號（stance 四元組 → banner）共用格式：BitcoinMonitor/UniversalMonitor 同一份呈現。"""
+    return f"{prefix}  {level}", [f"  → {action}"]
+
+
 def interruptible_wait(seconds, nav=False):
     """
     等待 seconds 秒。nav=True（由 watcher 進入）時偵測鍵盤指令並提早返回：
@@ -459,12 +464,11 @@ class BitcoinMonitor:
         if top is not None and low is not None and trend is not None:
             _, c_lvl, _, c_act = compute_composite_signal(
                 trend[0], top[0], low[0], low[1]["cycle"]["score"])
-            comp_title = f"操作訊號（三軸融合）  {c_lvl}"
-            comp_rows = [f"  → {c_act}"]
+            comp_title, comp_rows = _panel_stance("操作訊號（三軸融合）", c_lvl, c_act)
 
         # 動態框寬 = 最長內容/標題行 + 邊距（右框一律對齊，cycle 長行不溢出）
         content_w = max((_dw(c) for c in (header + quote + top_rows + low_rows + trend_rows + comp_rows)), default=40)
-        title_w = max(_dw(t) for t in (top_title, low_title, trend_title, comp_title or "操作訊號", "即時行情")) + 4
+        title_w = max(_dw(t) for t in (top_title, low_title, trend_title, comp_title, "即時行情")) + 4
         W = max(content_w, title_w) + 2
 
         print(_edge("╔", "═", "╗", W))

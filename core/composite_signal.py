@@ -19,6 +19,7 @@ from typing import Tuple
 
 # 切點（全部沿用各軸既有等級，非本模組新增）
 TREND_STRONG_BEAR = -50   # trend_meta：≤-50 為強空頭趨勢
+TREND_STRONG_BULL = 50    # trend_meta：≥+50 為強多頭趨勢
 TREND_BULL = 20           # trend_meta：≥+20 為多頭趨勢
 TOP_OVERHEAT = 60         # escape_top_meta：≥60「明確過熱」
 LOW_UNDERVALUED = 60      # relative_low_meta：≥60「明確低估」
@@ -73,7 +74,7 @@ def compute_trend_stance(trend_net: int, mom_label: str = None) -> Tuple[str, st
     if trend_net <= TREND_STRONG_BEAR:
         return ("exit", "🔴 減碼/出場", "#ff4b4b",
                 "強空頭趨勢——減碼/觀望，趨勢未轉不搶反彈")
-    if trend_net >= 50:
+    if trend_net >= TREND_STRONG_BULL:
         return ("hold_long", "🟢 順勢持有/加碼", "#00cc88",
                 "強多頭趨勢——順勢持有，回踩均線找加碼點")
     if trend_net >= TREND_BULL:
