@@ -47,17 +47,25 @@ def _fmt_price(v: float) -> str:
 class UniversalMonitor:
     """非 BTC 標的的通用監控（趨勢方向＋技術＋短線動能）。資料走 Yahoo v8 chart。"""
 
-    REFRESH_SEC = 60
+    REFRESH_SEC = 60            # 畫面刷新（時鐘）
+    DAILY_REFRESH_SEC = 3600    # 日線重抓+重算間隔（日 K 不會分鐘級變動，比照 BitcoinMonitor）
 
     def __init__(self, info: dict):
         self.info = info            # {kind, display, yahoo, is_btc}
         self.display = info["display"]
         self.yahoo = info["yahoo"]
         self.kind_label = KIND_LABEL.get(info["kind"], info["kind"])
+        self._daily_cache = None
+        self._daily_ts = 0.0
 
     def _fetch(self):
-        df = fetch_ohlc(self.yahoo)
-        return calculate_technical_indicators(df)
+        """日線每小時重抓+重算一次（避免 60s 迴圈重抓 2y OHLC 與全套指標）。"""
+        if self._daily_cache is None or (time.time() - self._daily_ts) >= self.DAILY_REFRESH_SEC:
+            df = calculate_technical_indicators(fetch_ohlc(self.yahoo))
+            if df is not None and not df.empty and len(df) >= 50:
+                self._daily_cache = df
+                self._daily_ts = time.time()
+        return self._daily_cache
 
     def render(self, df):
         os.system("cls" if os.name == "nt" else "clear")
@@ -153,13 +161,14 @@ def main():
     except ValueError as e:
         print(f"[錯誤] {e}")
         return
+    kind_label = KIND_LABEL.get(info["kind"], info["kind"])
     if info["is_btc"]:
         label = "BTC 完整雙向雷達（逃頂五維＋抄底六維）"
     elif info["kind"] == "crypto":
         label = f"{info['base']} 加密雙向雷達（逃頂/抄底，停用 BTC 專屬維度）"
     else:
-        label = f"{KIND_LABEL.get(info['kind'])} 通用軸（趨勢方向）"
-    print(f"\n→ 判定：{info['display']}（{KIND_LABEL.get(info['kind'])}）→ {label}\n")
+        label = f"{kind_label} 通用軸（趨勢方向）"
+    print(f"\n→ 判定：{info['display']}（{kind_label}）→ {label}\n")
     time.sleep(0.8)
 
     if info["is_btc"]:

@@ -25,7 +25,6 @@ scripts/universal_watch_poc.py  ·  PoC
 """
 import os
 import sys
-import math
 
 import urllib3
 
@@ -38,44 +37,8 @@ if _COW not in sys.path:
 from core.indicators import calculate_technical_indicators          # noqa: E402
 from core.trend_direction import compute_trend_score, trend_meta    # noqa: E402
 from service.ohlc_universal import fetch_ohlc                        # noqa: E402
-
-
-def _short_momentum(df):
-    """近 7 根報酬 + 價 vs EMA_20 + RSI_14（與 BTC_WATCH._short_momentum 同義，通用）。"""
-    if df is None or len(df) < 8:
-        return "—"
-    close = float(df["close"].iloc[-1])
-    prev7 = float(df["close"].iloc[-8])
-    ret7 = (close / prev7 - 1) * 100 if prev7 else 0.0
-
-    def _last(col):
-        if col not in df.columns:
-            return None
-        v = df[col].iloc[-1]
-        return None if v is None or (isinstance(v, float) and math.isnan(v)) else float(v)
-
-    ema20, rsi = _last("EMA_20"), _last("RSI_14")
-    above = None if ema20 is None else close > ema20
-    if ret7 > 0 and above is True:
-        lbl = "🟢 短線偏多"
-    elif ret7 < 0 and above is False:
-        lbl = "🔴 短線偏空"
-    else:
-        lbl = "⚪ 短線中性"
-    parts = [f"近7根 {ret7:+.1f}%"]
-    if above is not None:
-        parts.append("價>EMA20" if above else "價<EMA20")
-    if rsi is not None:
-        parts.append(f"RSI {rsi:.0f}")
-    return f"{lbl}  " + "｜".join(parts)
-
-
-def _bar_signed(net):
-    """有號淨方向分置中條（沿用 BTC_WATCH 風格）。"""
-    mag = int(round(min(abs(net), 100) / 100 * 5))
-    if net >= 0:
-        return "░" * 5 + "│" + "█" * mag + "░" * (5 - mag)
-    return "░" * (5 - mag) + "█" * mag + "│" + "░" * 5
+# 短線動能 / 有號方向條沿用 BTC_WATCH 的單一真實來源，不在 PoC 另造（避免兩邊漂移）
+from BTC_WATCH import _short_momentum, _bar_signed                  # noqa: E402
 
 
 def analyze(symbol: str):
@@ -90,7 +53,7 @@ def analyze(symbol: str):
     print(f"{'═' * 60}")
     print(f"  最新日期      {df.index[-1].date()}    共 {len(df)} 根日線")
     print(f"  收盤          {float(row['close']):,.2f}")
-    print(f"  短線動能      {_short_momentum(df)}")
+    print(f"  短線動能      {_short_momentum(df) or '—'}")
     print(f"{'─' * 60}")
     print(f"  趨勢方向      {net:+d}/±100  {_bar_signed(net)}  {level}")
     for d in ("ma_structure", "macd", "slope", "adx"):
