@@ -29,6 +29,7 @@ if _COW not in sys.path:
 
 from core.indicators import calculate_technical_indicators          # noqa: E402
 from core.trend_direction import compute_trend_score                # noqa: E402
+from core.composite_signal import compute_trend_stance              # noqa: E402
 from service.ohlc_universal import classify_symbol, fetch_ohlc, KIND_LABEL  # noqa: E402
 # 重用 BTC_WATCH 既有的畫框 / 面板 / 等待 helper（單一真實來源，不重造）
 from BTC_WATCH import (BitcoinMonitor, _title, _row, _edge, _dw,     # noqa: E402
@@ -95,13 +96,17 @@ class UniversalMonitor:
         ]
         trend_title, trend_rows = _panel_trend(trend, "趨勢方向（順勢）",
                                                ("ma_structure", "macd", "slope", "adx"))
+        # 頭條操作訊號：趨勢方向（中長期）× 短線動能（這週，正交）→ stance
+        _, st_lvl, _, st_act = compute_trend_stance(trend[0], mom)
+        comp_title = f"操作訊號（趨勢×短線）  {st_lvl}"
+        comp_rows = [f"  → {st_act}"]
         note = [
             "  ⚠ 非 BTC 標的：逃頂/抄底雙向雷達需加密永續(資金費率/OI)與 BTC 鏈上/減半",
             "     週期資料，股票無對應 → 本版僅通用軸（股票版逃頂抄底列為後續 Phase）。",
         ]
 
-        content_w = max((_dw(c) for c in (header + quote + trend_rows + note)), default=40)
-        W = max(content_w, _dw(trend_title) + 4, _dw("即時行情") + 4) + 2
+        content_w = max((_dw(c) for c in (header + quote + trend_rows + comp_rows + note)), default=40)
+        W = max(content_w, _dw(trend_title) + 4, _dw(comp_title) + 4, _dw("即時行情") + 4) + 2
 
         print(_edge("╔", "═", "╗", W))
         print(_row(header[0], W, "║"))
@@ -113,6 +118,12 @@ class UniversalMonitor:
         print()
         print(_title("即時行情", W))
         for r in quote:
+            print(_row(r, W))
+        print(_edge("└", "─", "┘", W))
+
+        print()
+        print(_title(comp_title, W))
+        for r in comp_rows:
             print(_row(r, W))
         print(_edge("└", "─", "┘", W))
 

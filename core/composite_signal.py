@@ -56,3 +56,35 @@ def compute_composite_signal(
                 "趨勢多頭且未過熱——順勢持有，回踩均線找加碼點")
     return ("neutral", "⚪ 觀望", "#9e9e9e",
             "無明確訊號（盤整/估值與方向皆中性）——區間操作，勿追突破")
+
+
+def compute_trend_stance(trend_net: int, mom_label: str = None) -> Tuple[str, str, str, str]:
+    """
+    股票/無衍生品標的用：趨勢方向（中長期）× 短線動能（這週，正交）→ 操作 stance。
+    無逃頂/抄底/cycle 可用時的精簡版 composite；切點沿用 trend_meta 的 ±50/±20（不新增門檻），
+    再用短線動能補「多頭回檔 / 空頭反彈」層次（比單看趨勢面板多一層）。
+
+    trend_net：compute_trend_score 淨方向分（-100..+100）。
+    mom_label：BTC_WATCH._short_momentum 回傳的字串（含「偏多」/「偏空」/「中性」），可選。
+    """
+    up = bool(mom_label and "偏多" in mom_label)
+    down = bool(mom_label and "偏空" in mom_label)
+
+    if trend_net <= TREND_STRONG_BEAR:
+        return ("exit", "🔴 減碼/出場", "#ff4b4b",
+                "強空頭趨勢——減碼/觀望，趨勢未轉不搶反彈")
+    if trend_net >= 50:
+        return ("hold_long", "🟢 順勢持有/加碼", "#00cc88",
+                "強多頭趨勢——順勢持有，回踩均線找加碼點")
+    if trend_net >= TREND_BULL:
+        if down:
+            return ("pullback", "🟡 多頭回檔", "#ffcc00",
+                    "多頭趨勢但短線轉弱——持有/等回踩，勿追高")
+        return ("hold_long", "🟢 順勢持有", "#00aa66", "多頭趨勢——順勢持有")
+    if trend_net <= -TREND_BULL:
+        if up:
+            return ("bounce", "🟡 空頭反彈", "#ff8800",
+                    "空頭趨勢中的短線反彈——勿追，反彈減碼")
+        return ("reduce", "🔴 偏空減碼", "#ff8800", "空頭趨勢——偏空操作/減碼")
+    return ("neutral", "⚪ 觀望", "#9e9e9e",
+            "盤整無明確方向——區間操作，勿追突破")
