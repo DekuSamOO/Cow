@@ -28,44 +28,16 @@ import sys
 import math
 
 import urllib3
-import requests
-import pandas as pd
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# ── 單一真實來源：重用 Cow core（與 BTC_WATCH.py 相同的 path import 慣例）──────────
+# ── 單一真實來源：重用 Cow core / service（與 BTC_WATCH.py 相同的 path import 慣例）──
 _COW = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _COW not in sys.path:
     sys.path.insert(0, _COW)
 from core.indicators import calculate_technical_indicators          # noqa: E402
 from core.trend_direction import compute_trend_score, trend_meta    # noqa: E402
-
-_YF_CHART = "https://query1.finance.yahoo.com/v8/finance/chart/"
-_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-
-
-def fetch_ohlc(symbol: str, rng: str = "2y") -> pd.DataFrame:
-    """
-    Yahoo v8 chart JSON → 日線 OHLCV，欄位用 core 期望的 lowercase、index 去時區。
-    延伸到股票的關鍵：同一個函式吃 BTC-USD / AAPL / NVDA / 2330.TW，與 Binance 無關。
-    """
-    s = requests.Session()
-    s.verify = False  # 公司 SSL 攔截環境（見全域 CLAUDE.md）
-    s.headers.update({"User-Agent": _UA})
-    r = s.get(_YF_CHART + symbol, params={"range": rng, "interval": "1d"}, timeout=20)
-    r.raise_for_status()
-    res = r.json()["chart"]["result"][0]
-    q = res["indicators"]["quote"][0]
-    df = pd.DataFrame({
-        "open": q["open"], "high": q["high"], "low": q["low"],
-        "close": q["close"], "volume": q["volume"],
-    }, index=pd.to_datetime(res["timestamp"], unit="s"))
-    df = df[df["close"].notna()].copy()   # 停牌/缺資料的列剔除
-    df.index = df.index.tz_localize(None)
-    if df.empty:
-        raise RuntimeError(f"無資料：{symbol}")
-    return df
+from service.ohlc_universal import fetch_ohlc                        # noqa: E402
 
 
 def _short_momentum(df):
