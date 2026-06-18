@@ -151,7 +151,7 @@ class UniversalMonitor:
 def _prompt_symbol() -> str:
     print("═" * 56)
     print("  Cow 通用監控  ·  輸入代號進入儀表板")
-    print("  範例：BTCUSDT（幣）｜ETHUSDT（幣）｜2330（台股）｜QQQ（美股）")
+    print("  範例：BTCUSDT / ETHUSDT / SOLUSDT（幣）｜2330 / 0050（台股）｜QQQ / NVDA（美股）")
     print("═" * 56)
     return input("  代號 > ").strip()
 
