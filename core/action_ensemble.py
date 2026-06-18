@@ -25,12 +25,18 @@ dashboard（tab_macro_compass）、LINE 推播（daily_line_notify/builders）�
 from typing import Optional
 
 # 與 trend_meta / escape_top_meta / relative_low_meta 的分級邊界對齊
+TREND_STRONG_BULL = 50   # trend_net ≥ 此值 → 強多頭（trend_meta）
 TREND_BULL = 20      # trend_net ≥ 此值 → 多頭
 TREND_BEAR = -20     # trend_net ≤ 此值 → 空頭
+TREND_STRONG_BEAR = -50  # trend_net ≤ 此值 → 強空頭（trend_meta）
 ESCAPE_HOT = 60      # 逃頂明確過熱（= LINE 警報門檻）
 ESCAPE_WARM = 45     # 逃頂偏熱
 LOW_STRONG = 75      # 強力抄底
 LOW_VALUE = 60       # 明確低估
+# 抄底 cycle 維度（長週期深跌，max 25，AUC 0.662）≥22 ≈ 跌破2年均×0.8「且」跌破200週均。
+# 2 年回測歸納（scripts/backtest_composite.py）：≥18 太鬆會在 $79k 誤判低估；≥22 才對應真歷史
+# 底部區（其後30d 平均 +15.4%）。即時版 low 常因 OI/ETF/SOPR 缺項被拉低，故以 cycle 直判補強。
+CYCLE_DEEP_VALUE = 22
 
 POSITION_NOTE = "倉位區間為專家設定（未擬合），僅供方向參考"  # 回放校準受限，見 tests/position_calib.py
 
@@ -39,10 +45,15 @@ def compute_composite_action(
     trend_net: Optional[float],
     escape_score: Optional[float],
     low_score: Optional[float],
+    cycle_score: Optional[float] = None,
 ) -> Optional[dict]:
     """
     三軸 → 單一行動。trend_net 為 None 時無法分流，回 None（呼叫端隱藏該行）。
     escape/low 為 None 視為 0（與灰燈一致）。
+
+    cycle_score（選填）：抄底 cycle 子分（0..25）。傳入且 ≥CYCLE_DEEP_VALUE 時，視同「明確低估」
+      與 low≥LOW_VALUE 同級觸發 ADD/ACCUMULATE/WATCH_REVERSAL——補強即時版 low 因 OI/ETF/SOPR
+      缺項被拉低時的底部辨識（不傳則行為與舊版完全相同，向後相容）。
 
     回傳 dict：
       action_key / emoji / action（短語）/ detail（一句話）/
@@ -52,6 +63,8 @@ def compute_composite_action(
         return None
     esc = escape_score or 0
     low = low_score or 0
+    # 長週期深跌（cycle≥22）視同「明確低估」，與 low≥LOW_VALUE 同級
+    value = low >= LOW_VALUE or (cycle_score is not None and cycle_score >= CYCLE_DEEP_VALUE)
 
     if trend_net >= TREND_BULL:
         if esc >= ESCAPE_HOT:
@@ -60,7 +73,7 @@ def compute_composite_action(
         elif esc >= ESCAPE_WARM:
             r = ("HOLD_TIGHTEN", "🟡", "續抱緊止盈", "多頭偏熱：續抱但預掛止盈、不追高",
                  50, 70, "#F39C12")
-        elif low >= LOW_VALUE:
+        elif value:
             r = ("ADD", "🟢", "回踩加倉", "多頭且仍低估：回踩均線分批加倉", 70, 100, "#27AE60")
         else:
             r = ("RIDE", "🟢", "順勢持有", "趨勢多頭、估值中性：持有為主，回踩找買點",
@@ -69,8 +82,8 @@ def compute_composite_action(
         if low >= LOW_STRONG:
             r = ("BOTTOM_FISH", "🟢", "小倉左側佈局", "空頭但強力低估：小倉分批佈局，嚴設止損"
                  "（左側交易，配合動態地板）", 20, 40, "#00AA66")
-        elif low >= LOW_VALUE:
-            r = ("WATCH_REVERSAL", "🟡", "觀望等右側", "空頭但已低估：等趨勢轉正再進，勿純憑估值接刀",
+        elif value:
+            r = ("WATCH_REVERSAL", "🟡", "觀望等右側", "空頭但長週期已到底部區：等趨勢轉正再進，勿純憑估值接刀",
                  10, 30, "#F39C12")
         elif esc >= ESCAPE_WARM:
             r = ("FADE_RALLY", "🔴", "反彈減碼", "空頭且反彈過熱：反彈減碼／偏空操作", 0, 20, "#E74C3C")
@@ -79,7 +92,7 @@ def compute_composite_action(
     else:
         if esc >= ESCAPE_HOT:
             r = ("REDUCE", "🟠", "減倉觀望", "盤整且過熱：減倉觀望，防假突破", 30, 50, "#E67E22")
-        elif low >= LOW_VALUE:
+        elif value:
             r = ("ACCUMULATE", "🟢", "區間下緣佈局", "盤整且低估：區間下緣分批佈局", 40, 70, "#27AE60")
         else:
             r = ("RANGE", "⚪", "區間操作", "無明確趨勢、估值中性：區間操作，等方向選擇", 40, 60, "#9E9E9E")
@@ -91,3 +104,37 @@ def compute_composite_action(
         "pos_label": f"建議倉位 {p_lo}–{p_hi}%（未擬合）",
         "color": color,
     }
+
+
+def compute_trend_stance(trend_net: Optional[float], mom_label: Optional[str] = None) -> Optional[dict]:
+    """
+    股票/無衍生品標的用：趨勢方向（中長期）× 短線動能（這週，正交）→ 行動 dict。
+    無逃頂/抄底/cycle 可用時的精簡版 composite；切點沿用 trend_meta 的 ±50/±20（不新增門檻），
+    再用短線動能補「多頭回檔 / 空頭反彈」層次（比單看趨勢面板多一層）。
+
+    trend_net：compute_trend_score 淨方向分（-100..+100）；None 回 None。
+    mom_label：BTC_WATCH._short_momentum 回傳字串（含「偏多」/「偏空」/「中性」），選填。
+    回傳 {action_key, emoji, action, detail, color}（無倉位區間，股票不給）。
+    """
+    if trend_net is None:
+        return None
+    up = bool(mom_label and "偏多" in mom_label)
+    down = bool(mom_label and "偏空" in mom_label)
+
+    if trend_net <= TREND_STRONG_BEAR:
+        r = ("EXIT", "🔴", "減碼/出場", "強空頭趨勢——減碼/觀望，趨勢未轉不搶反彈", "#E74C3C")
+    elif trend_net >= TREND_STRONG_BULL:
+        r = ("RIDE_STRONG", "🟢", "順勢持有/加碼", "強多頭趨勢——順勢持有，回踩均線找加碼點", "#27AE60")
+    elif trend_net >= TREND_BULL:
+        r = (("PULLBACK", "🟡", "多頭回檔", "多頭趨勢但短線轉弱——持有/等回踩，勿追高", "#F39C12")
+             if down else
+             ("RIDE", "🟢", "順勢持有", "多頭趨勢——順勢持有", "#27AE60"))
+    elif trend_net <= TREND_BEAR:
+        r = (("BOUNCE", "🟡", "空頭反彈", "空頭趨勢中的短線反彈——勿追，反彈減碼", "#E67E22")
+             if up else
+             ("REDUCE", "🔴", "偏空減碼", "空頭趨勢——偏空操作/減碼", "#E67E22"))
+    else:
+        r = ("RANGE", "⚪", "區間觀望", "盤整無明確方向——區間操作，勿追突破", "#9E9E9E")
+
+    key, emoji, action, detail, color = r
+    return {"action_key": key, "emoji": emoji, "action": action, "detail": detail, "color": color}

@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 import pytest
 
-from core.action_ensemble import compute_composite_action
+from core.action_ensemble import compute_composite_action, compute_trend_stance
 
 
 @pytest.mark.parametrize("trend,esc,low,expected_key", [
@@ -45,3 +45,37 @@ def test_boundary_alignment_with_alert_threshold():
     # 逃頂熱門檻與 LINE 警報門檻一致（60）
     assert compute_composite_action(30, 60, 0)["action_key"] == "TAKE_PROFIT"
     assert compute_composite_action(30, 59, 0)["action_key"] == "HOLD_TIGHTEN"
+
+
+@pytest.mark.parametrize("trend,esc,low,cyc,expected_key", [
+    # cycle 深跌（≥22）視同明確低估，與 low≥60 同級觸發
+    (-50, 10, 40, 25, "WATCH_REVERSAL"),   # 空頭＋cyc深跌（low 僅 40）→ 等右側（2026-06 $59k 底情境）
+    (0,   10, 40, 25, "ACCUMULATE"),       # 盤整＋cyc深跌 → 區間下緣佈局
+    (30,  10, 40, 25, "ADD"),              # 多頭＋cyc深跌 → 回踩加倉
+    (-50, 10, 40, 18, "DEFENSE"),          # cyc 18<22 不觸發 → 仍防守輕倉（$77k 情境）
+])
+def test_cycle_deep_value(trend, esc, low, cyc, expected_key):
+    assert compute_composite_action(trend, esc, low, cyc)["action_key"] == expected_key
+
+
+def test_cycle_backward_compatible():
+    # 不傳 cycle（None）行為與舊 3-arg 完全相同
+    assert compute_composite_action(-50, 10, 40)["action_key"] == "DEFENSE"
+    assert compute_composite_action(-50, 10, 40, None)["action_key"] == "DEFENSE"
+
+
+@pytest.mark.parametrize("trend,mom,expected_key", [
+    (73, "🟢 短線偏多", "RIDE_STRONG"),    # 強多頭
+    (30, "🔴 短線偏空", "PULLBACK"),       # 多頭但短線轉弱 → 回檔
+    (30, "🟢 短線偏多", "RIDE"),           # 多頭順勢
+    (-30, "🟢 短線偏多", "BOUNCE"),        # 空頭中的短線反彈
+    (-30, "🔴 短線偏空", "REDUCE"),        # 空頭偏空減碼
+    (-82, "🔴 短線偏空", "EXIT"),          # 強空頭 → 減碼/出場
+    (-2, "⚪ 短線中性", "RANGE"),          # 盤整
+])
+def test_trend_stance(trend, mom, expected_key):
+    assert compute_trend_stance(trend, mom)["action_key"] == expected_key
+
+
+def test_trend_stance_none():
+    assert compute_trend_stance(None) is None

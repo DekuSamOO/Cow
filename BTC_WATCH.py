@@ -33,7 +33,7 @@ try:
     from core.relative_low import compute_relative_low_score, relative_low_meta
     from core.trend_direction import compute_trend_score, trend_meta
     from core.bottom_floors import compute_all_bottom_estimates
-    from core.composite_signal import compute_composite_signal
+    from core.action_ensemble import compute_composite_action
     _COW_OK = True
 except Exception as _e:  # noqa: BLE001
     print(f"[警告] 無法 import Cow core（{_e}）→ 退化為極簡模式（無六維評分）。")
@@ -462,9 +462,12 @@ class BitcoinMonitor:
         # 單看任一軸會漏判（2026-05 $82k→$59k：逃頂全程低、真正示警的是趨勢軸）。需三軸皆有才算。
         comp_title, comp_rows = "", []
         if top is not None and low is not None and trend is not None:
-            _, c_lvl, _, c_act = compute_composite_signal(
+            act = compute_composite_action(
                 trend[0], top[0], low[0], low[1]["cycle"]["score"])
-            comp_title, comp_rows = _panel_stance("操作訊號（三軸融合）", c_lvl, c_act)
+            if act:
+                comp_title, comp_rows = _panel_stance(
+                    "操作訊號（三軸融合）", f"{act['emoji']} {act['action']}", act["detail"])
+                comp_rows.append(f"     {act['pos_label']}")
 
         # 動態框寬 = 最長內容/標題行 + 邊距（右框一律對齊，cycle 長行不溢出）
         content_w = max((_dw(c) for c in (header + quote + top_rows + low_rows + trend_rows + comp_rows)), default=40)

@@ -1,6 +1,6 @@
 """
 scripts/backtest_composite.py
-2 年回測 core.composite_signal 三軸融合操作訊號 — 歸納/驗證用（非調參）。
+2 年回測 core.action_ensemble 三軸合成行動（含 cycle 深跌補強）— 歸納/驗證用（非調參）。
 
 逐日算 趨勢方向 / 逃頂 / 抄底 / cycle → composite stance，印出每次「訊號轉換」當日價格與
 其後 30/60 日漲跌，並統計各訊號狀態的前瞻報酬與佔比，驗證訊號是否落在合理時點。
@@ -25,7 +25,7 @@ from core.bear_bottom import calculate_bear_bottom_indicators                  #
 from core.relative_high import compute_escape_top_score                        # noqa: E402
 from core.relative_low import compute_relative_low_score                       # noqa: E402
 from core.trend_direction import compute_trend_score                           # noqa: E402
-from core.composite_signal import compute_composite_signal                     # noqa: E402
+from core.action_ensemble import compute_composite_action                      # noqa: E402
 
 _UTC = dt.timezone.utc
 _FAPI = "https://fapi.binance.com/fapi/v1"
@@ -93,11 +93,12 @@ def main():
         low, lsig = compute_relative_low_score(row, df_t, **common)
         cyc = lsig["cycle"]["score"]
         net = compute_trend_score(row, df_t)[0]
-        sig = compute_composite_signal(net, top, low, cyc)
+        act = compute_composite_action(net, top, low, cyc)
         f30 = (closes[i + 30] / closes[i] - 1) * 100 if i + 30 < len(df) else None
         f60 = (closes[i + 60] / closes[i] - 1) * 100 if i + 60 < len(df) else None
         recs.append({"date": date, "close": closes[i], "top": top, "low": low, "cyc": cyc,
-                     "net": net, "key": sig[0], "label": sig[1], "f30": f30, "f60": f60})
+                     "net": net, "key": act["action_key"],
+                     "label": f"{act['emoji']} {act['action']}", "f30": f30, "f60": f60})
 
     # 訊號轉換點
     print(f"\n{'═'*86}\n  訊號轉換點（{recs[0]['date']} ~ {recs[-1]['date']}）\n{'═'*86}")
@@ -114,7 +115,7 @@ def main():
     # 各訊號統計（前瞻報酬 = 驗證訊號方向是否對）
     print(f"\n{'═'*86}\n  各訊號統計（佔比 + 平均其後 30/60 日報酬，驗證方向）\n{'═'*86}")
     import statistics as st
-    for key in ("exit", "value_wait", "buy", "hold_long", "neutral"):
+    for key in dict.fromkeys(r["key"] for r in recs):   # 出現過的 action_key（保留首見順序）
         grp = [r for r in recs if r["key"] == key]
         if not grp:
             continue
