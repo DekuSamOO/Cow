@@ -33,6 +33,7 @@ try:
     from core.relative_low import compute_relative_low_score, relative_low_meta
     from core.trend_direction import compute_trend_score, trend_meta
     from core.bottom_floors import compute_all_bottom_estimates
+    from core.composite_signal import compute_composite_signal
     _COW_OK = True
 except Exception as _e:  # noqa: BLE001
     print(f"[警告] 無法 import Cow core（{_e}）→ 退化為極簡模式（無六維評分）。")
@@ -452,9 +453,18 @@ class BitcoinMonitor:
         trend_title, trend_rows = _panel_trend(trend, "趨勢方向（順勢）",
                                                ("ma_structure", "macd", "slope", "adx"))
 
+        # 三軸融合操作訊號（頭條）：逃頂(貴)＋抄底(便宜)＋趨勢(方向) → 一個 stance。
+        # 單看任一軸會漏判（2026-05 $82k→$59k：逃頂全程低、真正示警的是趨勢軸）。需三軸皆有才算。
+        comp_title, comp_rows = "", []
+        if top is not None and low is not None and trend is not None:
+            _, c_lvl, _, c_act = compute_composite_signal(
+                trend[0], top[0], low[0], low[1]["cycle"]["score"])
+            comp_title = f"操作訊號（三軸融合）  {c_lvl}"
+            comp_rows = [f"  → {c_act}"]
+
         # 動態框寬 = 最長內容/標題行 + 邊距（右框一律對齊，cycle 長行不溢出）
-        content_w = max((_dw(c) for c in (header + quote + top_rows + low_rows + trend_rows)), default=40)
-        title_w = max(_dw(t) for t in (top_title, low_title, trend_title, "即時行情")) + 4
+        content_w = max((_dw(c) for c in (header + quote + top_rows + low_rows + trend_rows + comp_rows)), default=40)
+        title_w = max(_dw(t) for t in (top_title, low_title, trend_title, comp_title or "操作訊號", "即時行情")) + 4
         W = max(content_w, title_w) + 2
 
         print(_edge("╔", "═", "╗", W))
@@ -469,6 +479,13 @@ class BitcoinMonitor:
         for r in quote:
             print(_row(r, W))
         print(_edge("└", "─", "┘", W))
+
+        if comp_rows:
+            print()
+            print(_title(comp_title, W))
+            for r in comp_rows:
+                print(_row(r, W))
+            print(_edge("└", "─", "┘", W))
 
         if trend is not None:
             print()
