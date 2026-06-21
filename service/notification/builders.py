@@ -383,6 +383,34 @@ def build_escape_alert_flex(s):
     return {"type": "flex", "altText": f"{title} {score}/100", "contents": bubble}
 
 
+def build_action_alert_flex(data, prev_label=None):
+    """三軸合成行動翻轉的獨立 LINE Flex bubble（header 用 composite_color 配色）。
+    與 build_escape_alert_flex 同層，集中所有 Flex 於本模組（單一真實來源）。"""
+    color = data.get("composite_color", "#555555")
+    action = data.get("composite_action", "")
+    pos = data.get("composite_pos", "")
+    body = [
+        {"type": "text", "text": f"{prev_label or '—'}  →  {action}",
+         "weight": "bold", "size": "md", "wrap": True, "color": color},
+        {"type": "text", "text": data.get("composite_detail", ""),
+         "size": "sm", "color": "#555555", "wrap": True, "margin": "sm"},
+    ]
+    if pos:
+        body.append({"type": "text", "text": pos, "size": "xs", "color": "#999999", "margin": "sm"})
+    body.append({"type": "separator", "margin": "md"})
+    body.append({"type": "text",
+                 "text": f"趨勢 {data.get('trend_score')}｜逃頂 {data.get('escape_score')}｜抄底 {data.get('low_score')}",
+                 "size": "xs", "color": "#888888", "wrap": True, "margin": "md"})
+    bubble = {
+        "type": "bubble",
+        "header": {"type": "box", "layout": "vertical", "backgroundColor": color,
+                   "contents": [{"type": "text", "text": f"{data.get('composite_emoji', '')} 操作訊號翻轉",
+                                 "color": "#ffffff", "weight": "bold", "size": "lg"}]},
+        "body": {"type": "box", "layout": "vertical", "spacing": "none", "contents": body},
+    }
+    return {"type": "flex", "altText": f"操作訊號翻轉：{prev_label or '—'} → {action}", "contents": bubble}
+
+
 def _weekly_stat_box(title, hi, lo, cur, cur_color, hi_is_good):
     """週報單一分數區塊：週高/週低/現值三格橫排。
     hi_is_good=True（抄底，高=低估=機會）週高綠；False（逃頂，高=過熱=風險）週高紅。"""

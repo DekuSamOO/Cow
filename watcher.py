@@ -30,7 +30,8 @@ if _COW not in sys.path:
 from core.indicators import calculate_technical_indicators          # noqa: E402
 from core.trend_direction import compute_trend_score                # noqa: E402
 from core.action_ensemble import compute_trend_stance              # noqa: E402
-from service.ohlc_universal import classify_symbol, fetch_ohlc, KIND_LABEL  # noqa: E402
+from service.ohlc_universal import (classify_symbol, fetch_ohlc,            # noqa: E402
+                                    fetch_live_quote, live_quote_freshness, KIND_LABEL)
 # 重用 BTC_WATCH 既有的畫框 / 面板 / 等待 helper（單一真實來源，不重造）
 from BTC_WATCH import (BitcoinMonitor, _title, _row, _edge, _dw,     # noqa: E402
                        _short_momentum, _panel_trend, _panel_stance, interruptible_wait)
@@ -86,11 +87,19 @@ class UniversalMonitor:
         header = [
             f"  通用監控儀表板 · {self.kind_label} · 趨勢方向（順勢軸）",
             f"  監測時間  {now}     邏輯來源  Cow 單一來源（core）",
-            f"  代號      {self.display}（{self.yahoo}）     刷新週期  {self.REFRESH_SEC} 秒",
+            f"  代號      {self.display}（{self.yahoo}）     現價 {self.REFRESH_SEC}s｜日線每小時",
         ]
+        # 現價：每 60s 抓 Yahoo 即時報價（盤中即時、盤後為收盤）；與每小時的日線+指標分離
+        live = fetch_live_quote(self.yahoo)
+        if live.get("price"):
+            fr = live_quote_freshness(live)
+            chg_txt = "" if fr["chg_pct"] is None else f"  {fr['chg_pct']:+.2f}%"
+            price_line = f"  現價          {_fmt_price(live['price'])}{chg_txt}   {fr['label']}"
+        else:
+            price_line = f"  現價          {_fmt_price(close)}   （日線收盤）"
         quote = [
-            f"  最新日期      {df.index[-1].date()}   共 {len(df)} 根日線",
-            f"  收盤          {_fmt_price(close)}",
+            price_line,
+            f"  最新日線      {df.index[-1].date()} 收 {_fmt_price(close)}（{len(df)} 根）",
             f"  52週高/低     {_fmt_price(hi)} / {_fmt_price(lo)}   （位置 {pos:.0f}%）",
             f"  短線動能      {mom}",
         ]

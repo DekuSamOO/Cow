@@ -71,15 +71,20 @@ def _crypto_info(base: str, is_btc: bool) -> dict:
     }
 
 
+def _session() -> requests.Session:
+    """配好公司 SSL 攔截環境與 UA 的 Yahoo 用 Session（fetch_ohlc / fetch_live_quote 共用）。"""
+    s = requests.Session()
+    s.verify = False  # 公司 SSL 攔截環境（見全域 CLAUDE.md）
+    s.headers.update({"User-Agent": _UA})
+    return s
+
+
 def fetch_ohlc(yahoo_symbol: str, rng: str = "2y") -> pd.DataFrame:
     """
     Yahoo v8 chart JSON → 日線 OHLCV，欄位用 core 期望的 lowercase、index 去時區。
     同一函式吃 BTC-USD / ETH-USD / AAPL / NVDA / 2330.TW，與 Binance 無關。
     """
-    s = requests.Session()
-    s.verify = False  # 公司 SSL 攔截環境（見全域 CLAUDE.md）
-    s.headers.update({"User-Agent": _UA})
-    r = s.get(_YF_CHART + yahoo_symbol, params={"range": rng, "interval": "1d"}, timeout=20)
+    r = _session().get(_YF_CHART + yahoo_symbol, params={"range": rng, "interval": "1d"}, timeout=20)
     r.raise_for_status()
     result = r.json()["chart"]["result"]
     if not result:
@@ -95,3 +100,41 @@ def fetch_ohlc(yahoo_symbol: str, rng: str = "2y") -> pd.DataFrame:
     if df.empty:
         raise RuntimeError(f"無有效日線：{yahoo_symbol}")
     return df
+
+
+def fetch_live_quote(yahoo_symbol: str) -> dict:
+    """
+    輕量即時報價（Yahoo v8 meta.regularMarketPrice）— 供股票盤中每 60s 更新現價，
+    與每小時的日線+指標分離。盤中=即時成交價、盤後=收盤價（regularMarketTime 凍結在收盤）。
+    回傳 {price, ts, prev_close}；失敗回 {}（呼叫端退回日線收盤）。
+    """
+    try:
+        r = _session().get(_YF_CHART + yahoo_symbol,
+                           params={"range": "1d", "interval": "1d"}, timeout=10)
+        r.raise_for_status()
+        m = r.json()["chart"]["result"][0]["meta"]
+        p = m.get("regularMarketPrice")
+        if p is None:
+            return {}
+        return {"price": float(p), "ts": m.get("regularMarketTime"),
+                "prev_close": m.get("previousClose") or m.get("chartPreviousClose")}
+    except Exception:
+        return {}
+
+
+def live_quote_freshness(q: dict) -> dict:
+    """
+    解讀 fetch_live_quote 回傳的時效與漲跌（ts/prev_close 語義只有本模組知道，
+    與 fetcher 同源避免 watcher / universal_watch_poc 兩邊重算）。
+    回傳 {label, age_sec, chg_pct}；label 為盤中/已收盤狀態字串，chg_pct 缺 prev_close 時為 None。
+    """
+    import time as _time
+    age = _time.time() - q["ts"] if q.get("ts") else float("inf")
+    if age < 900:
+        label = "🟢 盤中即時"
+    elif age < 6 * 3600:
+        label = f"⚪ 已收盤（{int(age // 3600)}h 前）"
+    else:
+        label = "⚪ 已收盤"
+    chg = ((q["price"] / q["prev_close"] - 1) * 100) if q.get("prev_close") else None
+    return {"label": label, "age_sec": age, "chg_pct": chg}

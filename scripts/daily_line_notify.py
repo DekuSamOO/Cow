@@ -347,8 +347,9 @@ def _compute_radars(btc_df, curr, latest_funding, price) -> dict:
     td = compute_trend_direction(curr, btc_df)
     ct_state = rh["cycle_top"]
 
-    # 三軸合成行動建議（與 dashboard 同源 core/action_ensemble）
-    comp = compute_composite_action(td["trend_score"], rh["escape_score"], rl["low_score"])
+    # 三軸合成行動建議（與 dashboard 同源 core/action_ensemble；傳 cycle 子分補強底部辨識）
+    comp = compute_composite_action(td["trend_score"], rh["escape_score"], rl["low_score"],
+                                    rl["low_signals"].get("cycle", {}).get("score"))
     return {
         # 波段雷達 · 逃頂
         "escape_score": rh["escape_score"], "escape_level": rh["escape_level"],
@@ -369,6 +370,7 @@ def _compute_radars(btc_df, curr, latest_funding, price) -> dict:
                       "is_autumn": ct_state.get("is_autumn", False)},
         # 三軸合成（comp 為 None 時欄位缺省，builders 自動隱藏該行）
         **({"composite_emoji": comp["emoji"], "composite_action": comp["action"],
+            "composite_detail": comp["detail"], "composite_key": comp["action_key"],
             "composite_pos": comp["pos_label"], "composite_color": comp["color"]}
            if comp else {}),
         # 健康檢查：本機 OI 快照距今天數（>2 天時卡片顯示警告，揪出靜默失敗的排程）
@@ -479,6 +481,46 @@ def maybe_send_escape_alert(data: dict) -> None:
         print(f"❌ 逃頂警報發送失敗: {e}")
 
 
+def maybe_send_action_alert(data: dict, dry_run: bool = False) -> None:
+    """
+    三軸合成「行動」翻轉時推一則 LINE（action_key 與上次不同才推）。
+    合成行動由日線驅動、每日至多變一次，3 次/日的排程足以當日捕捉翻轉。
+    去重：同 action_key 不重推；首次觀測只記錄不推；狀態存共用 escape_alert_state.json。
+    """
+    key = data.get("composite_key")
+    if not key:
+        print("✓ 無合成行動（trend 缺），略過行動警報。")
+        return
+    state = _load_escape_state()
+    prev_key = state.get("last_action_key")
+    prev_label = state.get("last_action_label")
+
+    if prev_key == key:
+        print(f"✓ 合成行動未變（{key}），略過。")
+        return
+
+    if prev_key is None:
+        print(f"✓ 首次記錄合成行動「{data.get('composite_action')}」，不推播。")
+    else:
+        from service.notification.builders import build_action_alert_flex
+        flex = build_action_alert_flex(data, prev_label)
+        if dry_run:
+            print(f"[dry-run] 行動翻轉 {prev_label} → {data.get('composite_action')}；Flex altText="
+                  f"{flex['altText']}（未發送）")
+        else:
+            try:
+                send_line_message(flex)
+                print(f"🔔 已發送行動翻轉警報：{prev_label} → {data.get('composite_action')}")
+            except Exception as e:
+                print(f"❌ 行動警報發送失敗: {e}")
+                return  # 發送失敗不前進 state，下次可重試
+
+    state["last_action_key"] = key
+    state["last_action_label"] = data.get("composite_action")
+    if not dry_run:
+        _save_escape_state(state)
+
+
 def maybe_send_weekly_summary(data: dict, now=None) -> None:
     """
     週日傍晚場次（台灣 ≥17 時，即 18:27 推播）加推一則文字週報，每週最多一次（state 去重）。
@@ -548,5 +590,7 @@ if __name__ == "__main__":
     send_line_message(build_flex_message(data))
     # 逃頂警報：抖進每日推播，超門檻才額外推一則（分級 + 去重 + 遲滯）
     maybe_send_escape_alert(data)
+    # 行動翻轉警報：三軸合成行動 key 變動才推一則（去重 + 首次只記錄）
+    maybe_send_action_alert(data)
     # 週報：週日傍晚場次加推一則（每週一次）
     maybe_send_weekly_summary(data)

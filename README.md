@@ -25,7 +25,7 @@
 app.py              入口點（組合各層，不含業務邏輯；今日大盤速覽 6 大 Metric 以 @st.fragment(run_every=60) 每 60 秒自動更新）
 config.py           集中設定（均線週期、交易成本、倉位風控參數、WALK_FORWARD_EXIT_MODES、警報門檻/分級/遲滯常數、底部模型演算法參數：可靠度權重/礦工電價/效率 anchors 等單一可調來源）
 data_manager.py     根層級數據管理器（TVL/穩定幣/資金費率歷史 SQLite 快取、指數退避重試、增量模式）
-BTC_WATCH.py        BTC 雙向監控終端儀表板**正本**（2026-06-10 起由 Crypto repo 移入本 repo 維護）：純幣安 fapi/dapi + path import core 的逃頂五維/抄底六維/趨勢方向四維評分，60 秒刷新。頂部「操作訊號（三軸融合）」banner 由 composite_signal 算出（三軸皆有才顯示）。`BitcoinMonitor` 已參數化（symbol/coin_symbol/is_btc/top_cap/low_cap/title/oi_unit/nav，全部預設 BTC 向後相容）：非 BTC 時停用 ETF/SOPR/BTC.D/四季論/礦工/冪律等 BTC 專屬維度、地板改 Mayer 估值底；nav=True（由 watcher 進入）時 interruptible_wait 偵測鍵盤 b 回上層／q 結束（單獨執行 nav=False 純 sleep，行為不變）
+BTC_WATCH.py        BTC 雙向監控終端儀表板**正本**（2026-06-10 起由 Crypto repo 移入本 repo 維護）：純幣安 fapi/dapi + path import core 的逃頂五維/抄底六維/趨勢方向四維評分，60 秒刷新。頂部「操作訊號（三軸融合）」banner 由 core/action_ensemble.compute_composite_action 算出（傳 cycle 子分；三軸皆有才顯示，含建議倉位）。`BitcoinMonitor` 已參數化（symbol/coin_symbol/is_btc/top_cap/low_cap/title/oi_unit/nav，全部預設 BTC 向後相容）：非 BTC 時停用 ETF/SOPR/BTC.D/四季論/礦工/冪律等 BTC 專屬維度、地板改 Mayer 估值底；nav=True（由 watcher 進入）時 interruptible_wait 偵測鍵盤 b 回上層／q 結束（單獨執行 nav=False 純 sleep，行為不變）
 watcher.py          通用標的監控入口：`python watcher.py` 輸入代號 → classify_symbol 自動判市場路由 —— BTC→完整 BitcoinMonitor；其他幣對→參數化 BitcoinMonitor(is_btc=False, top_cap=68/low_cap=72) 跑逃頂/抄底；美股/台股→UniversalMonitor（通用軸：趨勢方向±100＋技術＋短線動能＋趨勢×短線操作訊號 banner，日線每小時快取）。main 為 while 迴圈（儀表板內 b 重選代號／q 結束）；畫框/面板/操作訊號 helper（_panel_stance 等）重用 BTC_WATCH 單一來源
 
 collector/
@@ -49,8 +49,7 @@ core/
   relative_low.py     相對底部（抄底雷達）單一真實來源：六維抄底評分(0-100，長週期深跌25/合約超冷20/技術回穩20/情緒恐慌15/鏈上10/總經10，權重經 relative_low_backtest 拍板)；compute_relative_low_score/relative_low_meta 供 BTC_WATCH path import，無 Streamlit 依賴
   trend_direction.py  趨勢方向（波段雷達第三軸）單一真實來源：四維**有號**評分（均線結構±40/MACD±30/斜率±15/ADX±15）→ 淨分 [-100,+100]，ADX<20 方向三維打 0.6 折防盤整假突破；compute_trend_score/trend_meta/compute_trend_direction 供 dashboard/BTC_WATCH/LINE 共用，無 Streamlit 依賴
   radar_replay.py     三雷達歷史每日分數回放（逐日重放逃頂/抄底/趨勢分數，DIV_WINDOW 視窗切片避免 O(n²)）+ threshold_forward_stats（門檻向上跨越事件 → 其後 60 日報酬分布，±18% 命中定義與權重擬合一致、cooldown 防重複計數）；僅用歷史可得輸入（OI/ETF/SOPR/BTC.D/總經與線上灰燈一致給 0 → 分數為保守下界），無 Streamlit 依賴
-  action_ensemble.py  三軸合成行動建議單一真實來源 compute_composite_action（趨勢方向 × 逃頂 × 抄底 → 11 種行動 + 建議倉位區間【專家設定，未擬合】）；dashboard 與 LINE 推播共用，邊界與 trend_meta/escape_top_meta/relative_low_meta/ESCAPE_ALERT_THRESHOLD 對齊，無 Streamlit 依賴
-  composite_signal.py 監控終端用三軸融合操作訊號（純函數、零網路）：compute_composite_signal（逃頂×抄底×趨勢→5 態 stance：估值到底·等止穩/分批進場/減碼出場/順勢持有/觀望，切點全沿用各軸既有等級 TREND_STRONG_BEAR/BULL ±50/+20、TOP_OVERHEAT/LOW_UNDERVALUED 60、CYCLE_DEEP_VALUE 22，不新增門檻擬合）；compute_trend_stance（股票/無衍生品標的精簡版：趨勢×短線動能）。供 BTC_WATCH/watcher 終端 banner 共用
+  action_ensemble.py  三軸合成行動建議**單一真實來源**（dashboard tab_macro_compass／LINE 推播／BTC_WATCH／watcher 共用，杜絕漂移）：compute_composite_action（趨勢方向 × 逃頂 × 抄底 → 11 種行動 + 建議倉位區間【專家設定，未擬合】；選填第 4 參數 cycle_score≥22「跌破2年均×0.8 且 跌破200週均」視同明確低估，補強即時 low 被 OI/ETF/SOPR 缺項拉低時的底部辨識，2 年回測歸納見 scripts/backtest_composite.py）；compute_trend_stance（股票/無衍生品標的精簡版：趨勢×短線動能 → 順勢持有/回檔/反彈/減碼/觀望）。邊界與 trend_meta/escape_top_meta/relative_low_meta/ESCAPE_ALERT_THRESHOLD 對齊，無 Streamlit 依賴
 
 service/
   local_db_reader.py  讀取本地 SQLite（15m 原始 / 重採樣日線），TTL 快取，全面 UTC 時區
@@ -368,6 +367,11 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 ---
 
 ## 版本紀錄
+
+### v3.18 (2026-06-21)
+- **refactor(signal)**: 整併重複 composite — 刪除 `core/composite_signal.py`，統一到既有 `core/action_ensemble.py`（dashboard tab_macro_compass／LINE／BTC_WATCH／watcher 唯一來源）。`compute_composite_action` 加選填 `cycle_score`：cycle≥22（跌破2年均×0.8 且 跌破200週均）視同明確低估，修正 2026-06 $59k 情境（即時 low 因 OI/ETF/SOPR 缺項僅 40，但 cycle 25 → 觀望等右側而非防守輕倉）；不傳 cycle 行為與舊版完全相同（向後相容）。`compute_trend_stance`（股票趨勢×短線）併入同檔。`tests/core/test_action_ensemble.py` 補 cycle 深跌矩陣＋trend_stance 五態（27 測試綠）。
+- **feat(line)**: 三軸合成「行動翻轉」LINE 警報（`daily_line_notify.maybe_send_action_alert`）：action_key 與上次不同才推一則 Flex，首次只記錄、同行動不重推（去重狀態存共用 `escape_alert_state.json`），如 5/24 趨勢翻空當天收到「順勢持有 → 防守輕倉」。Flex 建構移入 `service/notification/builders.build_action_alert_flex`（Flex 單一來源）。
+- **fix(watch)**: 台股/美股盤中即時價 — `service/ohlc_universal.fetch_live_quote`（Yahoo v8 meta.regularMarketPrice，每 60s 抓單一 symbol，與每小時日線+指標分離）。`UniversalMonitor` 現價行盤中顯「🟢 盤中即時」每分鐘跳動、盤後顯「⚪ 已收盤」並含日漲跌%；表頭刷新標示改「現價 60s｜日線每小時」（修正原「刷新週期 60 秒」與實際日線每小時不符）。`_session()` 抽為 fetch_ohlc/fetch_live_quote 共用、`live_quote_freshness` 時效解讀同源。
 
 ### v3.17 (2026-06-18)
 - **feat(watch)**: 新增「通用標的監控」—— `watcher.py` 入口輸入代號後自動判市場路由：BTC→完整 BitcoinMonitor、其他幣對→參數化 BitcoinMonitor(is_btc=False, top_cap=68/low_cap=72) 跑逃頂/抄底但停用 BTC 專屬維度、美股/台股→`UniversalMonitor`（僅通用軸：趨勢方向±100＋技術＋短線動能）。新增 `service/ohlc_universal.py`（classify_symbol 判市場 + fetch_ohlc 直連 Yahoo v8 chart，避 yfinance 公司 IP 429）與 PoC `scripts/universal_watch_poc.py`。`BTC_WATCH.BitcoinMonitor` 參數化（symbol/coin_symbol/is_btc/top_cap/low_cap/title/oi_unit 全部預設 BTC 向後相容）。
