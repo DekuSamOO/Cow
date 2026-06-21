@@ -32,6 +32,7 @@ service/         資料取得層
                  即時：Binance → Kraken → 本地DB（三層）
                  資金費率：Binance fapi → Bybit → OKX（三層）
                  宏觀：FRED CSV → Yahoo → FRED 備援 → 靜態 _FALLBACK（四層）
+                 台股籌碼/估值：tw_chip.get_chip_bundle（TWSE 全量檔每小時快取 + TDCC CSRF 爬法）
 strategy/        策略引擎（波段 Antigravity v4.1、Walk-Forward 回測、雙幣 Black-Scholes、推播）
 handler/         Streamlit UI 各 Tab 實作
 collector/       BTC 15m K 線收集器（年度分割 SQLite，Binance + Kraken 雙源）
@@ -116,6 +117,38 @@ SOPR（`get_latest_bottom_metrics`，bitcoin-data 12h 快取）、BTC.D 趨勢�
 可得天花板升至 **逃頂/抄底各 93**（唯缺 macro 通膨/就業 dovish/hawkish flags 需 FRED → 缺 7 分）。
 
 詳見 PLAN：`Obsidian/Github/Cow/20260608plan_相對高點判斷.md`、`20260609plan_相對底部判斷.md`。
+
+---
+
+## 台股版逃頂/抄底（watcher 台股分支，2026-06-21 新增 v0.1）
+
+加密雷達的 funding/OI/鏈上維度股票無對應 → 台股改用**籌碼/估值**替代。**只做台股**（美股
+個股槓桿/法人/IV 無免費源，維持純通用軸）。三檔純函數 + 一資料層，watcher 台股分支共用：
+
+- **`core/relative_high_tw.py`／`relative_low_tw.py`**：各五維（逃頂＝技術30/法人25/槓桿20/
+  估值15/籌碼10；抄底＝估值25/技術20/槓桿20/法人20/大戶15）。技術維度**複用 core/divergence**
+  （與加密同源）、法人買賣超以**近20日均量正規化**。`compute_relative_high_tw/low_tw + *_meta`。
+- **`service/tw_chip.py`**：`get_chip_bundle(symbol, yyyymmdd)` → {margin, institutional,
+  valuation, tdcc}，每源 best-effort（抓不到回 None → 評分灰燈不 crash）。
+- **三軸 composite 共用 `action_ensemble.compute_composite_action`**：cycle_score 傳台股**估值
+  深跌子分**（max 25，與加密 cycle 子分同尺度，`CYCLE_DEEP_VALUE=22` 共用閾值）。
+
+### 台股資料源踩坑
+- **TWSE 端點都是「市場全量單日檔」非個股查詢**：抓整檔每小時快取再 filter symbol。融資融券
+  `marginTrading/MI_MARGN`(selectType=STOCK)、三大法人 `fund/T86`(ALLBUT0999)、本益比PB
+  `afterTrading/BWIBBU_d`(ALL)。回應有時包在 `tables[]` → 需深找含 `fields+data` 的 table。
+- **Accept-Encoding 勿帶 br**：T86 回 brotli，requests 無 brotli 套件時解碼壞 → 固定
+  `gzip, deflate`。
+- **MI_MARGN 單一回應即含「前日＋今日餘額」** → 融資變化免多日累積；T86 為單日買賣超。
+- **TDCC 集保大戶分布要 GET→POST CSRF**（鏡像 tw_stock_climber）：先 GET `qryStock` 抓
+  `SYNCHRONIZER_TOKEN`/`SYNCHRONIZER_URI`，再 POST 帶 token + firDate/scaDate（最近已公布週五，
+  扣 7 天公布延遲）。`pd.read_html` 解析持股分級表，大戶≥1000張/中實戶≥400張/散戶≤50張。
+  **同週同檔記憶體快取不重抓；勿密集打**（每檔間需 sleep）。
+- **上櫃股估值 graceful-None**：BWIBBU 僅上市；上櫃 PE/PB 端點未定 → 估值維度灰燈（P1a 先上市）。
+- **v0.1〔絕對值起步・未擬合〕**：PE/PB 用**絕對值分級非 5 年分位**（不同產業基準差異大，金融股
+  PB 1.0 正常、科技股 PB 1.0 偏低），籌碼閾值為專家起點（鏡像 tw_stock_climber chip/valuation）。
+  **待累積台股歷史後以回測校準**（鏡像 relative_low_backtest 方法）。Cow **不 import
+  tw_stock_climber**（保持自包含、雲端可跑），僅鏡像爬法/分級概念。
 
 ---
 

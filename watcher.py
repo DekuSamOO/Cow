@@ -29,11 +29,13 @@ if _COW not in sys.path:
 
 from core.indicators import calculate_technical_indicators          # noqa: E402
 from core.trend_direction import compute_trend_score                # noqa: E402
-from core.action_ensemble import compute_trend_stance              # noqa: E402
+from core.action_ensemble import compute_trend_stance, compute_composite_action  # noqa: E402
+from core.relative_high_tw import compute_relative_high_tw, relative_high_tw_meta  # noqa: E402
+from core.relative_low_tw import compute_relative_low_tw, relative_low_tw_meta     # noqa: E402
 from service.ohlc_universal import (classify_symbol, fetch_ohlc,            # noqa: E402
                                     fetch_live_quote, live_quote_freshness, KIND_LABEL)
 # 重用 BTC_WATCH 既有的畫框 / 面板 / 等待 helper（單一真實來源，不重造）
-from BTC_WATCH import (BitcoinMonitor, _title, _row, _edge, _dw,     # noqa: E402
+from BTC_WATCH import (BitcoinMonitor, _title, _row, _edge, _dw, _panel,  # noqa: E402
                        _short_momentum, _panel_trend, _panel_stance, interruptible_wait)
 
 
@@ -57,16 +59,22 @@ class UniversalMonitor:
         self.display = info["display"]
         self.yahoo = info["yahoo"]
         self.kind_label = KIND_LABEL.get(info["kind"], info["kind"])
+        self.is_tw = info["kind"] == "tw_stock"   # 台股有逃頂/抄底籌碼面板；美股僅通用軸
         self._daily_cache = None
         self._daily_ts = 0.0
+        self._chip = None           # 台股籌碼/估值（每小時隨日線刷新一次）
 
     def _fetch(self):
-        """日線每小時重抓+重算一次（避免 60s 迴圈重抓 2y OHLC 與全套指標）。"""
+        """日線每小時重抓+重算一次（避免 60s 迴圈重抓 2y OHLC 與全套指標）；台股一併刷新籌碼。"""
         if self._daily_cache is None or (time.time() - self._daily_ts) >= self.DAILY_REFRESH_SEC:
             df = calculate_technical_indicators(fetch_ohlc(self.yahoo))
             if df is not None and not df.empty and len(df) >= 50:
                 self._daily_cache = df
                 self._daily_ts = time.time()
+                if self.is_tw:
+                    # 籌碼/估值對齊最新日線日期（TWSE 全量檔為 EOD，盤中用最後交易日）
+                    from service.tw_chip import get_chip_bundle
+                    self._chip = get_chip_bundle(self.display, df.index[-1].strftime("%Y%m%d"))
         return self._daily_cache
 
     def render(self, df):
@@ -105,17 +113,34 @@ class UniversalMonitor:
         ]
         trend_title, trend_rows = _panel_trend(trend, "趨勢方向（順勢）",
                                                ("ma_structure", "macd", "slope", "adx"))
-        # 頭條操作訊號：趨勢方向（中長期）× 短線動能（這週，正交）→ stance
-        st = compute_trend_stance(trend[0], mom)
-        comp_title, comp_rows = _panel_stance(
-            "操作訊號（趨勢×短線）", f"{st['emoji']} {st['action']}", st["detail"])
-        note = [
-            "  ⚠ 非 BTC 標的：逃頂/抄底雙向雷達需加密永續(資金費率/OI)與 BTC 鏈上/減半",
-            "     週期資料，股票無對應 → 本版僅通用軸（股票版逃頂抄底列為後續 Phase）。",
-        ]
 
-        content_w = max((_dw(c) for c in (header + quote + trend_rows + comp_rows + note)), default=40)
-        W = max(content_w, _dw(trend_title) + 4, _dw(comp_title) + 4, _dw("即時行情") + 4) + 2
+        # 台股：完整逃頂/抄底（籌碼面）+ 三軸 composite；美股：僅趨勢×短線 stance
+        top_title = top_rows = low_title = low_rows = None
+        if self.is_tw and self._chip is not None:
+            high = compute_relative_high_tw(row, df, chip=self._chip)
+            low = compute_relative_low_tw(row, df, chip=self._chip)
+            top_title, top_rows = _panel(high, relative_high_tw_meta, 100, "逃頂訊號（台股籌碼）",
+                                         ("technical", "institution", "leverage", "valuation", "tdcc"))
+            low_title, low_rows = _panel(low, relative_low_tw_meta, 100, "抄底訊號（台股籌碼）",
+                                         ("valuation", "technical", "leverage", "institution", "tdcc"))
+            # 三軸 composite（cycle 用台股估值深跌子分，max 25 同尺度）
+            act = compute_composite_action(trend[0], high[0], low[0],
+                                           low[1]["valuation"]["score"])
+            comp_title, comp_rows = _panel_stance(
+                "操作訊號（三軸融合）", f"{act['emoji']} {act['action']}", act["detail"])
+            comp_rows.append(f"     {act['pos_label']}")
+            note = ["  ⚠ 台股逃頂/抄底為 v0.1〔絕對值起步・未擬合〕：PE/PB 用絕對值非分位、",
+                    "     籌碼閾值為專家起點，待累積台股歷史回測校準。"]
+        else:
+            st = compute_trend_stance(trend[0], mom)
+            comp_title, comp_rows = _panel_stance(
+                "操作訊號（趨勢×短線）", f"{st['emoji']} {st['action']}", st["detail"])
+            note = ["  ⚠ 美股：個股槓桿/法人/IV 無免費源 → 僅通用軸（趨勢方向＋技術＋短線動能）。"]
+
+        panels_rows = (top_rows or []) + (low_rows or [])
+        content_w = max((_dw(c) for c in (header + quote + trend_rows + comp_rows + panels_rows + note)), default=40)
+        W = max(content_w, _dw(trend_title) + 4, _dw(comp_title) + 4,
+                _dw(top_title or "") + 4, _dw(low_title or "") + 4, _dw("即時行情") + 4) + 2
 
         print(_edge("╔", "═", "╗", W))
         print(_row(header[0], W, "║"))
@@ -141,6 +166,14 @@ class UniversalMonitor:
         for r in trend_rows:
             print(_row(r, W))
         print(_edge("└", "─", "┘", W))
+
+        for ttl, rws in ((top_title, top_rows), (low_title, low_rows)):
+            if rws:
+                print()
+                print(_title(ttl, W))
+                for r in rws:
+                    print(_row(r, W))
+                print(_edge("└", "─", "┘", W))
 
         print()
         print(_title("說明", W))
