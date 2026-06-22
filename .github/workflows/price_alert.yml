@@ -10,6 +10,9 @@ on:
 jobs:
   check_price:
     runs-on: ubuntu-22.04
+    permissions:
+      actions: read      # gh run download 需讀其他 run 的 artifact
+      contents: read
 
     steps:
       - name: Checkout Repository
@@ -25,12 +28,21 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # 下載上次執行留下的警報狀態（第一次執行時 artifact 不存在，continue-on-error 略過）
-      - name: Download alert state
-        uses: actions/download-artifact@v5
-        with:
-          name: alert-state
-          path: .
+      # 還原上一個成功 run 的警報狀態（跨 run 去重持久化）。
+      # 踩坑（2026-06）：actions/download-artifact 只能拿「當前 run」自己的 artifact，
+      # 拿不到前一個 run → 跨 run 去重從未生效。改用 gh 從最近一個成功 run 下載。
+      - name: Restore alert state from latest prior run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PREV=$(gh run list --workflow=price_alert.yml --status success \
+                 --limit 1 --json databaseId -q '.[0].databaseId' || echo "")
+          if [ -n "$PREV" ]; then
+            gh run download "$PREV" -n alert-state -D . \
+              && echo "restored state from run $PREV" || echo "run $PREV 無 state artifact（可能已過期）"
+          else
+            echo "無前一個成功 run，從空 state 開始"
+          fi
         continue-on-error: true
 
       - name: Run Price Alert

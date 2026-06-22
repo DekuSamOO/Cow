@@ -16,6 +16,9 @@ on:
 jobs:
   send_notification:
     runs-on: ubuntu-22.04
+    permissions:
+      actions: read      # gh run download 需讀其他 run 的 artifact
+      contents: read
 
     steps:
     - name: Checkout Repository
@@ -31,13 +34,22 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    # 下載上次留下的逃頂警報狀態（首次執行 artifact 不存在，continue-on-error 略過）
-    # 供 maybe_send_escape_alert 的「每日最多一次」去重跨 3 次排程執行持久化
-    - name: Download escape alert state
-      uses: actions/download-artifact@v5
-      with:
-        name: escape-alert-state
-        path: .
+    # 還原上一個成功 run 的警報狀態（供逃頂「每日一次」/ 行動翻轉 / 週報去重跨 run 持久化）。
+    # 踩坑（2026-06）：原用 actions/download-artifact 只能拿「當前 run」自己的 artifact，
+    # 拿不到前一個 run → 跨 run 去重從未生效（週報曾因此重複、行動翻轉警報從不觸發）。
+    # 改用 gh 從「最近一個成功 run」下載其 escape-alert-state artifact。
+    - name: Restore alert state from latest prior run
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        PREV=$(gh run list --workflow=daily_line_notify.yml --status success \
+               --limit 1 --json databaseId -q '.[0].databaseId' || echo "")
+        if [ -n "$PREV" ]; then
+          gh run download "$PREV" -n escape-alert-state -D . \
+            && echo "restored state from run $PREV" || echo "run $PREV 無 state artifact（可能已過期）"
+        else
+          echo "無前一個成功 run，從空 state 開始"
+        fi
       continue-on-error: true
 
     - name: Run Daily Notifier Script
