@@ -521,13 +521,24 @@ def maybe_send_action_alert(data: dict, dry_run: bool = False) -> None:
         _save_escape_state(state)
 
 
+# 週報只在「傍晚 cron」觸發的 run 發。GitHub Actions 把觸發的 cron 放進 github.event.schedule，
+# workflow 以 CRON_SCHEDULE 注入。一天僅一個 run 帶此值 → 即使排程延遲多個 run 都落在 ≥17 點，
+# 也只有傍晚 cron 那個 run 會發 → 根治重複（不依賴跨 run artifact state，那個本就失效）。
+_WEEKLY_CRON = "27 10 * * *"   # 台灣 18:27 場次（與 daily_line_notify.yml 第三個 cron 一致）
+
+
 def maybe_send_weekly_summary(data: dict, now=None) -> None:
     """
-    週日傍晚場次（台灣 ≥17 時，即 18:27 推播）加推一則文字週報，每週最多一次（state 去重）。
+    週日「傍晚 cron 場次」加推一則週報，每週一次。
     內容：本週價格區間/漲跌、逃頂/抄底分數週高低（score_history 近 8 日）、趨勢與今日行動。
     """
     tw_now = now or datetime.now(timezone(timedelta(hours=8)))
-    if tw_now.weekday() != 6 or tw_now.hour < 17:
+    if tw_now.weekday() != 6:
+        return
+    # 排程觸發：限傍晚 cron（免多個延遲 run 重複發）；手動 dispatch / 本地執行（CRON_SCHEDULE 空）放行
+    cron = os.getenv("CRON_SCHEDULE", "")
+    if cron and cron != _WEEKLY_CRON:
+        print(f"ℹ️ 非傍晚 cron（{cron}），略過週報。")
         return
     state = _load_escape_state()
     today = tw_now.strftime("%Y-%m-%d")

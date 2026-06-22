@@ -47,6 +47,8 @@ jobs:
         LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
         GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         PYTHONPATH: ${{ github.workspace }}
+        # 觸發本 run 的 cron（供週報 cron-gate 判斷是否傍晚場次；手動 dispatch 時為空字串）
+        CRON_SCHEDULE: ${{ github.event.schedule }}
       run: |
         python scripts/daily_line_notify.py
 
