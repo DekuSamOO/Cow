@@ -249,14 +249,27 @@ def get_tdcc(symbol: str, date_str: str = None) -> dict | None:
     return result
 
 
-def get_chip_bundle(symbol: str, date_yyyymmdd: str) -> dict:
+def get_chip_bundle(symbol: str, date_yyyymmdd: str, lookback: int = 7) -> dict:
     """
-    一次取齊四源（每源獨立 best-effort，抓不到的為 None）。
-    回傳 {margin, institutional, valuation, tdcc}，供台股逃頂/抄底評分注入。
+    一次取齊四源（每源獨立 best-effort，抓不到的為 None）。回傳
+    {margin, institutional, valuation, tdcc, as_of}，供台股逃頂/抄底評分注入。
+
+    ⚠️ TWSE 日檔為 EOD 公布：呼叫端常傳「今日」（Yahoo 最後日線可能是盤中/未收的今天），
+    但今日 EOD 檔尚未出 → 會整片 None。故從 date 往前找「最近有公布的交易日」（最多 lookback 天，
+    跳過週末/未公布日），三個日檔（融資/法人/估值）對齊同一 as_of 日。TDCC 為週資料另解。
     """
-    return {
-        "margin": get_margin(symbol, date_yyyymmdd),
-        "institutional": get_institutional(symbol, date_yyyymmdd),
-        "valuation": get_valuation(symbol, date_yyyymmdd),
-        "tdcc": get_tdcc(symbol),
-    }
+    # 先用單一端點（BWIBBU 市場檔非空）探「最近已公布的交易日」→ 再抓三源（BWIBBU 已快取）。
+    # 避免一次猛打多源×多日撞 TWSE 限流（端午等連假/今日未收時尤需 walk back）。
+    d = datetime.datetime.strptime(date_yyyymmdd, "%Y%m%d").date()
+    as_of = date_yyyymmdd
+    for _ in range(max(1, lookback)):
+        ds = d.strftime("%Y%m%d")
+        if _fetch_market_file("afterTrading/BWIBBU_d",
+                              {"date": ds, "selectType": "ALL", "response": "json"}):
+            as_of = ds
+            break
+        d -= datetime.timedelta(days=1)
+    return {"margin": get_margin(symbol, as_of),
+            "institutional": get_institutional(symbol, as_of),
+            "valuation": get_valuation(symbol, as_of),
+            "tdcc": get_tdcc(symbol), "as_of": as_of}

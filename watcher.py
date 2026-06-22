@@ -120,17 +120,18 @@ class UniversalMonitor:
             high = compute_relative_high_tw(row, df, chip=self._chip)
             low = compute_relative_low_tw(row, df, chip=self._chip)
             top_title, top_rows = _panel(high, relative_high_tw_meta, 100, "逃頂訊號（台股籌碼）",
-                                         ("technical", "institution", "leverage", "valuation", "tdcc"))
+                                         ("technical", "valuation", "leverage", "institution", "tdcc"))
             low_title, low_rows = _panel(low, relative_low_tw_meta, 100, "抄底訊號（台股籌碼）",
-                                         ("valuation", "technical", "leverage", "institution", "tdcc"))
-            # 三軸 composite（cycle 用台股估值深跌子分，max 25 同尺度）
-            act = compute_composite_action(trend[0], high[0], low[0],
-                                           low[1]["valuation"]["score"])
+                                         ("leverage", "technical", "institution", "tdcc", "valuation"))
+            # 三軸 composite：不傳 cycle_score（台股估值對底部是雜訊、且 max 僅 10 達不到 cycle 門檻）；
+            # 由重配重後的 low_score≥60 驅動 value 分支（已含融資清洗權重30 這個校準最強底部維）。
+            act = compute_composite_action(trend[0], high[0], low[0])
             comp_title, comp_rows = _panel_stance(
                 "操作訊號（三軸融合）", f"{act['emoji']} {act['action']}", act["detail"])
             comp_rows.append(f"     {act['pos_label']}")
-            note = ["  ⚠ 台股逃頂/抄底為 v0.1〔絕對值起步・未擬合〕：PE/PB 用絕對值非分位、",
-                    "     籌碼閾值為專家起點，待累積台股歷史回測校準。"]
+            note = [f"  籌碼資料截至 {self._chip.get('as_of', '—')}（TWSE EOD；今日未收/連假自動取最近交易日）",
+                    "  ⚠ 台股逃頂/抄底 v0.2〔2026-06 swing 回測校準〕：逃頂靠估值(PE/PB絕對 AUC~0.63)、",
+                    "     抄底靠融資清洗(AUC 0.564)；法人/TDCC 為弱維(AUC<0.55)僅參考。"]
         else:
             st = compute_trend_stance(trend[0], mom)
             comp_title, comp_rows = _panel_stance(

@@ -26,35 +26,44 @@ def test_low_empty_chip_all_grey():
 
 
 def test_low_deep_value_and_chips():
-    """PE/PB 低 + 融資暴減 + 法人大買 + 大戶集中 → 高抄底分。"""
+    """v0.2 校準：融資暴減(最強30) + 技術回穩 + 法人大買 + 大戶集中 + 估值低(降權10) → 高抄底分。"""
     row, df = _df(volume=1_000_000, rsi=18)
     chip = {
         "valuation": {"pe": 8, "pb": 0.9}, "margin": {"fin_chg_pct": -6.0},
         "institutional": {"total_net": 300_000}, "tdcc": {"major_pct": 72, "retail_pct": 10},
     }
     score, sig = compute_relative_low_tw(row, df, chip=chip)
-    assert sig["valuation"]["score"] == 25      # PE<10(13) + PB<1(12)
-    assert sig["leverage"]["score"] == 20       # 融資 -6%
+    assert sig["leverage"]["score"] == 30       # 融資 ≤-5%（校準最強維）
     assert sig["institution"]["score"] == 20    # 30萬/100萬均量=30% 大買
     assert sig["tdcc"]["score"] == 15           # 大戶 72%
+    assert sig["valuation"]["score"] == 10      # PE<10(5)+PB<1(5)（已降權）
+    assert sig["technical"]["score"] == 8       # RSI≤20(8)，無背離
     assert score >= 80
     assert "低估" in relative_low_tw_meta(score)[0]
 
 
 def test_high_overheat():
-    """融資暴增 + 法人大賣 + PE/PB 高 + 散戶鬆散 → 高逃頂分。"""
+    """v0.2 校準：估值高(最強30) + 融資暴增 + 法人大賣(降權10) + 散戶鬆散 → 高逃頂分。"""
     row, df = _df(volume=1_000_000, rsi=82)
     chip = {
         "valuation": {"pe": 45, "pb": 6}, "margin": {"fin_chg_pct": 6.0},
         "institutional": {"total_net": -300_000}, "tdcc": {"major_pct": 30, "retail_pct": 45},
     }
     score, sig = compute_relative_high_tw(row, df, chip=chip)
-    assert sig["leverage"]["score"] == 20       # 融資 +6%
-    assert sig["institution"]["score"] == 25    # -30% 均量 大賣
-    assert sig["valuation"]["score"] == 15      # PE≥40(8)+PB≥5(7)
-    assert sig["tdcc"]["score"] == 10           # 散戶 45%
+    assert sig["valuation"]["score"] == 30      # PE≥40(16)+PB≥5(14)（校準最強維）
+    assert sig["leverage"]["score"] == 15       # 融資 ≥5%
+    assert sig["institution"]["score"] == 10    # -30% 均量 大賣（已降權）
+    assert sig["tdcc"]["score"] == 15           # 散戶 45%
+    assert sig["technical"]["score"] == 10      # RSI≥80(10)，無背離
     assert score >= 70
     assert "過熱" in relative_high_tw_meta(score)[0] or "逃頂" in relative_high_tw_meta(score)[0]
+
+
+def test_weights_sum_to_100():
+    from core.relative_high_tw import WEIGHTS_HIGH_TW
+    from core.relative_low_tw import WEIGHTS_LOW_TW
+    assert sum(WEIGHTS_HIGH_TW.values()) == 100
+    assert sum(WEIGHTS_LOW_TW.values()) == 100
 
 
 def test_valuation_absolute_levels():

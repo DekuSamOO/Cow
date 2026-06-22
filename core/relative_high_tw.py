@@ -1,17 +1,18 @@
 """
-core/relative_high_tw.py  ·  v0.1（絕對值起步，未擬合）
-台股相對高點（逃頂雷達）— 純函數、零網路請求。鏡像 core/relative_high 結構，
-把加密專屬維度（funding/OI/鏈上）替換為台股對應（融資融券/三大法人/TDCC/PE-PB）。
+core/relative_high_tw.py  ·  v0.2（2026-06-22 回測校準）
+台股相對高點（逃頂雷達）— 純函數、零網路請求。把加密專屬維度（funding/OI/鏈上）
+替換為台股對應（融資融券/三大法人/TDCC/PE-PB）。
 
-五維（0–100）：
-  技術衰竭 30（頂背離 + RSI 超買）   ← 複用既有 divergence/RSI（通用）
-  法人派發 25（三大法人賣超／外資大賣）← 替 ETF 流出
-  槓桿過熱 20（融資餘額增速高＝散戶追高）← 替 funding/OI 過熱
-  估值過高 15（PE/PB 絕對值高）     ← 替 cycle
-  籌碼鬆動 10（TDCC 散戶持股比高/大戶降）← 集保派發
+五維（0–100，權重經 S2b swing-only 回測校準，見 scripts/tw_swing_backtest.py）：
+  技術衰竭 30（頂背離 + RSI 超買）        ← 複用 core/divergence（與加密同源、已驗證）
+  估值過高 30（PE/PB 絕對值高）          ← ✅ 校準最強維（swing 逃頂 AUC PE 0.627/PB 0.640）
+  槓桿過熱 15（融資增速高＝散戶追高）      ← 〔弱〕swing AUC 0.538
+  法人派發 10（三大法人賣超）            ← 〔弱/雜訊〕swing AUC 0.519 → 降權
+  籌碼鬆動 15（TDCC 散戶持股比高）       ← 〔弱・樣本薄 2023-09起〕swing AUC 0.539
 
-⚠️ 同 relative_low_tw：v0.1 絕對值起步〔未擬合〕，法人以近20日均量正規化，
-   閾值為專家起點（鏡像 tw_stock_climber），待回測校準。
+校準關鍵（v0.1→v0.2）：估值 15→30（最強）、法人 25→10（雜訊）。
+PE/PB **用絕對值非分位**（swing 重測：絕對 PE 0.627 大勝個股分位 0.452，分位把「本質就貴」洗掉）。
+〔弱〕維度＝有回測但 AUC<0.55、給低權；技術維度沿用加密側既有驗證。
 """
 import math
 from typing import Optional, Dict, Tuple
@@ -19,9 +20,10 @@ from typing import Optional, Dict, Tuple
 from core.divergence import detect_top_divergence_combo
 
 WEIGHTS_HIGH_TW = {
-    "technical": 30, "institution": 25, "leverage": 20, "valuation": 15, "tdcc": 10,
+    "technical": 30, "valuation": 30, "leverage": 15, "institution": 10, "tdcc": 15,
 }
-UNFITTED_DIMS_HIGH_TW = ("institution", "leverage", "valuation", "tdcc")
+# AUC<0.55 的弱維（已回測、給低權、判讀僅參考）
+WEAK_DIMS_HIGH_TW = ("leverage", "institution", "tdcc")
 
 
 def _nan(v) -> bool:
@@ -51,67 +53,70 @@ def _score_technical_high(row, df) -> dict:
             "note": "頂背離（價HH/指標LH）+ RSI 超買", "sub": {"div_n": n, "rsi": (None if _nan(rsi) else float(rsi))}}
 
 
+def _score_valuation_high(valuation) -> dict:
+    """估值過高（max 30，校準最強維）= PE 高(16) + PB 高(14)。絕對值分級。"""
+    if not valuation:
+        return {"score": 0, "max": 30, "label": "⚪ 無估值資料（上櫃/缺）",
+                "note": "PE/PB 絕對值（逃頂最強維 AUC~0.63）", "sub": {}}
+    pe, pb = valuation.get("pe"), valuation.get("pb")
+    if _nan(pe) or pe <= 0: pe_s, pe_l = 0, "⚪ PE 無/負"
+    elif pe >= 40: pe_s, pe_l = 16, f"🔴 PE {pe:.0f} 偏貴(≥40)"
+    elif pe >= 25: pe_s, pe_l = 9, f"🟠 PE {pe:.0f} 偏高(≥25)"
+    elif pe >= 18: pe_s, pe_l = 4, f"🟡 PE {pe:.0f} 略高(≥18)"
+    else: pe_s, pe_l = 0, f"⚪ PE {pe:.0f}"
+    if _nan(pb) or pb <= 0: pb_s, pb_l = 0, "⚪ PB 無"
+    elif pb >= 5: pb_s, pb_l = 14, f"🔴 PB {pb:.1f} 偏貴(≥5)"
+    elif pb >= 3: pb_s, pb_l = 8, f"🟠 PB {pb:.1f} 偏高(≥3)"
+    elif pb >= 2: pb_s, pb_l = 3, f"🟡 PB {pb:.1f} 略高(≥2)"
+    else: pb_s, pb_l = 0, f"⚪ PB {pb:.1f}"
+    return {"score": pe_s + pb_s, "max": 30, "label": f"{pe_l}；{pb_l}",
+            "note": "PE/PB 絕對值過高（swing 逃頂 AUC PE 0.627/PB 0.640，絕對勝分位）",
+            "sub": {"pe": pe, "pb": pb}}
+
+
+def _score_leverage_high(margin) -> dict:
+    """槓桿過熱（max 15，〔弱〕）= 融資餘額增速高（散戶追高加槓桿）。"""
+    if not margin or margin.get("fin_chg_pct") is None:
+        return {"score": 0, "max": 15, "label": "⚪ 無融資資料",
+                "note": "融資增速高＝散戶追高〔弱 AUC 0.538〕", "sub": {}}
+    chg = margin["fin_chg_pct"]
+    if chg >= 5: s, l = 15, f"🔴 融資暴增 {chg:+.1f}%（散戶追高）"
+    elif chg >= 3: s, l = 10, f"🟠 融資大增 {chg:+.1f}%"
+    elif chg >= 1: s, l = 5, f"🟡 融資增 {chg:+.1f}%"
+    else: s, l = 0, f"⚪ 融資 {chg:+.1f}%（未過熱）"
+    return {"score": s, "max": 15, "label": l, "note": "融資餘額日變化〔弱 AUC 0.538〕",
+            "sub": {"fin_chg_pct": chg}}
+
+
 def _score_institution_high(institutional, df) -> dict:
-    """法人派發（max 25）= 三大法人賣超（以近 20 日均量正規化）。"""
+    """法人派發（max 10，〔弱/雜訊〕）= 三大法人賣超（近20日均量正規化）。"""
     if not institutional or institutional.get("total_net") is None:
-        return {"score": 0, "max": 25, "label": "⚪ 無法人資料",
-                "note": "三大法人賣超＝派發〔未擬合〕", "sub": {}}
+        return {"score": 0, "max": 10, "label": "⚪ 無法人資料",
+                "note": "三大法人賣超〔弱 AUC 0.519，降權〕", "sub": {}}
     net = institutional["total_net"]
     av = _avg_vol(df)
     ratio = (net / av * 100) if av else None
     if ratio is None:
-        s, l = (10, "🟠 法人賣超（無量基準）") if net < 0 else (0, "⚪ 法人買超/平")
-    elif ratio <= -20: s, l = 25, f"🔴 法人大賣 {ratio:+.0f}%均量"
-    elif ratio <= -8: s, l = 16, f"🟠 法人賣超 {ratio:+.0f}%均量"
-    elif ratio <= -3: s, l = 7, f"🟡 法人小賣 {ratio:+.0f}%均量"
+        s, l = (4, "🟠 法人賣超（無量基準）") if net < 0 else (0, "⚪ 法人買超/平")
+    elif ratio <= -20: s, l = 10, f"🟠 法人大賣 {ratio:+.0f}%均量"
+    elif ratio <= -8: s, l = 6, f"🟡 法人賣超 {ratio:+.0f}%均量"
+    elif ratio <= -3: s, l = 3, f"🟡 法人小賣 {ratio:+.0f}%均量"
     else: s, l = 0, f"⚪ 法人 {ratio:+.0f}%均量（買/平）"
-    return {"score": s, "max": 25, "label": l, "note": "三大法人買賣超 / 近20日均量（負＝賣超派發）",
+    return {"score": s, "max": 10, "label": l, "note": "三大法人買賣超/均量〔弱 AUC 0.519〕",
             "sub": {"total_net": net, "ratio_pct": ratio}}
 
 
-def _score_leverage_high(margin) -> dict:
-    """槓桿過熱（max 20）= 融資餘額增速高（散戶追高加槓桿）。"""
-    if not margin or margin.get("fin_chg_pct") is None:
-        return {"score": 0, "max": 20, "label": "⚪ 無融資資料",
-                "note": "融資增速高＝散戶追高過熱〔未擬合〕", "sub": {}}
-    chg = margin["fin_chg_pct"]
-    if chg >= 5: s, l = 20, f"🔴 融資暴增 {chg:+.1f}%（散戶追高）"
-    elif chg >= 3: s, l = 14, f"🟠 融資大增 {chg:+.1f}%"
-    elif chg >= 1: s, l = 7, f"🟡 融資增 {chg:+.1f}%"
-    else: s, l = 0, f"⚪ 融資 {chg:+.1f}%（未過熱）"
-    return {"score": s, "max": 20, "label": l, "note": "融資餘額日變化（散戶槓桿過熱）",
-            "sub": {"fin_chg_pct": chg}}
-
-
-def _score_valuation_high(valuation) -> dict:
-    """估值過高（max 15）= PE 高(8) + PB 高(7)。絕對值分級〔未擬合〕。"""
-    if not valuation:
-        return {"score": 0, "max": 15, "label": "⚪ 無估值資料（上櫃/缺）",
-                "note": "PE/PB 絕對值〔未擬合〕", "sub": {}}
-    pe, pb = valuation.get("pe"), valuation.get("pb")
-    if _nan(pe) or pe <= 0: pe_s, pe_l = 0, "⚪ PE 無/負"
-    elif pe >= 40: pe_s, pe_l = 8, f"🔴 PE {pe:.0f} 偏貴(≥40)"
-    elif pe >= 25: pe_s, pe_l = 4, f"🟡 PE {pe:.0f} 偏高(≥25)"
-    else: pe_s, pe_l = 0, f"⚪ PE {pe:.0f}"
-    if _nan(pb) or pb <= 0: pb_s, pb_l = 0, "⚪ PB 無"
-    elif pb >= 5: pb_s, pb_l = 7, f"🔴 PB {pb:.1f} 偏貴(≥5)"
-    elif pb >= 3: pb_s, pb_l = 3, f"🟡 PB {pb:.1f} 偏高(≥3)"
-    else: pb_s, pb_l = 0, f"⚪ PB {pb:.1f}"
-    return {"score": pe_s + pb_s, "max": 15, "label": f"{pe_l}；{pb_l}",
-            "note": "PE/PB 絕對值過高〔未擬合，待分位/回測〕",
-            "sub": {"pe": pe, "pb": pb}}
-
-
 def _score_tdcc_high(tdcc) -> dict:
-    """籌碼鬆動（max 10）= TDCC 散戶持股比高（籌碼分散＝派發末端）。"""
+    """籌碼鬆動（max 15，〔弱・樣本薄〕）= TDCC 散戶持股比高（籌碼分散＝派發末端）。"""
     if not tdcc or tdcc.get("retail_pct") is None:
-        return {"score": 0, "max": 10, "label": "⚪ 無集保資料",
-                "note": "散戶持股比高＝籌碼鬆動〔未擬合〕", "sub": {}}
+        return {"score": 0, "max": 15, "label": "⚪ 無集保資料",
+                "note": "散戶持股比高〔弱 AUC 0.539・樣本薄〕", "sub": {}}
     rp = tdcc["retail_pct"]
-    if rp >= 40: s, l = 10, f"🔴 散戶 {rp:.0f}%（籌碼鬆散）"
-    elif rp >= 25: s, l = 5, f"🟡 散戶 {rp:.0f}%"
+    if rp >= 40: s, l = 15, f"🔴 散戶 {rp:.0f}%（籌碼鬆散）"
+    elif rp >= 30: s, l = 9, f"🟠 散戶 {rp:.0f}%"
+    elif rp >= 25: s, l = 4, f"🟡 散戶 {rp:.0f}%"
     else: s, l = 0, f"⚪ 散戶 {rp:.0f}%（集中）"
-    return {"score": s, "max": 10, "label": l, "note": "TDCC 散戶（≤50張）持股比",
+    return {"score": s, "max": 15, "label": l, "note": "TDCC 散戶（≤50張）持股比〔弱・樣本薄〕",
             "sub": {"retail_pct": rp, "major_pct": tdcc.get("major_pct")}}
 
 
@@ -120,9 +125,9 @@ def compute_relative_high_tw(row, df=None, *, chip=None) -> Tuple[int, Dict[str,
     chip = chip or {}
     signals = {
         "technical": _score_technical_high(row, df),
-        "institution": _score_institution_high(chip.get("institutional"), df),
-        "leverage": _score_leverage_high(chip.get("margin")),
         "valuation": _score_valuation_high(chip.get("valuation")),
+        "leverage": _score_leverage_high(chip.get("margin")),
+        "institution": _score_institution_high(chip.get("institutional"), df),
         "tdcc": _score_tdcc_high(chip.get("tdcc")),
     }
     score = max(0, min(100, int(sum(s["score"] for s in signals.values()))))
@@ -130,7 +135,7 @@ def compute_relative_high_tw(row, df=None, *, chip=None) -> Tuple[int, Dict[str,
 
 
 def relative_high_tw_meta(score: int) -> Tuple[str, str, str]:
-    if score >= 65: return "🔴 強烈逃頂", "#ff4b4b", "技術＋籌碼俱過熱，分批止盈/減碼"
+    if score >= 65: return "🔴 強烈逃頂", "#ff4b4b", "技術＋估值俱過熱，分批止盈/減碼"
     if score >= 45: return "🟠 明確過熱", "#ff8800", "減碼、收緊移動止盈"
     if score >= 30: return "🟡 偏熱警戒", "#ffcc00", "停止加倉、提高警覺"
     if score >= 15: return "⚪ 中性", "#9e9e9e", "正常持有"
