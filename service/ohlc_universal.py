@@ -83,13 +83,25 @@ def fetch_ohlc(yahoo_symbol: str, rng: str = "2y") -> pd.DataFrame:
     """
     Yahoo v8 chart JSON → 日線 OHLCV，欄位用 core 期望的 lowercase、index 去時區。
     同一函式吃 BTC-USD / ETH-USD / AAPL / NVDA / 2330.TW，與 Binance 無關。
+    台股 `.TW`（上市）查無資料時自動改試 `.TWO`（上櫃）——classify 無法預知上市/上櫃。
     """
-    r = _session().get(_YF_CHART + yahoo_symbol, params={"range": rng, "interval": "1d"}, timeout=20)
-    r.raise_for_status()
-    result = r.json()["chart"]["result"]
-    if not result:
+    s = _session()
+    candidates = [yahoo_symbol]
+    if yahoo_symbol.endswith(".TW"):
+        candidates.append(yahoo_symbol[:-3] + ".TWO")   # 上市查無 → 試上櫃
+    res = None
+    for sym in candidates:
+        try:
+            r = s.get(_YF_CHART + sym, params={"range": rng, "interval": "1d"}, timeout=20)
+            r.raise_for_status()
+            result = r.json()["chart"]["result"]
+        except Exception:
+            result = None
+        if result:
+            res = result[0]
+            break
+    if res is None:
         raise RuntimeError(f"無資料：{yahoo_symbol}")
-    res = result[0]
     q = res["indicators"]["quote"][0]
     df = pd.DataFrame({
         "open": q["open"], "high": q["high"], "low": q["low"],

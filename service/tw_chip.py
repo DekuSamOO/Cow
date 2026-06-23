@@ -26,6 +26,7 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 _TWSE = "https://www.twse.com.tw/rwd/zh"
+_TPEX = "https://www.tpex.org.tw"          # 上櫃（估值 fallback）
 _TDCC = "https://www.tdcc.com.tw"
 _HEADERS = {"User-Agent": "Mozilla/5.0", "Accept-Encoding": "gzip, deflate"}  # 勿 br
 _CACHE_TTL = 3600  # 市場全量檔每小時抓一次（比照 watcher 日線刷新）
@@ -62,19 +63,20 @@ def _num(v):
         return None
 
 
-def _fetch_market_file(endpoint: str, params: dict, key_idx: int = 0) -> dict:
+def _fetch_market_file(endpoint: str, params: dict, key_idx: int = 0, base: str = _TWSE) -> dict:
     """
-    抓 TWSE 市場全量單日檔 → {symbol: row(list)}，每小時快取。
-    自動深找含 fields+data 的 table（TWSE 回應有時包在 tables[]）。失敗回 {}。
+    抓 TWSE/TPEx 市場全量單日檔 → {symbol: row(list)}，每小時快取。
+    自動深找含 fields+data 的 table（回應有時包在 tables[]）。失敗回 {}。
+    base 預設 TWSE（上市）；上櫃傳 _TPEX。
     """
     date = params.get("date", "")
-    ck = (endpoint, date)
+    ck = (base, endpoint, date)
     hit = _cache.get(ck)
     if hit and time.time() - hit[0] < _CACHE_TTL:
         return hit[1]
 
     try:
-        r = _session().get(f"{_TWSE}/{endpoint}", params=params, timeout=20)
+        r = _session().get(f"{base}/{endpoint}", params=params, timeout=20)
         r.raise_for_status()
         j = r.json()
     except Exception as e:  # noqa: BLE001
@@ -149,17 +151,34 @@ def get_institutional(symbol: str, date_yyyymmdd: str) -> dict | None:
 
 def get_valuation(symbol: str, date_yyyymmdd: str) -> dict | None:
     """
-    本益比/股價淨值比/殖利率（BWIBBU，上市）。回傳 {pe, pb, yield_pct, close}；
-    上櫃股不在 TWSE 此檔 → 回 None（估值維度灰燈）。
+    本益比/股價淨值比/殖利率。回傳 {pe, pb, yield_pct, close}；查無回 None。
+    上市走 TWSE BWIBBU；上市查無（上櫃股）→ fallback TPEx peQryDate。
     """
     rows = _fetch_market_file(
         "afterTrading/BWIBBU_d",
         {"date": date_yyyymmdd, "selectType": "ALL", "response": "json"})
     row = rows.get(symbol)
+    if row and len(row) >= 7:
+        return {"close": _num(row[2]), "yield_pct": _num(row[3]),
+                "pe": _num(row[5]), "pb": _num(row[6])}
+    return _get_valuation_tpex(symbol, date_yyyymmdd)
+
+
+def _get_valuation_tpex(symbol: str, date_yyyymmdd: str) -> dict | None:
+    """
+    上櫃本益比/股價淨值比/殖利率（TPEx peQryDate）。欄位順序與 TWSE 不同：
+    0代號 1名稱 2本益比 3每股股利 4股利年度 5殖利率% 6股價淨值比 7財報季（無收盤價）。
+    日期格式 yyyy/mm/dd。
+    """
+    d = f"{date_yyyymmdd[:4]}/{date_yyyymmdd[4:6]}/{date_yyyymmdd[6:8]}"
+    rows = _fetch_market_file(
+        "www/zh-tw/afterTrading/peQryDate",
+        {"date": d, "response": "json"}, base=_TPEX)
+    row = rows.get(symbol)
     if not row or len(row) < 7:
         return None
-    return {"close": _num(row[2]), "yield_pct": _num(row[3]),
-            "pe": _num(row[5]), "pb": _num(row[6])}
+    return {"close": None, "yield_pct": _num(row[5]),
+            "pe": _num(row[2]), "pb": _num(row[6])}
 
 
 # ── TDCC 集保大戶分布（鏡像 tw_stock_climber 的 GET→POST CSRF 爬法）─────────────
