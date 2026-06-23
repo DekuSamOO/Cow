@@ -9,9 +9,9 @@ service/tw_chip.py
 
 ⚠️ 設計取捨（鏡像 tw_stock_climber 概念但**不 import**，Cow 保持自包含、雲端可跑）：
   - TWSE/TPEx 端點都是「市場全量單日檔」，非個股查詢 → 抓整檔快取，filter 該 symbol。
-  - 估值：上市走 TWSE BWIBBU，上市查無（上櫃股）→ fallback TPEx peQryDate（get_valuation）→
-    上櫃估值維度**可用**。融資/法人：仍 TWSE-only（無對應 TPEx 接入）→ 上櫃這兩維 graceful-None，
-    日後可比照估值 fallback 模式（_fetch_market_file base=_TPEX）後補。
+  - 估值/融資/法人三日檔皆「上市 TWSE + 上櫃 TPEx fallback」（_fetch_market_file base=_TPEX）：
+    估值 BWIBBU→peQryDate、融資 MI_MARGN→margin/balance、法人 T86→insti/dailyTrade，
+    上市查無（上櫃股）即轉打對應 TPEx 端點 → 上櫃四維（融資/法人/估值/大戶）皆可用。
   - 抓不到的源回 None → 評分自動灰燈、不 crash。
   - Accept-Encoding 不要 br（TWSE T86 回 brotli 會解碼錯，requests 無 brotli 時壞）。
   - 融資融券單一回應即含「前日餘額＋今日餘額」→ 變化免多日累積；三大法人為單日買賣超。
@@ -62,6 +62,11 @@ def _num(v):
         return float(sv)
     except ValueError:
         return None
+
+
+def _tpex_date(date_yyyymmdd: str) -> str:
+    """YYYYMMDD → TPEx 端點要的 yyyy/mm/dd。"""
+    return f"{date_yyyymmdd[:4]}/{date_yyyymmdd[4:6]}/{date_yyyymmdd[6:8]}"
 
 
 def _fetch_market_file(endpoint: str, params: dict, key_idx: int = 0, base: str = _TWSE) -> dict:
@@ -137,9 +142,8 @@ def _margin_dict(fin_prev, fin_today, short_prev, short_today) -> dict | None:
 
 def _get_margin_tpex(symbol: str, date_yyyymmdd: str) -> dict | None:
     """上櫃融資融券（TPEx margin/balance）。欄序：2前資餘額/6資餘額/10前券餘額/14券餘額（張）。"""
-    d = f"{date_yyyymmdd[:4]}/{date_yyyymmdd[4:6]}/{date_yyyymmdd[6:8]}"
     rows = _fetch_market_file("www/zh-tw/margin/balance",
-                              {"date": d, "response": "json"}, base=_TPEX)
+                              {"date": _tpex_date(date_yyyymmdd), "response": "json"}, base=_TPEX)
     row = rows.get(symbol)
     if not row or len(row) < 15:
         return None
@@ -171,9 +175,8 @@ def _get_institutional_tpex(symbol: str, date_yyyymmdd: str) -> dict | None:
     上櫃三大法人（TPEx insti/dailyTrade，單位：股）。24 欄、每型 買進/賣出/買賣超 三欄：
     4外陸資(不含自營)買賣超 / 13投信買賣超 / 22自營商合計 / 23三大法人合計。評分只用 total_net。
     """
-    d = f"{date_yyyymmdd[:4]}/{date_yyyymmdd[4:6]}/{date_yyyymmdd[6:8]}"
     rows = _fetch_market_file("www/zh-tw/insti/dailyTrade",
-                              {"date": d, "type": "Daily", "response": "json"}, base=_TPEX)
+                              {"date": _tpex_date(date_yyyymmdd), "type": "Daily", "response": "json"}, base=_TPEX)
     row = rows.get(symbol)
     if not row or len(row) < 24:
         return None
@@ -203,10 +206,9 @@ def _get_valuation_tpex(symbol: str, date_yyyymmdd: str) -> dict | None:
     0代號 1名稱 2本益比 3每股股利 4股利年度 5殖利率% 6股價淨值比 7財報季（無收盤價）。
     日期格式 yyyy/mm/dd。
     """
-    d = f"{date_yyyymmdd[:4]}/{date_yyyymmdd[4:6]}/{date_yyyymmdd[6:8]}"
     rows = _fetch_market_file(
         "www/zh-tw/afterTrading/peQryDate",
-        {"date": d, "response": "json"}, base=_TPEX)
+        {"date": _tpex_date(date_yyyymmdd), "response": "json"}, base=_TPEX)
     row = rows.get(symbol)
     if not row or len(row) < 7:
         return None

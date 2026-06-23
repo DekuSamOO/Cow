@@ -161,14 +161,20 @@ S1 抽 panel（多檔×多日 + fwd_ret）→ S2 每日 ±18% 二分單維 AUC �
   `SYNCHRONIZER_TOKEN`/`SYNCHRONIZER_URI`，再 POST 帶 token + firDate/scaDate（最近已公布週五，
   扣 7 天公布延遲）。`pd.read_html` 解析持股分級表，大戶≥1000張/中實戶≥400張/散戶≤50張。
   **同週同檔記憶體快取不重抓；勿密集打**（每檔間需 sleep）。
-- **上櫃估值 TPEx fallback（2026-06-23）**：BWIBBU 僅上市；上市查無（上櫃股）→ `_get_valuation_tpex`
-  打 **TPEx `www/zh-tw/afterTrading/peQryDate`**（`_fetch_market_file` 加 `base` 參數，預設 _TWSE、
-  上櫃傳 _TPEX="https://www.tpex.org.tw"；**cache key 改 (base, endpoint, date)** 避同端點撞檔）。
-  **TPEx 欄序與 TWSE 不同**：PE=2／殖利率=5／PB=6、日期 yyyy/mm/dd、**無收盤價欄 → close=None**
-  （呼叫端勿對 close 做算術）。OHLC 端：`fetch_ohlc` 台股 `.TW` 查無自動改試 **`.TWO`**（上櫃 Yahoo
-  後綴，classify 無法離線分上市/上櫃；上市查到即 break 不浪費第二請求、全失敗 `raise ... from last_err`）。
-  → 上櫃股（6488/8069）OHLC+估值可載入、估值維度不再灰燈。**融資/法人上櫃仍 TWSE-only 灰燈**
-  （無對應 TPEx 源；docstring 標明可比照估值 fallback 後補）。
+- **上櫃籌碼四維 TPEx fallback（2026-06-23）**：三個日檔（估值/融資/法人）皆「上市 TWSE → 上市查無
+  （上櫃股）轉打對應 TPEx 端點」，`_fetch_market_file` 加 `base` 參數（預設 _TWSE、上櫃傳
+  _TPEX="https://www.tpex.org.tw"；**cache key 改 (base, endpoint, date)** 避同端點撞檔；TPEx 日期皆
+  `_tpex_date` 轉 yyyy/mm/dd）：
+  - 估值 `_get_valuation_tpex`：TPEx `www/zh-tw/afterTrading/peQryDate`，欄序 PE=2／殖利率=5／PB=6、
+    **無收盤價欄 → close=None**（呼叫端勿對 close 做算術）。
+  - 融資 `_get_margin_tpex`：TPEx `www/zh-tw/margin/balance`，欄序 2前資餘額/6資餘額/10前券/14券餘額
+    （單位張同 TWSE）；TWSE/TPEx 共用 `_margin_dict` 把前日/今日餘額轉 dict。
+  - 法人 `_get_institutional_tpex`：TPEx `www/zh-tw/insti/dailyTrade`(type=Daily)，欄序 4外資(不含自營)/
+    13投信/22自營合計/23三大法人合計（與 TWSE T86 的 4/10/11/18 不同 → 兩函式分開），評分只用 total_net。
+  OHLC 端：`fetch_ohlc` 台股 `.TW` 查無自動改試 **`.TWO`**（上櫃 Yahoo 後綴，classify 無法離線分
+  上市/上櫃；上市查到即 break 不浪費第二請求、全失敗 `raise ... from last_err`）。
+  → 上櫃股（6488/8069）OHLC + 籌碼四維（融資/法人/估值/大戶）全部可用，逃頂/抄底不再因上櫃灰燈
+  （6488 抄底 15→38）；上市路徑不變。**唯 TDCC 仍 2.7 年薄（2023-09 起）維持低權。**
 - **TWSE 日檔是 EOD（盤後）公布 → 必須 walk-back**：`get_chip_bundle` 呼叫端常傳「今日」（watcher
   用 Yahoo 最後日線日期，盤中可能是未收的今天），但今日 EOD 檔尚未出、連假（如 2026-06-19 端午）
   整週無檔 → 三日檔會**整片 None**。修法：先用**單一探針**（BWIBBU 市場檔非空判斷）從 date 往前找
