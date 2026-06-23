@@ -111,17 +111,19 @@ def get_margin(symbol: str, date_yyyymmdd: str) -> dict | None:
     融資融券（MI_MARGN）。回傳該檔 {fin_balance, fin_prev, fin_chg_lots,
     short_balance, short_prev}（單位：張）；查無回 None。
     融資餘額增＝散戶加槓桿（過熱）；融資大減＝斷頭清洗（抄底）；融券回補亦為訊號。
-    上櫃股目前無對應 TPEx 來源 → TWSE-only（上櫃灰燈）；日後比照 get_valuation
-    之 TPEx fallback 模式（_fetch_market_file base=_TPEX）即可後補。
+    上市走 TWSE MI_MARGN；上市查無（上櫃股）→ fallback TPEx margin/balance。
     """
     rows = _fetch_market_file(
         "marginTrading/MI_MARGN",
         {"date": date_yyyymmdd, "selectType": "STOCK", "response": "json"})
     row = rows.get(symbol)
-    if not row or len(row) < 13:
-        return None
-    fin_prev, fin_today = _num(row[5]), _num(row[6])         # 融資 前日/今日餘額
-    short_prev, short_today = _num(row[11]), _num(row[12])   # 融券 前日/今日餘額
+    if row and len(row) >= 13:
+        return _margin_dict(_num(row[5]), _num(row[6]), _num(row[11]), _num(row[12]))
+    return _get_margin_tpex(symbol, date_yyyymmdd)
+
+
+def _margin_dict(fin_prev, fin_today, short_prev, short_today) -> dict | None:
+    """融資融券前日/今日餘額（張）→ 統一回傳 dict（TWSE/TPEx 共用）。"""
     if fin_today is None:
         return None
     return {
@@ -133,24 +135,50 @@ def get_margin(symbol: str, date_yyyymmdd: str) -> dict | None:
     }
 
 
+def _get_margin_tpex(symbol: str, date_yyyymmdd: str) -> dict | None:
+    """上櫃融資融券（TPEx margin/balance）。欄序：2前資餘額/6資餘額/10前券餘額/14券餘額（張）。"""
+    d = f"{date_yyyymmdd[:4]}/{date_yyyymmdd[4:6]}/{date_yyyymmdd[6:8]}"
+    rows = _fetch_market_file("www/zh-tw/margin/balance",
+                              {"date": d, "response": "json"}, base=_TPEX)
+    row = rows.get(symbol)
+    if not row or len(row) < 15:
+        return None
+    return _margin_dict(_num(row[2]), _num(row[6]), _num(row[10]), _num(row[14]))
+
+
 def get_institutional(symbol: str, date_yyyymmdd: str) -> dict | None:
     """
     三大法人買賣超（T86，單位：股）。回傳 {foreign_net, trust_net, dealer_net, total_net}；
     正＝買超（吸籌）、負＝賣超（派發）。查無回 None。
-    上櫃股目前無對應 TPEx 來源 → TWSE-only（上櫃灰燈），同 get_margin。
+    上市走 TWSE T86；上市查無（上櫃股）→ fallback TPEx insti/dailyTrade。
     """
     rows = _fetch_market_file(
         "fund/T86",
         {"date": date_yyyymmdd, "selectType": "ALLBUT0999", "response": "json"})
     row = rows.get(symbol)
-    if not row or len(row) < 19:
+    if row and len(row) >= 19:
+        return {
+            "foreign_net": _num(row[4]),    # 外陸資買賣超（不含外資自營商）
+            "trust_net": _num(row[10]),     # 投信買賣超
+            "dealer_net": _num(row[11]),    # 自營商買賣超（合計）
+            "total_net": _num(row[18]),     # 三大法人買賣超
+        }
+    return _get_institutional_tpex(symbol, date_yyyymmdd)
+
+
+def _get_institutional_tpex(symbol: str, date_yyyymmdd: str) -> dict | None:
+    """
+    上櫃三大法人（TPEx insti/dailyTrade，單位：股）。24 欄、每型 買進/賣出/買賣超 三欄：
+    4外陸資(不含自營)買賣超 / 13投信買賣超 / 22自營商合計 / 23三大法人合計。評分只用 total_net。
+    """
+    d = f"{date_yyyymmdd[:4]}/{date_yyyymmdd[4:6]}/{date_yyyymmdd[6:8]}"
+    rows = _fetch_market_file("www/zh-tw/insti/dailyTrade",
+                              {"date": d, "type": "Daily", "response": "json"}, base=_TPEX)
+    row = rows.get(symbol)
+    if not row or len(row) < 24:
         return None
-    return {
-        "foreign_net": _num(row[4]),    # 外陸資買賣超（不含外資自營商）
-        "trust_net": _num(row[10]),     # 投信買賣超
-        "dealer_net": _num(row[11]),    # 自營商買賣超（合計）
-        "total_net": _num(row[18]),     # 三大法人買賣超
-    }
+    return {"foreign_net": _num(row[4]), "trust_net": _num(row[13]),
+            "dealer_net": _num(row[22]), "total_net": _num(row[23])}
 
 
 def get_valuation(symbol: str, date_yyyymmdd: str) -> dict | None:
