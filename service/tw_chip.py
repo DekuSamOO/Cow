@@ -8,9 +8,10 @@ service/tw_chip.py
   - BWIBBU    個股本益比/股價淨值比/殖利率（估值）
 
 ⚠️ 設計取捨（鏡像 tw_stock_climber 概念但**不 import**，Cow 保持自包含、雲端可跑）：
-  - TWSE 端點都是「市場全量單日檔」，非個股查詢 → 抓整檔快取，filter 該 symbol。
-  - 上市（TWSE）三源完整；上櫃（TPEx）融資融券/法人另有端點，本益比端點未定 →
-    上櫃估值維度暫 graceful-None（P1a 先上市完整，上櫃為後續）。
+  - TWSE/TPEx 端點都是「市場全量單日檔」，非個股查詢 → 抓整檔快取，filter 該 symbol。
+  - 估值：上市走 TWSE BWIBBU，上市查無（上櫃股）→ fallback TPEx peQryDate（get_valuation）→
+    上櫃估值維度**可用**。融資/法人：仍 TWSE-only（無對應 TPEx 接入）→ 上櫃這兩維 graceful-None，
+    日後可比照估值 fallback 模式（_fetch_market_file base=_TPEX）後補。
   - 抓不到的源回 None → 評分自動灰燈、不 crash。
   - Accept-Encoding 不要 br（TWSE T86 回 brotli 會解碼錯，requests 無 brotli 時壞）。
   - 融資融券單一回應即含「前日餘額＋今日餘額」→ 變化免多日累積；三大法人為單日買賣超。
