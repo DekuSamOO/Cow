@@ -1,4 +1,4 @@
-# Cow — 比特幣投資戰情室 v3.18
+# Cow — 比特幣投資戰情室 v3.20
 
 > 比特幣多週期量化分析工具，整合技術指標、鏈上數據、期權與波段策略。
 
@@ -70,8 +70,8 @@ service/
   bottom_metrics.py   鏈上底部錨指標（bitcoin-data.com：Realized/Balanced/CVDD/MVRV-Z/SOPR）+ blockchain.info 歷史算力；429 長退避 + 12h json 快取，純資料層
   market_snapshot.py  每日市場快照（OI U本位+幣本位加總、BTC.D、資金費率、價格落地 db/market_snapshot.json）；自建合約/情緒歷史供逃頂雷達算 OI 分位/BTC.D 趨勢，純資料層
   etf_flow.py         美國現貨 BTC ETF 每日淨流量真實值（Farside read_html 解析）；抓得到更新 db/etf_flow.json，403 時回退快取（雲端讀 repo 內 db pattern），供逃頂「鏈上派發」維度；summary 含 stale_days（最新一筆距今天數，>4 天 Flex 顯示資料過舊警示）
-  ohlc_universal.py   通用 OHLC 資料層（watcher.py 與 scripts/universal_watch_poc.py 共用單一來源）：classify_symbol 自動判市場（純數字4-6碼→台股.TW／含USDT/USD→幣安幣對／其餘→美股，BTC 各寫法標 is_btc=True）；fetch_ohlc 直連 Yahoo v8 chart JSON（不用 yfinance 套件，避公司 IP 429 + crumb/SSL），同端點吃幣對/美股/台股日線
-  tw_chip.py          台股籌碼/估值資料層（供 watcher 台股逃頂/抄底評分，替代加密的 funding/OI/鏈上）：get_chip_bundle(symbol, date, lookback=7) → {margin, institutional, valuation, tdcc, as_of}，每源獨立 best-effort 抓不到回 None。**EOD 日期 walk-back**：TWSE 日檔為盤後 EOD 公布，呼叫端常傳「今日」但今日未收/連假（如端午）會整片 None → 先用單一探針（BWIBBU 市場檔）往前找「最近已公布交易日」（最多 lookback 天，跳過週末/未公布日），三日檔對齊同一 `as_of`、減少多源×多日撞 TWSE 限流。TWSE 官方「市場全量單日檔」每小時快取 + filter symbol —— MI_MARGN(融資融券，單回應即含前日/今日餘額算變化)／T86(三大法人買賣超)／BWIBBU_d(本益比PB，僅上市，上櫃 graceful-None)；Accept-Encoding 避 br（T86 brotli 解碼問題）。TDCC 集保大戶分布鏡像 tw_stock_climber 的 GET→POST CSRF 爬法（SYNCHRONIZER_TOKEN）、pd.read_html 解析、大戶≥1000張/中實戶/散戶≤50張分級，同週同檔記憶體快取不重抓。**鏡像概念但不 import tw_stock_climber**（Cow 自包含、雲端可跑）
+  ohlc_universal.py   通用 OHLC 資料層（watcher.py 與 scripts/universal_watch_poc.py 共用單一來源）：classify_symbol 自動判市場（純數字4-6碼→台股.TW／含USDT/USD→幣安幣對／其餘→美股，BTC 各寫法標 is_btc=True）；fetch_ohlc 直連 Yahoo v8 chart JSON（不用 yfinance 套件，避公司 IP 429 + crumb/SSL），同端點吃幣對/美股/台股日線。台股 `.TW`（上市）查無資料自動改試 `.TWO`（上櫃 Yahoo 後綴）—— classify 無法離線預知上市/上櫃，故於 fetch 層解析；成功即 break（上市股不浪費第二次請求），全候選失敗才 `RuntimeError(... from last_err)` 保留原始錯誤
+  tw_chip.py          台股籌碼/估值資料層（供 watcher 台股逃頂/抄底評分，替代加密的 funding/OI/鏈上）：get_chip_bundle(symbol, date, lookback=7) → {margin, institutional, valuation, tdcc, as_of}，每源獨立 best-effort 抓不到回 None。**EOD 日期 walk-back**：TWSE 日檔為盤後 EOD 公布，呼叫端常傳「今日」但今日未收/連假（如端午）會整片 None → 先用單一探針（BWIBBU 市場檔）往前找「最近已公布交易日」（最多 lookback 天，跳過週末/未公布日），三日檔對齊同一 `as_of`、減少多源×多日撞 TWSE 限流。TWSE 官方「市場全量單日檔」每小時快取 + filter symbol —— MI_MARGN(融資融券，單回應即含前日/今日餘額算變化)／T86(三大法人買賣超)／BWIBBU_d(本益比PB，上市)；Accept-Encoding 避 br（T86 brotli 解碼問題）。**估值上櫃 fallback**：`_fetch_market_file` 加 `base` 參數（預設 _TWSE，cache key 含 base 避撞檔），上市 BWIBBU 查無 → `_get_valuation_tpex` 打 TPEx peQryDate（欄序與 TWSE 不同：PE=2/殖利率=5/PB=6、日期 yyyy/mm/dd、無收盤價故 close=None），上櫃股估值維度不再灰燈。**融資/法人上櫃仍 TWSE-only**（無對應 TPEx 源 → 灰燈，日後比照估值 fallback 模式可後補）。TDCC 集保大戶分布鏡像 tw_stock_climber 的 GET→POST CSRF 爬法（SYNCHRONIZER_TOKEN）、pd.read_html 解析、大戶≥1000張/中實戶/散戶≤50張分級，同週同檔記憶體快取不重抓。**鏡像概念但不 import tw_stock_climber**（Cow 自包含、雲端可跑）
   notification/       LINE/Telegram 推播模組（core 發送、builders 組 Flex：每日決策面板/逃頂警報分級配色/🎯 今日行動行/ETF 過舊警示/40KB 大小防線、facade 對外介面）
 
 strategy/
@@ -374,6 +374,10 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 ---
 
 ## 版本紀錄
+
+### v3.20 (2026-06-23)
+- **feat(tw)**: 上櫃估值補齊。`service/tw_chip._fetch_market_file` 加 `base` 參數（預設 _TWSE、cache key 改 (base, endpoint, date) 避上市/上櫃同端點撞檔）；`get_valuation` 上市 BWIBBU 查無 → fallback `_get_valuation_tpex`（TPEx peQryDate，欄序 PE=2/殖利率=5/PB=6、日期 yyyy/mm/dd、無收盤價 close=None）。`service/ohlc_universal.fetch_ohlc` 台股 `.TW` 查無自動改試 `.TWO`（上櫃 Yahoo 後綴，classify 無法離線分上市/上櫃）；上市股查到即 break、全失敗 `raise ... from last_err` 保留原因。效果：上櫃股（6488 環球晶、8069 元太）OHLC + 估值可載入，逃頂/抄底估值維度不再灰燈（6488 估值 30/30 PE69/PB5.7）。**融資/法人上櫃仍 TWSE-only 灰燈**（無對應 TPEx 源，docstring 標明可比照估值 fallback 後補）。
+- **chore(tw)**: TDCC 維度 delta 重測（負面結果，不改評分）。新增 `scripts/tw_tdcc_retest.py`（複用 `tw_dim_backtest.auc`）測「大戶 major_pct 週變化 delta／連增週數」是否優於靜態 level。結論：swing out-of-sample AUC — 抄底 level 0.423/delta 0.488/連增 0.501、逃頂 0.539/0.513/0.511，**delta/連增未優於 level、全雜訊或弱** → 「大戶連增更準」假設被資料否決，TDCC 維持低權、不動 `core/relative_*_tw.py`。
 
 ### v3.19 (2026-06-23)
 - **feat(tw)**: 台股逃頂/抄底維度 v0.1 → **v0.2 回測校準**。新增離線校準三腳本 `scripts/tw_calib_extract.py`（S1 抽 panel）/`tw_dim_backtest.py`（S2 ±18% 二分單維 AUC）/`tw_swing_backtest.py`（S2b swing-only 在轉折點重測，更貼近實戰）。依 swing AUC 重配重：逃頂 技術30/估值30/槓桿15/法人10/TDCC15（估值 15→30、法人 25→10）；抄底 槓桿30/技術25/法人20/TDCC15/估值10（槓桿 20→30、估值 25→10）。**關鍵發現：台股底部與加密非對稱——加密底部靠長週期估值便宜，台股頂部靠估值貴(swing AUC PE 0.627/PB 0.640，絕對值大勝個股分位 0.452)、底部靠融資斷頭清洗(AUC 0.564)；台股「便宜≠反彈」是價值陷阱(估值抄底 AUC 0.45)故大降權。** `UNFITTED_DIMS_*_TW` → `WEAK_DIMS_*_TW`（標 AUC<0.55 弱維、給低權僅參考）。`core/relative_high_tw.py`／`relative_low_tw.py` v0.2 配重與文件、`watcher.py` 面板維度依新權重排序＋composite 不再傳估值當 cycle_score（改 low_score≥60 驅動）＋note 改 v0.2 校準說明。`tests/core/test_relative_tw.py` 更新斷言＋加 test_weights_sum_to_100（10 passed）。

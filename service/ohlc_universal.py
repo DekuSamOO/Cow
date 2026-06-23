@@ -89,19 +89,19 @@ def fetch_ohlc(yahoo_symbol: str, rng: str = "2y") -> pd.DataFrame:
     candidates = [yahoo_symbol]
     if yahoo_symbol.endswith(".TW"):
         candidates.append(yahoo_symbol[:-3] + ".TWO")   # 上市查無 → 試上櫃
-    res = None
+    res, last_err = None, None
     for sym in candidates:
         try:
             r = s.get(_YF_CHART + sym, params={"range": rng, "interval": "1d"}, timeout=20)
             r.raise_for_status()
             result = r.json()["chart"]["result"]
-        except Exception:
-            result = None
+        except Exception as e:  # noqa: BLE001 — 單一候選時於迴圈外 re-raise 保留原因
+            result, last_err = None, e
         if result:
             res = result[0]
             break
     if res is None:
-        raise RuntimeError(f"無資料：{yahoo_symbol}")
+        raise RuntimeError(f"無資料：{yahoo_symbol}") from last_err
     q = res["indicators"]["quote"][0]
     df = pd.DataFrame({
         "open": q["open"], "high": q["high"], "low": q["low"],

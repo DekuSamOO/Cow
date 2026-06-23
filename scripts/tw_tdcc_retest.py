@@ -40,8 +40,7 @@ def load_tdcc_weekly() -> pd.DataFrame:
     t["major_delta"] = g.diff()
     # 連續增加週數（delta>0 連跑）
     up = (t["major_delta"] > 0).astype(int)
-    grp = t.groupby("Stock_ID", sort=False)
-    t["consec_up"] = up.groupby(grp.ngroup()).apply(
+    t["consec_up"] = up.groupby(t.groupby("Stock_ID", sort=False).ngroup()).apply(
         lambda s: s * (s.groupby((s == 0).cumsum()).cumcount() + 1)).reset_index(drop=True)
     return t[["Stock_ID", "tdcc_date", "major_pct", "major_delta", "consec_up"]]
 
@@ -80,16 +79,16 @@ def main():
     print(f"swing low {len(lows):,}（真底 {int(lows['real'].sum()):,}）｜"
           f"swing high {len(highs):,}（真頂 {int(highs['real'].sum()):,}）\n")
 
-    # (名稱, 欄, 抄底高分=正?, 逃頂高分=正?)
+    # (名稱, 欄)：三個 TDCC 特徵皆「高分=抄底正向、逃頂負向」，方向由 low_side 決定，不另存欄
     feats = [
-        ("大戶 level(major_pct)", "major_pct",    True,  False),
-        ("大戶 週變化(delta)",    "major_delta",  True,  False),
-        ("大戶 連增週數",         "consec_up",     True,  False),
+        ("大戶 level(major_pct)", "major_pct"),
+        ("大戶 週變化(delta)",    "major_delta"),
+        ("大戶 連增週數",         "consec_up"),
     ]
     for title, frame, low_side in [("抄底 真底vs假底", lows, True), ("逃頂 真頂vs假頂", highs, False)]:
         print(f"══ {title}（swing-only, out-of-sample）══")
-        for name, col, low_dir, high_dir in feats:
-            a, n1, n0 = auc(frame[col], frame["real"], low_dir if low_side else high_dir)
+        for name, col in feats:
+            a, n1, n0 = auc(frame[col], frame["real"], low_side)
             if a is None:
                 print(f"  {name:<20} 樣本不足 ({n1}/{n0})"); continue
             v = "🟢 有訊號" if a >= 0.55 else ("🟡 弱" if a >= 0.52 else "⚪ 近雜訊")

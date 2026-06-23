@@ -110,6 +110,8 @@ def get_margin(symbol: str, date_yyyymmdd: str) -> dict | None:
     融資融券（MI_MARGN）。回傳該檔 {fin_balance, fin_prev, fin_chg_lots,
     short_balance, short_prev}（單位：張）；查無回 None。
     融資餘額增＝散戶加槓桿（過熱）；融資大減＝斷頭清洗（抄底）；融券回補亦為訊號。
+    上櫃股目前無對應 TPEx 來源 → TWSE-only（上櫃灰燈）；日後比照 get_valuation
+    之 TPEx fallback 模式（_fetch_market_file base=_TPEX）即可後補。
     """
     rows = _fetch_market_file(
         "marginTrading/MI_MARGN",
@@ -134,6 +136,7 @@ def get_institutional(symbol: str, date_yyyymmdd: str) -> dict | None:
     """
     三大法人買賣超（T86，單位：股）。回傳 {foreign_net, trust_net, dealer_net, total_net}；
     正＝買超（吸籌）、負＝賣超（派發）。查無回 None。
+    上櫃股目前無對應 TPEx 來源 → TWSE-only（上櫃灰燈），同 get_margin。
     """
     rows = _fetch_market_file(
         "fund/T86",
@@ -153,6 +156,7 @@ def get_valuation(symbol: str, date_yyyymmdd: str) -> dict | None:
     """
     本益比/股價淨值比/殖利率。回傳 {pe, pb, yield_pct, close}；查無回 None。
     上市走 TWSE BWIBBU；上市查無（上櫃股）→ fallback TPEx peQryDate。
+    注意：TPEx 分支 close 為 None（peQryDate 無收盤價欄），呼叫端勿對 close 做算術。
     """
     rows = _fetch_market_file(
         "afterTrading/BWIBBU_d",

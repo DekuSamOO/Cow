@@ -1,7 +1,7 @@
 # CLAUDE.md — Cow（BTC 投資戰情室）
 
 **路徑：** `D:\Users\63191\Documents\GitHub\Cow`
-**目前版本：** v3.19
+**目前版本：** v3.20
 **Live App：** https://mfyyo9qf5mymsrouxkfdgj.streamlit.app
 **Streamlit 版本：** 1.37.1
 
@@ -144,6 +144,11 @@ S1 抽 panel（多檔×多日 + fwd_ret）→ S2 每日 ±18% 二分單維 AUC �
 - **台股頂底與加密非對稱**：頂部靠估值貴、底部靠融資清洗（加密底部反而靠估值便宜）。
 - `UNFITTED_DIMS_*_TW` → **`WEAK_DIMS_*_TW`**（標 AUC<0.55 弱維、給低權僅參考）；TDCC 樣本最薄
   （2023-09 起）。校準腳本為離線手動跑（非 pytest），panel parquet 在 `scripts/data/`（gitignore）。
+- **TDCC delta 重測＝負面結果（2026-06-23，不改評分）**：`scripts/tw_tdcc_retest.py`（複用
+  `tw_dim_backtest.auc`）測「大戶 major_pct 週變化 delta／連增週數」是否優於靜態 level。結論——
+  swing out-of-sample AUC：抄底 level 0.423/delta 0.488/連增 0.501、逃頂 0.539/0.513/0.511，
+  **delta/連增皆未優於 level、全雜訊或弱** → 「大戶連增更準」假設被資料否決，TDCC **維持低權、
+  不動 `core/relative_*_tw.py`**。
 
 ### 台股資料源踩坑
 - **TWSE 端點都是「市場全量單日檔」非個股查詢**：抓整檔每小時快取再 filter symbol。融資融券
@@ -156,7 +161,14 @@ S1 抽 panel（多檔×多日 + fwd_ret）→ S2 每日 ±18% 二分單維 AUC �
   `SYNCHRONIZER_TOKEN`/`SYNCHRONIZER_URI`，再 POST 帶 token + firDate/scaDate（最近已公布週五，
   扣 7 天公布延遲）。`pd.read_html` 解析持股分級表，大戶≥1000張/中實戶≥400張/散戶≤50張。
   **同週同檔記憶體快取不重抓；勿密集打**（每檔間需 sleep）。
-- **上櫃股估值 graceful-None**：BWIBBU 僅上市；上櫃 PE/PB 端點未定 → 估值維度灰燈（P1a 先上市）。
+- **上櫃估值 TPEx fallback（2026-06-23）**：BWIBBU 僅上市；上市查無（上櫃股）→ `_get_valuation_tpex`
+  打 **TPEx `www/zh-tw/afterTrading/peQryDate`**（`_fetch_market_file` 加 `base` 參數，預設 _TWSE、
+  上櫃傳 _TPEX="https://www.tpex.org.tw"；**cache key 改 (base, endpoint, date)** 避同端點撞檔）。
+  **TPEx 欄序與 TWSE 不同**：PE=2／殖利率=5／PB=6、日期 yyyy/mm/dd、**無收盤價欄 → close=None**
+  （呼叫端勿對 close 做算術）。OHLC 端：`fetch_ohlc` 台股 `.TW` 查無自動改試 **`.TWO`**（上櫃 Yahoo
+  後綴，classify 無法離線分上市/上櫃；上市查到即 break 不浪費第二請求、全失敗 `raise ... from last_err`）。
+  → 上櫃股（6488/8069）OHLC+估值可載入、估值維度不再灰燈。**融資/法人上櫃仍 TWSE-only 灰燈**
+  （無對應 TPEx 源；docstring 標明可比照估值 fallback 後補）。
 - **TWSE 日檔是 EOD（盤後）公布 → 必須 walk-back**：`get_chip_bundle` 呼叫端常傳「今日」（watcher
   用 Yahoo 最後日線日期，盤中可能是未收的今天），但今日 EOD 檔尚未出、連假（如 2026-06-19 端午）
   整週無檔 → 三日檔會**整片 None**。修法：先用**單一探針**（BWIBBU 市場檔非空判斷）從 date 往前找
