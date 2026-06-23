@@ -1,7 +1,7 @@
 # CLAUDE.md — Cow（BTC 投資戰情室）
 
 **路徑：** `D:\Users\63191\Documents\GitHub\Cow`
-**目前版本：** v3.10
+**目前版本：** v3.19
 **Live App：** https://mfyyo9qf5mymsrouxkfdgj.streamlit.app
 **Streamlit 版本：** 1.37.1
 
@@ -120,18 +120,30 @@ SOPR（`get_latest_bottom_metrics`，bitcoin-data 12h 快取）、BTC.D 趨勢�
 
 ---
 
-## 台股版逃頂/抄底（watcher 台股分支，2026-06-21 新增 v0.1）
+## 台股版逃頂/抄底（watcher 台股分支，2026-06-21 v0.1 → 2026-06-23 v0.2 回測校準）
 
 加密雷達的 funding/OI/鏈上維度股票無對應 → 台股改用**籌碼/估值**替代。**只做台股**（美股
 個股槓桿/法人/IV 無免費源，維持純通用軸）。三檔純函數 + 一資料層，watcher 台股分支共用：
 
-- **`core/relative_high_tw.py`／`relative_low_tw.py`**：各五維（逃頂＝技術30/法人25/槓桿20/
-  估值15/籌碼10；抄底＝估值25/技術20/槓桿20/法人20/大戶15）。技術維度**複用 core/divergence**
+- **`core/relative_high_tw.py`／`relative_low_tw.py`**：v0.2 配重（逃頂＝技術30/估值30/槓桿15/
+  法人10/TDCC15；抄底＝槓桿30/技術25/法人20/TDCC15/估值10）。技術維度**複用 core/divergence**
   （與加密同源）、法人買賣超以**近20日均量正規化**。`compute_relative_high_tw/low_tw + *_meta`。
-- **`service/tw_chip.py`**：`get_chip_bundle(symbol, yyyymmdd)` → {margin, institutional,
-  valuation, tdcc}，每源 best-effort（抓不到回 None → 評分灰燈不 crash）。
-- **三軸 composite 共用 `action_ensemble.compute_composite_action`**：cycle_score 傳台股**估值
-  深跌子分**（max 25，與加密 cycle 子分同尺度，`CYCLE_DEEP_VALUE=22` 共用閾值）。
+- **`service/tw_chip.py`**：`get_chip_bundle(symbol, yyyymmdd, lookback=7)` → {margin,
+  institutional, valuation, tdcc, **as_of**}，每源 best-effort（抓不到回 None → 評分灰燈不 crash）。
+- **三軸 composite 共用 `action_ensemble.compute_composite_action`**：台股**不傳 cycle_score**
+  （估值對底部是雜訊、max 僅 10 達不到 `CYCLE_DEEP_VALUE=22` 門檻），改由重配重後的 low_score≥60
+  驅動（已含「融資清洗」權重30 這個校準最強底部維）。
+
+### v0.2 校準結論（2026-06-23，`scripts/tw_{calib_extract,dim_backtest,swing_backtest}.py`）
+S1 抽 panel（多檔×多日 + fwd_ret）→ S2 每日 ±18% 二分單維 AUC → **S2b swing-only**（±10日 centered
+窗轉折點，更貼近實戰「在轉折點判真底/假底」）。依 swing AUC 重配重：
+- **逃頂靠估值貴**：PE 絕對值 AUC 0.627、PB 0.640 → 估值 15→30（最強維）；法人 25→10（雜訊 0.519）。
+  **PE/PB 用絕對值勝個股分位**（分位 0.452，會把「本質就貴」洗掉）。
+- **抄底靠融資清洗**：融資斷頭 swing 真底vs假底 AUC 0.564 → 槓桿 20→30（最強維）；估值 25→10
+  （雜訊 0.45，**台股「便宜≠反彈」是價值陷阱**，與加密「底部靠長週期估值」相反）。
+- **台股頂底與加密非對稱**：頂部靠估值貴、底部靠融資清洗（加密底部反而靠估值便宜）。
+- `UNFITTED_DIMS_*_TW` → **`WEAK_DIMS_*_TW`**（標 AUC<0.55 弱維、給低權僅參考）；TDCC 樣本最薄
+  （2023-09 起）。校準腳本為離線手動跑（非 pytest），panel parquet 在 `scripts/data/`（gitignore）。
 
 ### 台股資料源踩坑
 - **TWSE 端點都是「市場全量單日檔」非個股查詢**：抓整檔每小時快取再 filter symbol。融資融券
@@ -145,10 +157,15 @@ SOPR（`get_latest_bottom_metrics`，bitcoin-data 12h 快取）、BTC.D 趨勢�
   扣 7 天公布延遲）。`pd.read_html` 解析持股分級表，大戶≥1000張/中實戶≥400張/散戶≤50張。
   **同週同檔記憶體快取不重抓；勿密集打**（每檔間需 sleep）。
 - **上櫃股估值 graceful-None**：BWIBBU 僅上市；上櫃 PE/PB 端點未定 → 估值維度灰燈（P1a 先上市）。
-- **v0.1〔絕對值起步・未擬合〕**：PE/PB 用**絕對值分級非 5 年分位**（不同產業基準差異大，金融股
-  PB 1.0 正常、科技股 PB 1.0 偏低），籌碼閾值為專家起點（鏡像 tw_stock_climber chip/valuation）。
-  **待累積台股歷史後以回測校準**（鏡像 relative_low_backtest 方法）。Cow **不 import
-  tw_stock_climber**（保持自包含、雲端可跑），僅鏡像爬法/分級概念。
+- **TWSE 日檔是 EOD（盤後）公布 → 必須 walk-back**：`get_chip_bundle` 呼叫端常傳「今日」（watcher
+  用 Yahoo 最後日線日期，盤中可能是未收的今天），但今日 EOD 檔尚未出、連假（如 2026-06-19 端午）
+  整週無檔 → 三日檔會**整片 None**。修法：先用**單一探針**（BWIBBU 市場檔非空判斷）從 date 往前找
+  「最近已公布交易日」（最多 lookback=7 天、跳過週末/未公布日），三源對齊同一 `as_of` 再抓
+  （BWIBBU 已快取）。**用單一探針而非多源×多日盲掃**，避免撞 TWSE 限流。watcher note 顯示
+  「籌碼資料截至 {as_of}」。
+- **PE/PB 用絕對值非分位**（v0.2 回測拍板）：絕對 PE AUC 0.627 大勝個股 expanding 分位 0.452，
+  分位會把「本質就貴/便宜」洗成中性。Cow **不 import tw_stock_climber**（保持自包含、雲端可跑），
+  僅鏡像爬法/分級概念。
 
 ---
 
