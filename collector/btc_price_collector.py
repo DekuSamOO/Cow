@@ -37,12 +37,16 @@ import subprocess
 from datetime import datetime, timezone
 
 import requests
-from core.http_client import safe_get, safe_post
 
-# ── 路徑設定 ──────────────────────────────────────────────────────────────────
+# ── 路徑設定（須在 import core/* 之前；使直接 `python collector/btc_price_collector.py`
+#    執行時——script 目錄才進 sys.path、repo root 不在——也能 import core/config）──
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT  = os.path.dirname(_SCRIPT_DIR)
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 DB_DIR      = os.path.join(_REPO_ROOT, "db")
+
+from core.http_client import safe_get, safe_post
 
 # ── 常數 ──────────────────────────────────────────────────────────────────────
 INTERVAL_MS       = 15 * 60 * 1000          # 15 分鐘（毫秒）

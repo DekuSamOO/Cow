@@ -535,6 +535,10 @@ def maybe_send_weekly_summary(data: dict, now=None) -> None:
     tw_now = now or datetime.now(timezone(timedelta(hours=8)))
     if tw_now.weekday() != 6:
         return
+    # 限週日「傍晚」場次：時段閘門對本地/手動執行（CRON_SCHEDULE 空）也生效，
+    # 避免週日早上跑就誤發（下方 cron 閘門只擋排程的非傍晚 run，擋不住本地）。
+    if tw_now.hour < 17:
+        return
     # 排程觸發：限傍晚 cron（免多個延遲 run 重複發）；手動 dispatch / 本地執行（CRON_SCHEDULE 空）放行
     cron = os.getenv("CRON_SCHEDULE", "")
     if cron and cron != _WEEKLY_CRON:
