@@ -161,7 +161,7 @@ def send_test_message(platform: str = "all") -> dict:
 
 def notify_defense_line(price: float) -> dict:
     """
-    BTC 跌至防守線（config.ALERT_PRICE_LOW）推播 — 1 BTC ROAD 觸發事件二。
+    BTC 跌至防守線（config.ALERT_PRICE_LOW）推播 — 1 BTC ROAD 防守事件。
     門檻只存 config 一份，訊息文字動態帶入。
     """
     result = {'line': False, 'telegram': False}
@@ -172,7 +172,7 @@ def notify_defense_line(price: float) -> dict:
         f"━━━━━━━━━━━━━━━━\n"
         f"💰 現價:  ${price:,.0f}\n"
         f"━━━━━━━━━━━━━━━━\n"
-        f"📋 待執行（觸發事件二）:\n"
+        f"📋 待執行（防守事件）:\n"
         f"1. 關閉 2 台馬丁格爾機器人\n"
         f"2. 將 USDT 全數換成 BTC\n"
         f"3. 注入幣本位機器人作為額外保證金\n"

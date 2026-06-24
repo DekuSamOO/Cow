@@ -3,7 +3,7 @@ scripts/price_alert.py
 1 BTC ROAD 價格警報腳本（GitHub Actions 每小時觸發）
 
 監控關鍵門檻：
-  - BTC <= config.ALERT_PRICE_LOW（防守線）→ 觸發事件二：馬丁格爾轉換 + 補保證金
+  - BTC <= config.ALERT_PRICE_LOW（防守線）→ 防守事件：馬丁格爾轉換 + 補保證金
 
 防重複推播：使用 alert_state.json 記錄今日已推播的警報，
 每個警報每個曆日最多推一次，避免 BTC 在門檻附近震盪時狂轟。
@@ -77,11 +77,11 @@ def main() -> None:
     today = str(date.today())
     armed = state.get("armed_defense", True)  # 舊 state 檔無此鍵 → 視為已武裝
 
-    # ── 觸發事件二：防守線警報（遲滯：單次跌破只推一次，回升超過門檻+GAP 才重新武裝）──
+    # ── 防守事件：防守線警報（遲滯：單次跌破只推一次，回升超過門檻+GAP 才重新武裝）──
     rearm_price = ALERT_PRICE_LOW + ALERT_PRICE_REARM_GAP
     if price <= ALERT_PRICE_LOW:
         if armed and _should_alert(state.get("last_defense_date")):
-            print(f"🛡️  觸發事件二：BTC ${price:,.0f} <= ${ALERT_PRICE_LOW:,.0f}，發送防守警報")
+            print(f"🛡️  防守事件：BTC ${price:,.0f} <= ${ALERT_PRICE_LOW:,.0f}，發送防守警報")
             notify_defense_line(price)
             state["last_defense_date"] = today
             state["armed_defense"] = False  # 解除武裝：持續低於門檻不再重複推播

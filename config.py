@@ -102,7 +102,7 @@ DUAL_INVEST_COOLDOWN_DAYS: int = 1
 DEFAULT_APY_THRESHOLD: float = 20.0  # 20%
 
 # 1 BTC ROAD 價格警報門檻（參見 1 BTC ROAD.md）
-ALERT_PRICE_LOW: float = 54_000.0   # 跌至此價位 → 關閉馬丁格爾補保證金（觸發事件二）
+ALERT_PRICE_LOW: float = 54_000.0   # 跌至此價位 → 關閉馬丁格爾補保證金（防守事件）
 # 遲滯（hysteresis）：警報觸發後解除武裝，回升超過門檻＋此值才重新武裝，
 # 防止價格在門檻附近震盪時隔日反覆推播（單次跌破只提醒一次）。
 ALERT_PRICE_REARM_GAP: float = 500.0
