@@ -3,6 +3,10 @@ core/season_forecast.py  ·  v1.4
 四季理論目標價預測系統
 ─────────────────────────────────────────────────────────────────────
 版次記錄:
+  v1.6  [A1] 牛市側以「當前週期已知 peak_mult」校正等比遞減外推（_current_cycle_known_peak_mult）。
+        第4輪等比外推 8.74x 但實際已知 ATH 僅 1.70x（高估 5 倍）；對 ATH 已印出的當前週期用已知值
+        重錨、保留 p25/p75 band 比例，未來尚無 ATH 的週期維持外插不變。熊底側不動（n=3 硬限制，
+        現況線性外插+固定 band 已是合理小樣本防護）。
   v1.4  熊底 bottom_mult 改「週期趨勢外插」(extrapolate_bottom_mult) 取代 median/p25——
         bottom_mult 三輪 0.131→0.157→0.225 單調遞增（底部漸淺），舊 median 把當前輪
         預測過深。線性迴歸外插（留一法誤差 -19% 優於 median -30%）。與峰值側
@@ -328,6 +332,22 @@ def _apply_diminishing_returns(base_mult: float, cycle_index: int) -> float:
     return base_mult / (diminish_factor ** delta)
 
 
+def _current_cycle_known_peak_mult(cycle_idx: int) -> Optional[float]:
+    """若該週期 ATH 已印出（CYCLE_HISTORY 有 peak_mult，含 is_complete=False 的進行中輪），
+    回傳已知 peak_mult；否則 None。
+
+    用途（v1.6 A1）：以「已發生的事實」校正牛市等比遞減外推。第4輪等比外推 peak_mult≈8.74x，
+    但實際已知 ATH 僅 1.70x（ETF/機構化使漲幅塌縮），高估 5 倍。對 ATH 已印出的當前週期，
+    改以已知值重錨；未來尚無 ATH 的週期回 None、維持等比外插不變。"""
+    if cycle_idx < 0 or cycle_idx >= len(HALVING_DATES):
+        return None
+    halving = HALVING_DATES[cycle_idx]
+    c = next((c for c in CYCLE_HISTORY if c["halving"] == halving), None)
+    if c and c.get("peak_mult"):
+        return float(c["peak_mult"])
+    return None
+
+
 def project_bear_bottom(current_price: float, df: Optional[pd.DataFrame] = None,
                         as_of: Optional[datetime] = None,
                         market_state: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
@@ -466,6 +486,16 @@ def forecast_price(current_price: float, df: Optional[pd.DataFrame] = None, as_o
     adj_peak_med = _apply_diminishing_returns(STATS["peak_mult_median"], current_cycle_idx)
     adj_peak_p25 = _apply_diminishing_returns(STATS["peak_mult_p25"],    current_cycle_idx)
     adj_peak_p75 = _apply_diminishing_returns(STATS["peak_mult_p75"],    current_cycle_idx)
+
+    # v1.6 A1：當前週期 ATH 已印出時，以已知 peak_mult 重錨等比遞減外推（保留 p25/p75 band 比例），
+    # 杜絕第4輪外推 8.74x vs 實際 1.70x 的 5 倍高估。用事實校正、不新增可調參數；
+    # 若牛市再創新高，下方「current_price > ath_target_med」分支仍會以現價續推上方空間。
+    known_pm = _current_cycle_known_peak_mult(current_cycle_idx)
+    if known_pm and adj_peak_med > 0:
+        _rescale = known_pm / adj_peak_med
+        adj_peak_med *= _rescale
+        adj_peak_p25 *= _rescale
+        adj_peak_p75 *= _rescale
 
     days_since = season_info["days_since"]
 

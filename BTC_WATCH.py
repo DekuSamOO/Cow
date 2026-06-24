@@ -329,8 +329,16 @@ class BitcoinMonitor:
             # 動態地板（四季論/礦工/冪律皆 BTC 專屬）→ 僅 BTC 計算；其他幣對於 _support_line 改用 Mayer 估值底
             if self.is_btc:
                 try:
+                    # 與 dashboard/LINE 一致：供給最新算力 → final_low 含礦工電費硬地板，
+                    # 杜絕主防線在三介面間漂移（取不到算力→best-effort 退回 None，行為同舊版）。
+                    try:
+                        from service.bottom_metrics import fetch_hashrate_history_ths
+                        _hr = fetch_hashrate_history_ths()
+                        _latest_hash = _hr[max(_hr)] if _hr else None
+                    except Exception:
+                        _latest_hash = None
                     self._floors_cache = compute_all_bottom_estimates(
-                        float(df.iloc[-1]["close"]), df=df, hashrate_ths=None, onchain=None)
+                        float(df.iloc[-1]["close"]), df=df, hashrate_ths=_latest_hash, onchain=None)
                 except Exception as e:
                     print(f"動態地板計算失敗：{e}")
                     self._floors_cache = None
