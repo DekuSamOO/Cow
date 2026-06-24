@@ -40,7 +40,7 @@ core/
   indicators.py       技術指標 + AHR999 計算（純函數，無 Streamlit 依賴）
                       AHR999 使用 Giovanni Santostasi 冪律：10^(-17.01467 + 5.84×log10(days))
   bear_bottom.py      熊市底部 8 大指標評分引擎 + -100~+100 牛熊複合評分（含 breakdown 分解）
-  season_forecast.py  四季理論目標價預測引擎（v1.4：熊底 bottom_mult 改週期趨勢外插，抽 project_bear_bottom 為熊市分支單一來源）
+  season_forecast.py  四季理論目標價預測引擎（v1.6：牛市側以「當前週期已知 peak_mult」重錨等比遞減外推、保留 p25/p75 band 比例；熊底 bottom_mult 仍週期趨勢外插，抽 project_bear_bottom 為熊市分支單一來源）
   bottom_floors.py    最低價綜合評估「單一真實來源」compute_all_bottom_estimates（四季論趨勢底 + 4 floor + 鏈上錨 + 技術錨；LINE 推播與 dashboard 共用）
   miner_cost.py       礦工成本純數學模型（btc_per_day 依減半切換、eff_jth 分段插值、電費盈虧/all-in 成本，無 IO 依賴）
   gemini_client.py    Gemini REST API 輕量封裝（關閉 thinking budget 省 token、x-goog-api-key header，供新聞中文化）
@@ -81,7 +81,7 @@ strategy/
   notifier.py           LINE Bot 主動推播通知模組
 
 scripts/
-  daily_line_notify.py     GitHub Actions 雲端自動推播腳本（Kraken 備援，台灣 08:23 / 13:39 / 18:27 三時段，含新聞輿情、逃頂警報分級/分數Δ/遲滯狀態機、OI 快照過期警告、週日傍晚場次加推文字週報）
+  daily_line_notify.py     GitHub Actions 雲端自動推播腳本（Kraken 備援，台灣 08:23 / 13:39 / 18:27 三時段，含新聞輿情、逃頂警報分級/分數Δ/遲滯狀態機、OI 快照過期警告、週日傍晚場次加推文字週報，時段閘門 hour<17 早退使本地/手動執行也僅傍晚才發）
   price_alert.py           GitHub Actions 每小時價格警報（防守線 $54k＝config.ALERT_PRICE_LOW 單一來源，含同日去重 + armed 遲滯：跌破推一次、回升門檻+$500 才重新武裝）
   test_flex_message.py     本地端測試 LINE Flex Message 排版的除錯腳本
   test_compare_backtest.py 驗證腳本：對相同參數同時執行 swing.py 與 Walk-Forward，確認結果量級一致
@@ -374,6 +374,13 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 ---
 
 ## 版本紀錄
+
+### v3.21 (2026-06-24)
+- **fix(forecast)**: `core/season_forecast.py` 升 v1.6——牛市側新增 `_current_cycle_known_peak_mult(cycle_idx)`，當前週期 ATH 已印出時以「已知 peak_mult」重錨等比遞減外推（保留 p25/p75 band 比例），杜絕第 4 輪外推 8.74x vs 實際已知 1.70x 的 5 倍高估（ETF/機構化使漲幅塌縮）。用已發生的事實校正、不新增可調參數；未來尚無 ATH 的週期維持外插不變、牛市再創新高仍由 `current_price > ath_target_med` 分支續推上方空間。**熊底側小樣本邏輯（bottom_mult 線性外插＋固定 band，n=3）刻意不動。**
+- **fix(watch)**: `BTC_WATCH.py._refresh_daily` 比照 dashboard/LINE，lazy import `fetch_hashrate_history_ths` 供最新算力給 `compute_all_bottom_estimates`（取不到算力→best-effort 退回 None、行為同舊版），使主防線 `final_low` 含礦工電費硬地板、三介面（dashboard/LINE/watcher）一致不漂移。
+- **fix(collector)**: `collector/btc_price_collector.py` 將 repo-root `sys.path.insert` 移到 `from core.http_client import` 之前，讓直接 `python collector/btc_price_collector.py` 執行（僅 script 目錄進 sys.path、repo root 不在）也能 import `core/*`。
+- **fix(notify)**: `scripts/daily_line_notify.py.maybe_send_weekly_summary` 加 `tw_now.hour < 17` 時段早退——既有 cron 閘門只擋排程的非傍晚 run（擋不住 `CRON_SCHEDULE` 空的本地/手動執行），補時段閘門避免週日早上本地跑就誤發週報。
+- **test**: 全套 pytest 165 passed / 2 failed（2 failed 為 `tests/test_market_data.py` yfinance SSL/429 環境性 Yahoo 阻擋，非本次改動）。
 
 ### v3.20 (2026-06-23)
 - **feat(tw)**: 上櫃估值補齊。`service/tw_chip._fetch_market_file` 加 `base` 參數（預設 _TWSE、cache key 改 (base, endpoint, date) 避上市/上櫃同端點撞檔）；`get_valuation` 上市 BWIBBU 查無 → fallback `_get_valuation_tpex`（TPEx peQryDate，欄序 PE=2/殖利率=5/PB=6、日期 yyyy/mm/dd、無收盤價 close=None）。`service/ohlc_universal.fetch_ohlc` 台股 `.TW` 查無自動改試 `.TWO`（上櫃 Yahoo 後綴，classify 無法離線分上市/上櫃）；上市股查到即 break、全失敗 `raise ... from last_err` 保留原因。效果：上櫃股（6488 環球晶、8069 元太）OHLC + 估值可載入，逃頂/抄底估值維度不再灰燈（6488 估值 30/30 PE69/PB5.7）。
