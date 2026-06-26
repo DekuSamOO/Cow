@@ -50,14 +50,21 @@ def _bar(score, cap):
     return "█" * filled + "░" * (10 - filled)
 
 
+# 文字呈現預設的窄符號：在 emoji 範圍內、但終端機（無 FE0F 時）渲染為寬度 1
+# ⚠ U+26A0 警告號。其餘 emoji（⚪🔴🟡…）維持寬度 2。
+_NARROW_SYMBOLS = {0x26A0}
+
+
 def _dw(s):
-    """字串顯示寬度：全形/emoji=2、半形=1（FE0F 修飾符=0）。"""
+    """字串顯示寬度：全形/emoji=2、半形=1（FE0F 修飾符=0）；窄符號（⚠）=1。"""
     w = 0
     for ch in s:
         if ch == "️":
             continue
         o = ord(ch)
-        if 0x1F300 <= o <= 0x1FAFF or 0x2600 <= o <= 0x27BF:
+        if o in _NARROW_SYMBOLS:
+            w += 1
+        elif 0x1F300 <= o <= 0x1FAFF or 0x2600 <= o <= 0x27BF:
             w += 2
         elif unicodedata.east_asian_width(ch) in ("W", "F"):
             w += 2

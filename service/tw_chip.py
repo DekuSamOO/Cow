@@ -236,13 +236,8 @@ def _parse_share_range(text: str):
     return (0, 0)
 
 
-def get_tdcc(symbol: str, date_str: str = None) -> dict | None:
-    """
-    TDCC 集保大戶/中實戶/散戶持股比例（週五基準）。回傳
-    {date, major_pct, mid_pct, retail_pct} 或 None。記憶體快取，同週同檔不重抓。
-    大戶持股比上升＝吸籌（抄底加分）；散戶比上升＝派發。
-    """
-    date_str = date_str or latest_tdcc_friday()
+def _fetch_tdcc_week(symbol: str, date_str: str) -> dict | None:
+    """單一週五的 TDCC 集保抓取（GET→POST CSRF）→ dict|None。查無/失敗回 None。記憶體快取同週同檔。"""
     ck = (symbol, date_str)
     if ck in _tdcc_cache:
         return _tdcc_cache[ck]
@@ -297,10 +292,30 @@ def get_tdcc(symbol: str, date_str: str = None) -> dict | None:
                           "mid_pct": round(mid, 2), "retail_pct": round(retail, 2)}
                 break
     except Exception as e:  # noqa: BLE001
-        print(f"[tw_chip] TDCC 抓取失敗（{symbol}）：{e}")
+        print(f"[tw_chip] TDCC 抓取失敗（{symbol} {date_str}）：{e}")
 
     _tdcc_cache[ck] = result
     return result
+
+
+def get_tdcc(symbol: str, date_str: str = None, max_back_weeks: int = 4) -> dict | None:
+    """
+    TDCC 集保大戶/中實戶/散戶持股比例（週五基準）。回傳
+    {date, major_pct, mid_pct, retail_pct} 或 None。大戶持股比上升＝吸籌（抄底加分）；散戶比上升＝派發。
+
+    最新週五常「尚未公布」（TDCC 公布有延遲）→ 查無；故自 latest_tdcc_friday() 往前
+    最多 max_back_weeks 週，逐週試到抓到已公布資料為止（鏡像 tw_stock_climber preflight 邏輯）。
+    傳入明確 date_str 時只查該週、不往前找。
+    """
+    if date_str:
+        return _fetch_tdcc_week(symbol, date_str)
+    d = datetime.datetime.strptime(latest_tdcc_friday(), "%Y%m%d").date()
+    for _ in range(max(1, max_back_weeks)):
+        res = _fetch_tdcc_week(symbol, d.strftime("%Y%m%d"))
+        if res:
+            return res
+        d -= datetime.timedelta(days=7)
+    return None
 
 
 def get_chip_bundle(symbol: str, date_yyyymmdd: str, lookback: int = 7) -> dict:
@@ -312,14 +327,20 @@ def get_chip_bundle(symbol: str, date_yyyymmdd: str, lookback: int = 7) -> dict:
     但今日 EOD 檔尚未出 → 會整片 None。故從 date 往前找「最近有公布的交易日」（最多 lookback 天，
     跳過週末/未公布日），三個日檔（融資/法人/估值）對齊同一 as_of 日。TDCC 為週資料另解。
     """
-    # 先用單一端點（BWIBBU 市場檔非空）探「最近已公布的交易日」→ 再抓三源（BWIBBU 已快取）。
+    # 探「最近三日檔（估值+融資+法人）都已公布」的交易日 → 再抓三源（探測時已快取，無重抓）。
+    # 為何要三檔齊備：三檔公布時間不同步（實測今日 BWIBBU/T86 已出但 MI_MARGN 未出），
+    # 若只探 BWIBBU 會把 as_of 鎖在今天 → 融資整片 None。要求三檔皆非空才採用，否則往前一天。
     # 避免一次猛打多源×多日撞 TWSE 限流（端午等連假/今日未收時尤需 walk back）。
+    # 估值/融資/法人三檔的探測端點（探測即預熱 _fetch_market_file 快取，採用日不重抓）。
+    _probes = (("afterTrading/BWIBBU_d", "ALL"),
+               ("marginTrading/MI_MARGN", "STOCK"),
+               ("fund/T86", "ALLBUT0999"))
     d = datetime.datetime.strptime(date_yyyymmdd, "%Y%m%d").date()
     as_of = date_yyyymmdd
     for _ in range(max(1, lookback)):
         ds = d.strftime("%Y%m%d")
-        if _fetch_market_file("afterTrading/BWIBBU_d",
-                              {"date": ds, "selectType": "ALL", "response": "json"}):
+        if all(_fetch_market_file(ep, {"date": ds, "selectType": st, "response": "json"})
+               for ep, st in _probes):
             as_of = ds
             break
         d -= datetime.timedelta(days=1)
