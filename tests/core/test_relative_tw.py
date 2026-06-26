@@ -42,21 +42,44 @@ def test_low_deep_value_and_chips():
     assert "低估" in relative_low_tw_meta(score)[0]
 
 
+def _df_vol_spike(n=60, base=1_000_000, last=10_000_000, rsi=82):
+    """60 根 df，最後一根爆量（量能分位≈99）→ 觸發 v0.3 量能見頂維。"""
+    vols = [base] * (n - 1) + [last]
+    df = pd.DataFrame({"close": [100.0] * n, "volume": vols})
+    row = pd.Series({"RSI_14": rsi, "close": 100.0})
+    return row, df
+
+
 def test_high_overheat():
-    """v0.2 校準：估值高(最強30) + 融資暴增 + 法人大賣(降權10) + 散戶鬆散 → 高逃頂分。"""
-    row, df = _df(volume=1_000_000, rsi=82)
+    """v0.3 校準：估值高(最強30) + 量能見頂(新18) + 融資暴增(10) + 法人大賣(降權4) + 散戶鬆散(8) → 高逃頂分。"""
+    row, df = _df_vol_spike(rsi=82)
     chip = {
         "valuation": {"pe": 45, "pb": 6}, "margin": {"fin_chg_pct": 6.0},
-        "institutional": {"total_net": -300_000}, "tdcc": {"major_pct": 30, "retail_pct": 45},
+        "institutional": {"total_net": -500_000}, "tdcc": {"major_pct": 30, "retail_pct": 45},
     }
     score, sig = compute_relative_high_tw(row, df, chip=chip)
-    assert sig["valuation"]["score"] == 30      # PE≥40(16)+PB≥5(14)（校準最強維）
-    assert sig["leverage"]["score"] == 15       # 融資 ≥5%
-    assert sig["institution"]["score"] == 10    # -30% 均量 大賣（已降權）
-    assert sig["tdcc"]["score"] == 15           # 散戶 45%
+    assert sig["valuation"]["score"] == 30      # PE≥40(16)+PB≥5(14)（最強維）
+    assert sig["volume"]["score"] == 18         # 爆量 ≥95 分位（v0.3 新維）
+    assert sig["leverage"]["score"] == 10       # 融資 ≥5%（max 15→10）
+    assert sig["institution"]["score"] == 4     # ≤-20% 均量 大賣（max 10→4）
+    assert sig["tdcc"]["score"] == 8            # 散戶 45%（max 15→8）
     assert sig["technical"]["score"] == 10      # RSI≥80(10)，無背離
     assert score >= 70
     assert "過熱" in relative_high_tw_meta(score)[0] or "逃頂" in relative_high_tw_meta(score)[0]
+
+
+def test_high_volume_pctile_dim():
+    """量能見頂維：定值量→0.5 分位→0 分；末根爆量→高分位→滿分；歷史不足→灰燈 0。"""
+    # 定值 volume（非爆量）→ midrank 0.5 → 0 分
+    row, df = _df(volume=5_000_000, rsi=50)
+    df = pd.concat([df] * 2, ignore_index=True)   # 60 根定值
+    assert compute_relative_high_tw(row, df, chip=None)[1]["volume"]["score"] == 0
+    # 末根爆量 → 滿分 18
+    row2, df2 = _df_vol_spike(rsi=50)
+    assert compute_relative_high_tw(row2, df2, chip=None)[1]["volume"]["score"] == 18
+    # 歷史 <60 根 → 資料不足灰燈 0
+    row3, df3 = _df(volume=1_000_000, rsi=50)   # 30 根
+    assert compute_relative_high_tw(row3, df3, chip=None)[1]["volume"]["score"] == 0
 
 
 def test_weights_sum_to_100():

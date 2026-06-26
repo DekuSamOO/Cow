@@ -120,7 +120,7 @@ class UniversalMonitor:
             high = compute_relative_high_tw(row, df, chip=self._chip)
             low = compute_relative_low_tw(row, df, chip=self._chip)
             top_title, top_rows = _panel(high, relative_high_tw_meta, 100, "逃頂訊號（台股籌碼）",
-                                         ("technical", "valuation", "leverage", "institution", "tdcc"))
+                                         ("technical", "valuation", "volume", "leverage", "institution", "tdcc"))
             low_title, low_rows = _panel(low, relative_low_tw_meta, 100, "抄底訊號（台股籌碼）",
                                          ("leverage", "technical", "institution", "tdcc", "valuation"))
             # 三軸 composite：不傳 cycle_score（台股估值對底部是雜訊、且 max 僅 10 達不到 cycle 門檻）；
