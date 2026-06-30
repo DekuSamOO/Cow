@@ -235,11 +235,13 @@ tests/
 
 六層出場優先級：
 1. **Climax Exit**：正乖離 > 30% 或爆量長上影線（散戶 FOMO 頂部訊號）
-2. **ATR 停損**：進場後跌破 `進場價 - N×ATR`
-3. **ATR 目標**：達到 `進場價 + M×ATR` 獲利了結
+2. **ATR 停損**：當日**最低價**跌破 `進場價 - N×ATR`（盤中觸發），以停損價結算；跳空跌破則以開盤價結算（較保守）
+3. **ATR 目標**：當日**最高價**達 `進場價 + M×ATR`（盤中觸發），以目標價結算；跳空衝過則以開盤價結算。同日若停損與目標皆觸發 → 保守採停損
 4. **Chandelier Exit**：追蹤止利（N 日最高點 - K×ATR）
 5. **Time Stop**：持倉 ≥ 15 日且淨報酬 < 5%，強制出場
 6. **EMA 停損**：跌破防守均線（最後防線）
+
+> **績效統計（Sharpe / MDD）** 以含空手期的全期市值曲線計算（對齊 swing.py），空手期記現金、持倉期逐日市值，避免舊版「只用持倉期報酬」低估波動、Sharpe 偏高、MDD 偏小的系統性偏樂觀。
 
 #### 子分頁 6：📡 波段雷達回放
 逐日重放逃頂/抄底/趨勢方向的歷史分數序列（與 dashboard / LINE / BTC_WATCH 同源 `core` 邏輯）：
@@ -374,6 +376,17 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 ---
 
 ## 版本紀錄
+
+### v3.23 (2026-06-30)
+社群量化方法對標的程式優化（研究 → 實作）。雷達側新增的鏈上參考指標**刻意不計入已校準加權總分**，啟用前須先過 backtest AUC 驗證。
+- **fix(walkforward)**: `strategy/walkforward_backtest.py` Sharpe/MDD 改用含空手期的全期市值曲線 `_build_daily_equity`（對齊 swing.py：空手記現金、持倉記 position×close），取代舊「只用持倉期報酬」算法（系統性偏樂觀：低估波動、Sharpe 偏高、MDD 偏小）；舊 `all_rets` 累積移除。`annual_days` 維持 365（刻意值，有契約測試）。
+- **fix(walkforward)**: 進階模式 ATR 停損/目標改**盤中 high/low 觸發**並以停損/目標價結算（跳空用開盤、同日雙觸保守採停損），取代原以收盤價判定觸發；其餘多層出場（Climax/Chandelier/Time/EMA）維持收盤結算。
+- **feat(core)**: `core/bottom_floors.py` 新增 Puell Multiple 底錨 `_puell_bottom`（日礦工發行美元值 = `miner_cost.btc_per_day(date)×close`、解 puell=`PUELL_BOTTOM` 對應價，**零新資料源**，與電費硬地板互證）；`config.py` 加 `PUELL_BOTTOM=0.5` 與 reliability 64。Mayer 底 label 正名「2年線底」（SMA730×0.6）。
+- **feat(core)**: 新增 `core/backtest_robustness.py`（純函數、不依賴 scipy）——Deflated Sharpe Ratio（依嘗試參數組數膨脹 Sharpe，量化人肉 grid search 過擬合）+ Monte Carlo 逐筆交易 bootstrap（ROI/MDD 分位分布與獲利機率）；常態 CDF/PPF 自實作（math.erf + Acklam 近似）。
+- **feat(core)**: 逃頂/抄底雷達新增 `reference_top_signals`/`reference_low_signals`（MVRV-Z、Hash Ribbons 判讀），由 `compute_relative_high/low` 以 `reference_signals` 回傳。**刻意不計入加權總分**（避免動已校準權重，啟用須先過 backtest）；新增 `mvrv_z`/`hashrate_hist` 皆 keyword-only 有預設、向後相容（BTC_WATCH path import 的 `compute_relative_*_score` 簽名未動）。`core/divergence.py` `_detect`/combo 回傳新增 `confirm_lag=order`（標註背離結構性確認延遲）。
+- **feat(core)**: `core/indicators.calculate_technical_indicators` 新增 `backtest_mode` 參數，回測時週線 RSI `shift(1)` 防 look-ahead（即時 dashboard 預設 False、行為不變）。
+- **refactor(simplify)**: `core/backtest_robustness.deflated_sharpe_ratio` 移除 `probabilistic_sharpe_ratio` 三次重複呼叫（改用已算 skew/kurt/sr_pp 組共用分母內聯算 psr/dsr）；`reference_top_signals` 改用既有 `_nan()` helper；`_build_daily_equity` 持倉期逐日迴圈改向量化切片賦值。
+- **test**: 新增 `tests/core/test_backtest_robustness.py`（7 passed）、`tests/core/test_radar_reference.py`；`tests/core/test_bottom_floors.py` 敏感度測試 skew 目標改最低錨 cvdd（新增 puell 錨使 base ensemble 巧合等於舊目標 realized）。全套 **177 passed / 2 failed**（2 failed 為 `tests/test_market_data.py` yfinance 環境性 Yahoo 阻擋，非本次改動）。
 
 ### v3.22 (2026-06-26)
 - **fix(tw)**: `service/tw_chip.get_tdcc` TDCC 多週 walk-back。原只試 `latest_tdcc_friday()` 單一週五，遇 TDCC 尚未公布（頁面「查無」）即回 None。抽出 `_fetch_tdcc_week(symbol, date_str)`（單週抓取＋快取），`get_tdcc` 新增 `max_back_weeks=4` 自最近週五往前逐週試到抓到已公布資料為止（鏡像 tw_stock_climber preflight）；傳明確 `date_str` 時只查該週。全 repo 僅 `get_chip_bundle` 一處呼叫 `get_tdcc(symbol)`，靠預設 walk-back，簽名相容。

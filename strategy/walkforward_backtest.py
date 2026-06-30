@@ -40,6 +40,9 @@ class WalkForwardBacktester:
 
 
     def __init__(self):
+        # 365：BTC 為 365 日市場（刻意值，有契約測試保護）。
+        # 註：swing.py 日頻 Sharpe 用 252，兩引擎年化因子不同 → 跨引擎 Sharpe 不可直接比較
+        # （差約 sqrt(365/252)≈1.20 倍）。此為已知次要差異，不在本次調整範圍。
         self.annual_days = 365
         self.risk_free   = 0.02
         logger.info('WalkForwardBacktester 初始化')
@@ -52,6 +55,35 @@ class WalkForwardBacktester:
         excess = returns - daily_rf
         sharpe = excess.mean() / excess.std() * np.sqrt(self.annual_days)
         return round(float(sharpe), 2)
+
+    def _build_daily_equity(self, bt_df: pd.DataFrame, trades: List[Dict[str, Any]],
+                            initial_capital: float) -> pd.Series:
+        """重建含空手期的逐日市值曲線（對齊 swing.py:182：空手記現金、持倉記 position×close）。
+
+        用於 Sharpe/MDD。先前只用「持倉期報酬」(close[entry:exit].pct_change()) 算，
+        空手期被排除 → 波動分母低估、Sharpe 偏高、MDD 偏小（系統性偏樂觀）。改用全期市值曲線。
+        """
+        dates = bt_df.index
+        closes = bt_df['close'].values
+        n = len(dates)
+        equity = np.full(n, float(initial_capital), dtype=float)
+        idx_of = {d.strftime('%Y-%m-%d'): k for k, d in enumerate(dates)}
+        cash = float(initial_capital)
+        k = 0
+        for tr in trades:                                   # trades 依時間順序 append
+            e_idx = idx_of.get(tr['entry_date'])
+            x_idx = idx_of.get(tr['exit_date'])
+            if e_idx is None or x_idx is None or x_idx < e_idx:
+                continue
+            e_idx = max(e_idx, k)
+            equity[k:e_idx] = cash                          # 進場前：空手＝現金
+            pos = float(tr.get('position', 0.0))
+            equity[e_idx:x_idx + 1] = pos * closes[e_idx:x_idx + 1]   # 持倉期：逐日市值
+            cash = float(tr.get('final_balance', cash))     # 出場後：現金
+            k = x_idx + 1
+        if k < n:
+            equity[k:] = cash                               # 收尾空手期
+        return pd.Series(equity, index=dates)
 
     def run_walkforward(
         self,
@@ -171,7 +203,6 @@ class WalkForwardBacktester:
         trade_target = None
         climax_pending = False
         _pending_climax_reason = ""
-        all_rets: List[pd.Series] = []
 
         for day_num, (i, date) in enumerate(zip(range(len(bt_df)), dates)):
             cur_price = close[i]
@@ -190,6 +221,7 @@ class WalkForwardBacktester:
                 # ── 出場判斷 ──
                 do_exit = False
                 exit_reason = ""
+                multi_exit_price = None      # ATR 停損/目標的精確結算價（其餘多層出場用收盤）
 
                 # 簡化模式：與 swing.py 完全對齊
                 # exit_signal_shifted[i] = 昨日收盤 < 防守線 → 今日開盤出場
@@ -232,14 +264,19 @@ class WalkForwardBacktester:
                         if climax_today:
                             climax_pending = True
 
-                        # ② ATR 停損
-                        if trade_stop_loss is not None and cur_price <= trade_stop_loss:
+                        # ② ATR 停損（盤中最低觸發，以停損價結算；跳空跌破則以開盤結算，較保守）
+                        if trade_stop_loss is not None and cur_low <= trade_stop_loss:
                             do_exit = True
+                            multi_exit_price = (open_vals[i] if open_vals[i] <= trade_stop_loss
+                                                else trade_stop_loss)
                             exit_reason = f'ATR停損 {trade_stop_loss:.2f}'
 
-                        # ③ ATR 目標
-                        elif trade_target is not None and cur_price >= trade_target:
-                            upside = (trade_target / entry_price - 1) * 100
+                        # ③ ATR 目標（盤中最高觸發，以目標價結算；跳空衝過則以開盤結算）
+                        # 同日若停損與目標皆觸發 → ② 先判定，保守採停損
+                        elif trade_target is not None and cur_high >= trade_target:
+                            multi_exit_price = (open_vals[i] if open_vals[i] >= trade_target
+                                                else trade_target)
+                            upside = (multi_exit_price / entry_price - 1) * 100
                             do_exit = True
                             exit_reason = f'ATR目標 {trade_target:.2f}（+{upside:.1f}%）'
 
@@ -267,8 +304,14 @@ class WalkForwardBacktester:
                 if do_exit:
                     # 計算損益（含摩擦成本）
                     # 簡化模式：出場均為 pending 次日 → 以今日開盤執行（對齊 swing.py）
-                    # 進階模式：ATR 停損/目標為即時觸發 → 以今日收盤執行
-                    exec_exit = open_vals[i] if use_simple_mode else cur_price
+                    # 進階模式：ATR 停損/目標 → 以停損/目標價結算（multi_exit_price）；
+                    #           其餘多層出場（Climax/Chandelier/Time/EMA）→ 以今日收盤執行
+                    if use_simple_mode:
+                        exec_exit = open_vals[i]
+                    elif multi_exit_price is not None:
+                        exec_exit = multi_exit_price
+                    else:
+                        exec_exit = cur_price
                     friction_out = DEFAULT_FEE_RATE + DEFAULT_SLIPPAGE_RATE
                     exit_price_net = exec_exit * (1.0 - friction_out)
                     balance = position * exit_price_net
@@ -289,16 +332,13 @@ class WalkForwardBacktester:
                         'final_balance': round(balance, 2),
                     })
 
-                    # 收集日報酬序列
-                    seg = pd.Series(close[entry_idx:i+1]).pct_change().dropna()
-                    if len(seg) > 0:
-                        all_rets.append(seg)
-
                     capital = balance
                     in_trade = False
                     trade_stop_loss = None
                     trade_target = None
                     highest_high = 0.0
+                    # 註：Sharpe/MDD 改由 _build_daily_equity 從全期市值曲線計算（含空手期），
+                    # 不再於此累積「持倉期報酬」
 
             else:
                 # ── 進場掃描（每 scan_freq 天）──
@@ -370,14 +410,14 @@ class WalkForwardBacktester:
         bh_roi = (bh_end / bh_start - 1) * 100
         alpha = roi - bh_roi
 
-        # Sharpe / MDD
+        # Sharpe / MDD：用含空手期的全期市值曲線（對齊 swing.py，消除偏樂觀）
         sharpe = 0.0
         mdd = 0.0
-        if all_rets:
-            combined = pd.concat(all_rets)
-            sharpe = self.sharpe_ratio(combined)
-            cum_ret = (1 + combined).cumprod().values
-            mdd = calculate_max_drawdown(cum_ret)
+        equity_daily = self._build_daily_equity(bt_df, trades, initial_capital)
+        daily_rets = equity_daily.pct_change().dropna()
+        if len(daily_rets) > 0:
+            sharpe = self.sharpe_ratio(daily_rets)
+            mdd = calculate_max_drawdown(equity_daily.values)
 
         # 勝率
         win_trades = [t for t in trades if t['pnl'] > 0]

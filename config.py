@@ -137,6 +137,7 @@ BOTTOM_RELIABILITY: dict = {
     "miner_implied": 68,   # 電費 × MINER_BOTTOM_MULT 實證延伸
     "power_law":     66,   # 冪律下界：長期公允下緣
     "cvdd":          64,   # CVDD：歷史絕對底，近年偏保守
+    "puell_floor":   64,   # Puell 底：礦工投降價，與電費硬地板互證、零新資料源
     "ahr999_floor":  62,   # AHR999 抄底頂：便宜區上界
     "mayer_floor":   60,   # Mayer 底：啟發式比例
     "season_bottom": 58,   # 四季論趨勢底：週期邏輯佳但 n=3 脆弱
@@ -144,6 +145,8 @@ BOTTOM_RELIABILITY: dict = {
 }
 # 礦工電費歷史熊底倍數（2015/2018/2022 熊底/電費中位數 ≈ 1.10 的保守取值）
 MINER_BOTTOM_MULT: float = 1.08
+# Puell Multiple 底部門檻（日礦工發行美元 / 其365日均；歷史熊底 0.3~0.5，礦工投降）
+PUELL_BOTTOM: float = 0.5
 # Mayer Multiple 歷史底部區（價/2年線）
 MAYER_BOTTOM_RATIO: float = 0.6
 # AHR999 抄底區上界

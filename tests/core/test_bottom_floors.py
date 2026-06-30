@@ -96,14 +96,15 @@ def test_reliability_sensitivity_ensemble_moves_final_low_invariant(monkeypatch)
     kw = dict(df=df, hashrate_ths=7.6e8, now=datetime(2026, 6, 1), onchain=onchain)
     base = compute_all_bottom_estimates(price, **kw)
 
-    # 把最高值錨（realized=50000）權重拉到壓倒性 → 加權中位數應被拉向它
+    # 把最低值錨（cvdd=15000）權重拉到壓倒性 → 加權中位數應被拉向它。
+    # 用最低錨確保必偏離 base ensemble（base 落在中段錨，不會等於 cvdd）。
     for k in list(bf._RELIABILITY):
         monkeypatch.setitem(bf._RELIABILITY, k, 1)
-    monkeypatch.setitem(bf._RELIABILITY, "realized", 10000)
+    monkeypatch.setitem(bf._RELIABILITY, "cvdd", 10000)
     skewed = compute_all_bottom_estimates(price, **kw)
 
-    # 加權中位數被拉到壓倒性權重的錨（realized=50000），且確實偏離原 ensemble
-    assert abs(skewed["ensemble_low"] - 50000) < 1e-6
+    # 加權中位數被拉到壓倒性權重的錨（cvdd=15000），且確實偏離原 ensemble
+    assert abs(skewed["ensemble_low"] - 15000) < 1e-6
     assert abs(skewed["ensemble_low"] - base["ensemble_low"]) > 1.0
     # final_low = max(四季論趨勢底, 礦工電費) 與可靠度權重無關
     assert abs(skewed["final_low"] - base["final_low"]) < 1e-6

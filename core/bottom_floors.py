@@ -6,7 +6,7 @@ core/bottom_floors.py
   四季論趨勢底（season_forecast.project_bear_bottom，v1.4 趨勢外插）
   + 4 個既有 floor：200週均線 / 冪律下界 / 礦工電費 / 礦工 all-in
   + on-chain 錨：Realized Price / Balanced Price / CVDD（bitcoin-data.com）
-  + 技術錨：Mayer 底（SMA730×0.6）/ AHR999 抄底頂（0.45）
+  + 技術錨：2年線底（SMA730×0.6）/ AHR999 抄底頂（0.45）/ Puell 底（礦工投降價）
   + 礦工成本隱含底（電費 × 歷史熊底/電費 中位數）
 
 並輸出：
@@ -32,7 +32,8 @@ from core import miner_cost
 from config import (BOTTOM_RELIABILITY as _RELIABILITY,
                     MINER_BOTTOM_MULT as _MINER_BOTTOM_MULT,
                     MAYER_BOTTOM_RATIO as _MAYER_BOTTOM_RATIO,
-                    AHR999_DCA_CEIL as _AHR999_DCA_CEIL)
+                    AHR999_DCA_CEIL as _AHR999_DCA_CEIL,
+                    PUELL_BOTTOM as _PUELL_BOTTOM)
 
 _GENESIS = datetime(2009, 1, 3)
 
@@ -82,6 +83,29 @@ def _ma200w(df: pd.DataFrame) -> Optional[float]:
     return None
 
 
+def _puell_bottom(df: pd.DataFrame, now: datetime) -> Optional[float]:
+    """Puell Multiple 底錨：解 puell=_PUELL_BOTTOM 對應價（礦工投降價）。
+
+    Puell = 日礦工發行美元值 / 其 365 日均；歷史熊底落 0.3~0.5。
+    日發行美元 = btc_per_day(date) × close（複用 miner_cost.btc_per_day，零新資料源）。
+    分母（365日均）由歷史價固定 → 解 puell=門檻 的當前價：
+        P_bottom = 門檻 × MA365(發行美元) / btc_per_day(今日)
+    """
+    if df is None or df.empty or "close" not in df.columns or len(df) < 365:
+        return None
+    sub = df.tail(400)
+    issuance = pd.Series(
+        [miner_cost.btc_per_day(idx.to_pydatetime()) * float(c)
+         for idx, c in zip(sub.index, sub["close"].values)],
+        index=sub.index,
+    )
+    ma365 = float(issuance.tail(365).mean())
+    btc_today = miner_cost.btc_per_day(now)
+    if not (ma365 == ma365 and ma365 > 0) or btc_today <= 0:
+        return None
+    return _PUELL_BOTTOM * ma365 / btc_today
+
+
 def compute_all_bottom_estimates(
     current_price: float,
     df: Optional[pd.DataFrame] = None,
@@ -119,6 +143,8 @@ def compute_all_bottom_estimates(
     # AHR999 = (P/SMA200)×(P/PL) = P²/(SMA200×PL)；解 AHR999=0.45 的 P（抄底區上界）
     ahr_floor = (math.sqrt(_AHR999_DCA_CEIL * sma200 * pl_med)
                  if (sma200 and pl_med) else None)
+    # Puell 底（礦工投降價，零新資料源，與電費硬地板互證）
+    puell_floor = _puell_bottom(df, now)
 
     # ── 3. 礦工成本（即時，用當前算力）──
     miner_elec = miner_allin = miner_implied = None
@@ -153,8 +179,10 @@ def compute_all_bottom_estimates(
     add("balanced",     "Balanced Price",  balanced,      "anchor", "歷史大底錨")
     add("cvdd",         "CVDD",            cvdd,          "anchor", "歷史絕對底部")
     add("ma200w",       "200 週均線",      ma200w,        "floor",  "歷史牛熊分界")
-    add("mayer_floor",  "Mayer 底",        mayer_floor,   "anchor", "2年線 × 0.6")
+    add("mayer_floor",  "2年線底",         mayer_floor,   "anchor", "2年線(SMA730) × 0.6")
     add("ahr999_floor", "AHR999 抄底頂",   ahr_floor,     "anchor", "AHR999=0.45 對應價")
+    add("puell_floor",  "Puell 底",        puell_floor,   "anchor",
+        f"Puell={_PUELL_BOTTOM} 礦工投降價（日發行/365日均）")
     add("power_law",    "冪律下界",        pl_floor,      "floor",  "冪律 -0.45 log 通道")
     add("miner_allin",  "礦工 all-in(警示)", miner_allin, "warning",
         "含折舊/場地；牛末熊底常跌破至 ~0.67×")

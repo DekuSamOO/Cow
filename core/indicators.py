@@ -15,7 +15,12 @@ def _ta_series(result, index):
     return result
 
 
-def calculate_technical_indicators(df):
+def calculate_technical_indicators(df, backtest_mode: bool = False):
+    """計算技術指標。
+
+    backtest_mode=True：週線 RSI 改用「上一個已收完的週」值，避免回測時當週未收盤的
+    暫定週收盤偷看未來（即時 dashboard 用途維持 False，行為不變）。
+    """
     df = df.copy()
     if df.empty:
         return df
@@ -37,6 +42,9 @@ def calculate_technical_indicators(df):
     # RSI (Weekly)
     weekly_close = df['close'].resample('W-MON').last()
     weekly_rsi = _ta_series(ta.rsi(weekly_close, length=14), weekly_close.index)
+    # 回測模式：shift(1) → 每日只看「上一個已收完週」的 RSI，消除當週暫定收盤的 look-ahead
+    if backtest_mode:
+        weekly_rsi = weekly_rsi.shift(1)
     df['RSI_Weekly'] = weekly_rsi.reindex(df.index).ffill()
 
     # ATR

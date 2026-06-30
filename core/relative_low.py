@@ -314,6 +314,55 @@ def compute_relative_low_score(
     return score, signals
 
 
+def _hash_ribbon_read(hashrate_hist) -> Optional[dict]:
+    """Hash Ribbons：30/60 日算力 SMA 交叉（礦工投降→打底）。資料用
+    service.bottom_metrics.fetch_hashrate_history_ths()（已快取，零新資料源）。"""
+    if not hashrate_hist:
+        return None
+    try:
+        s = pd.Series(hashrate_hist)
+        s.index = pd.to_datetime(s.index)
+        s = s.sort_index().astype(float)
+    except Exception:
+        return None
+    if len(s) < 60:
+        return None
+    sma30, sma60 = s.rolling(30).mean(), s.rolling(60).mean()
+    a, b = sma30.iloc[-1], sma60.iloc[-1]
+    if _nan(a) or _nan(b):
+        return None
+    cross_up = False
+    if len(s) >= 6 and not _nan(sma30.iloc[-6]) and not _nan(sma60.iloc[-6]):
+        cross_up = (sma30.iloc[-6] < sma60.iloc[-6]) and (a >= b)
+    if cross_up:
+        lbl = "🟢 Hash Ribbon 黃金交叉（礦工投降結束，歷史買訊）"
+    elif a < b:
+        lbl = "🟡 礦工投降中（SMA30<SMA60，打底訊號醞釀）"
+    else:
+        lbl = "⚪ 算力健康（無礦工投降）"
+    return {"value": f"SMA30 {a:.3g}/SMA60 {b:.3g} TH/s", "label": lbl,
+            "note": "參考（未計入加權，待回測）；2023/8 有假訊號→須他維確認"}
+
+
+def reference_low_signals(*, mvrv_z: Optional[float] = None,
+                          hashrate_hist=None) -> Dict[str, dict]:
+    """抄底側社群參考指標（**不計入 low_score**；啟用加權須先過 relative_low_backtest
+    swing-low AUC≥0.55，避免憑社群閾值直接調已校準/已驗證(SOPR)權重）。"""
+    out: Dict[str, dict] = {}
+    if mvrv_z is not None and not _nan(mvrv_z):
+        z = float(mvrv_z)
+        if   z <= 0: lbl = "🟢 MVRV-Z≤0 歷史底部區（市值低於成本價）"
+        elif z <= 1: lbl = "🟢 MVRV-Z≤1 深度低估"
+        elif z <= 2: lbl = "🟡 MVRV-Z≤2 偏低"
+        else:        lbl = "⚪ MVRV-Z 中性/偏高"
+        out["mvrv_z"] = {"value": f"{z:.2f}", "label": lbl,
+                         "note": "參考（未計入加權，待回測 AUC 驗證）"}
+    hr = _hash_ribbon_read(hashrate_hist)
+    if hr is not None:
+        out["hash_ribbon"] = hr
+    return out
+
+
 def relative_low_meta(score: int) -> Tuple[str, str, str]:
     """(等級, 顏色, 操作建議) — 鏡像 escape_top_meta 的反向。"""
     if score >= 75:
@@ -328,9 +377,11 @@ def relative_low_meta(score: int) -> Tuple[str, str, str]:
 
 
 def compute_relative_low(
-    price: float, row, df: Optional[pd.DataFrame] = None, **kwargs,
+    price: float, row, df: Optional[pd.DataFrame] = None, *,
+    mvrv_z: Optional[float] = None, hashrate_hist=None, **kwargs,
 ) -> dict:
-    """相對底部完整評估（評分 + 等級）。所有外部資料由呼叫端注入（本層零網路請求）。"""
+    """相對底部完整評估（評分 + 等級）。所有外部資料由呼叫端注入（本層零網路請求）。
+    mvrv_z / hashrate_hist：社群參考指標，僅顯示於 reference_signals，不計入 low_score（待回測）。"""
     score, signals = compute_relative_low_score(row, df, **kwargs)
     level, color, action = relative_low_meta(score)
     return {
@@ -341,4 +392,5 @@ def compute_relative_low(
         "low_signals": signals,
         "unfitted_dims": list(UNFITTED_DIMS_LOW),
         "rule_based_dims": list(RULE_BASED_DIMS_LOW),
+        "reference_signals": reference_low_signals(mvrv_z=mvrv_z, hashrate_hist=hashrate_hist),
     }

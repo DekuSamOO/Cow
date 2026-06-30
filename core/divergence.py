@@ -44,6 +44,7 @@ def _detect(df: pd.DataFrame, lookback: int, order: int, indicator: str,
         "has_divergence": False, "strength": 0.0, "indicator": indicator,
         "kind": kind, "last_pivot_age": None,
         "price_change_pct": None, "indicator_change": None,
+        "confirm_lag": int(order),   # 樞紐須右側 order 根更極端才確認 → 結構性確認延遲（非即時）
     }
     if df is None or df.empty or indicator not in df.columns:
         return empty
@@ -104,6 +105,7 @@ def _detect(df: pd.DataFrame, lookback: int, order: int, indicator: str,
         "last_pivot_age": int(last_age),
         "price_change_pct": round(float(price_change_pct), 2),
         "indicator_change": round(float(indicator_change), 3),
+        "confirm_lag": int(order),   # 背離已確認，但落後轉折約 order 根 K 棒（防 repaint 的代價）
     }
 
 
@@ -135,6 +137,7 @@ def _detect_combo(detect_fn, df: pd.DataFrame, lookback: int, order: int,
         "has_divergence": n_confirm > 0,
         "strength": max(rsi["strength"], macd["strength"]),
         "n_confirm": n_confirm,
+        "confirm_lag": int(order),   # 結構性確認延遲（約 order 根 K 棒），UI/推播可標「落後 N 根」
         "rsi": rsi,
         "macd": macd,
     }

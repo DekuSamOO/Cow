@@ -285,6 +285,26 @@ def escape_top_meta(score: int) -> Tuple[str, str, str]:
     return "🟢 無過熱", "#00cc88", "無逃頂壓力"
 
 
+def reference_top_signals(*, mvrv_z: Optional[float] = None) -> Dict[str, dict]:
+    """逃頂側社群參考指標（**不計入 escape_score**；dashboard/BTC_WATCH 顯示用）。
+
+    MVRV-Z 為社群命中力最強的單一鏈上頂底指標，真值已由 service/bottom_metrics
+    （get_latest_bottom_metrics()['mvrv_zscore']）抓取。此處僅判讀、未納入加權——
+    納入加權前須以 tests/relative_high_backtest.py 的 swing + Mann-Whitney AUC 驗證
+    （AUC≥0.55），避免憑社群閾值直接調已校準權重。
+    """
+    out: Dict[str, dict] = {}
+    if not _nan(mvrv_z):
+        z = float(mvrv_z)
+        if   z >= 7: lbl = "🔴 MVRV-Z≥7 歷史大頂派發區"
+        elif z >= 5: lbl = "🟠 MVRV-Z≥5 過熱"
+        elif z >= 3: lbl = "🟡 MVRV-Z≥3 偏熱"
+        else:        lbl = "⚪ MVRV-Z 中性/偏低"
+        out["mvrv_z"] = {"value": f"{z:.2f}", "label": lbl,
+                         "note": "參考（未計入加權，待回測 AUC 驗證）"}
+    return out
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Layer B — 長週期大頂（複用既有 bull_total + 四季論秋季）
 # ══════════════════════════════════════════════════════════════════════════════
@@ -371,10 +391,12 @@ def compute_relative_high(
     fng: Optional[float] = None,
     btc_d_trend: Optional[dict] = None,
     macro: Optional[dict] = None,
+    mvrv_z: Optional[float] = None,
 ) -> dict:
     """
     相對高點完整評估（Layer A + Layer B + 價位錨）。
     所有外部資料由呼叫端注入（本層零網路請求），dashboard 與 BTC_WATCH 共用。
+    mvrv_z：社群參考指標，僅顯示於 reference_signals，不計入 escape_score（待回測）。
     """
     score, signals = compute_escape_top_score(
         row, df, funding_8h=funding_8h, oi_stats=oi_stats, etf_summary=etf_summary,
@@ -389,4 +411,5 @@ def compute_relative_high(
         "cycle_top":      compute_cycle_top_state(row, df, price),
         "top_estimates":  compute_cycle_top_estimates(price, df),
         "unfitted_dims":  list(UNFITTED_DIMS),
+        "reference_signals": reference_top_signals(mvrv_z=mvrv_z),
     }
