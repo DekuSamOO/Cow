@@ -1,7 +1,7 @@
 # CLAUDE.md — Cow（BTC 投資戰情室）
 
 **路徑：** `D:\Users\63191\Documents\GitHub\Cow`
-**目前版本：** v3.21
+**目前版本：** v3.23
 **Live App：** https://mfyyo9qf5mymsrouxkfdgj.streamlit.app
 **Streamlit 版本：** 1.37.1
 
@@ -104,9 +104,22 @@ all-in = 電費 × 1.6。
   - onchain：2026-06 敏感度驗證通過，已不在任一清單（SOPR 單維 AUC 0.585、加入合成無害且隨權重
     單調有益，見 `tests/relative_low_backtest.py::validate_unfitted_dims`）。ETF 子項 2024+ 資料薄沿用專家權重。
   - macro **拆兩子維**：event-window（事件臨近）＝規則式、永久不可擬合 → `RULE_BASED_DIMS_LOW`；
-    dovish flags（通膨/就業）＝可擬合但無歷史源（FRED 被擋）→ `PENDING_FIT_SUBDIMS_LOW`，待雲端/家用
-    網路回補 FRED 後 backtest。`UNFITTED_DIMS_LOW` 因此清空。UI 以〔規則式〕（藍）/〔未擬合〕（橘）兩種 tag 區分。
+    dovish flags（通膨/就業）原為 `PENDING_FIT_SUBDIMS_LOW`（FRED 被擋無歷史源）。
+    **2026-07 已在家用網路（FRED 可達）回測完成**（`tests/relative_low_macro_backtest.py`，
+    point-in-time 含發布延遲、無前視）：`PENDING_FIT_SUBDIMS_LOW` 清空、改為 `WEAK_SUBDIMS_LOW`。
+    UI 以〔規則式〕（藍）/〔未擬合〕（橘）兩種 tag 區分。
   - 逃頂側 `UNFITTED_DIMS=("onchain",)` 不變。
+
+### macro dovish/hawkish flags FRED 回測結論（2026-07，`tests/relative_low_macro_backtest.py`）
+用 FRED CPIAUCSL/PCEPI/PAYEMS/UNRATE 建 **point-in-time**（每月觀測掛 observation_date+發布延遲
+為 available_date，評估日只取已公布者 → 無前視）dovish/hawkish flag 序列，對 swing 轉折±18% 樣本測單維 AUC：
+- **抄底 dovish（通膨降溫＋就業轉弱）＝弱/落後確認**：全期 AUC **0.448**（方向反，底部觸發率 53%＜非底 74%）、
+  資金費率時代 0.562（弱）；增量在實際 macro 權重(λ≈0.07)下 Δ≈+0.02 可忽略。
+  → **底部領先 macro 改善**（落底時 Fed 尚未轉鴿、通膨/就業確認未到），dovish 是落後確認非領先訊號
+  → 不給實證權重，維持低權規則式灰燈（與抄底「估值便宜才是最強底部維」一致，macro 非底部驅動力）。
+- **逃頂 hawkish（通膨升溫＋就業強勁）＝方向明確有效**：全期 AUC **0.607**、資金費率時代 **0.660**
+  （頂部觸發率 67%＞非頂 47%）→ 頂部與升息環境（通膨熱+就業強→Fed 抽流動性→BTC 逆風）同步，支持沿用權重。
+- **再添一筆頂底非對稱證據**：頂部靠「升息環境」可被 macro 標記、底部 macro 無領先力（靠估值/槓桿清洗）。
 
 **BTC_WATCH.py 共用**：純幣安環境連 fapi/dapi + path import 算分。OI 用
 `openInterestHist`（5m×13 滾動清洗 + 1d×30 分位）取代失效的相鄰 60s 差值；防線用
@@ -115,6 +128,8 @@ all-in = 電費 × 1.6。
 SOPR（`get_latest_bottom_metrics`，bitcoin-data 12h 快取）、BTC.D 趨勢（`get_btcd_trend`，
 本地 OI 快照）、總經事件（`get_next_macro_event`，本地 `macro_events.json`，**不打被擋的 FRED**）。
 可得天花板升至 **逃頂/抄底各 93**（唯缺 macro 通膨/就業 dovish/hawkish flags 需 FRED → 缺 7 分）。
+> 註：dovish/hawkish flags 已於 2026-07 用 FRED 回測（見上節）——逃頂 hawkish 有效(AUC 0.61/0.66)、
+> 抄底 dovish 弱（落後確認）。watcher 純幣安環境不打 FRED，故仍缺此 7 分；雲端 dashboard 可得 FRED。
 
 詳見 PLAN：`Obsidian/Github/Cow/20260608plan_相對高點判斷.md`、`20260609plan_相對底部判斷.md`。
 

@@ -50,6 +50,10 @@ WEIGHTS = {
 
 # 權重未經回測擬合的維度（歷史資料不足；介面需標示）
 UNFITTED_DIMS = ("onchain",)   # OI 無歷史、ETF 僅 2024+ → onchain 維度視為未擬合
+# macro hawkish flags（通膨/就業）：2026-07 家用網路（FRED 可達）回測通過
+#   （tests/relative_low_macro_backtest.py）：point-in-time hawkish_score 對相對頂部
+#   全期 AUC=0.607、資金費率時代 AUC=0.660（頂部觸發率 67% > 非頂 47%）— 頂部與升息環境
+#   （通膨熱+就業強→Fed 抽流動性）同步，方向明確有效。event-window 仍為規則式。
 
 
 def annualize_funding(rate_8h_pct: Optional[float]) -> Optional[float]:

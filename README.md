@@ -375,6 +375,9 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 
 ## 版本紀錄
 
+### v3.23 (2026-07-01)
+- **test(radar)**: 完成 macro dovish/hawkish flags 的 FRED 回測（原 `PENDING_FIT_SUBDIMS_LOW`，公司網路 FRED 被擋無法做、待家用網路）。新增 `tests/relative_low_macro_backtest.py`：用 FRED CPIAUCSL/PCEPI/PAYEMS/UNRATE 建 **point-in-time**（每月觀測掛 observation_date+發布延遲為 available_date、評估日只取已公布者 → 無前視）dovish/hawkish flag 序列，對 swing 轉折±18% 樣本測單維 AUC。**結論非對稱**：逃頂 hawkish（通膨升溫+就業強勁）全期 AUC **0.607**／費率era **0.660**（頂部觸發率 67%＞非頂 47%）→ 頂部與升息環境同步、方向明確有效；抄底 dovish（通膨降溫+就業轉弱）全期 AUC **0.448**（方向反，底部觸發率 53%＜非底 74%）／費率era 0.562（弱），增量在實際 macro 權重(λ≈0.07)下 Δ≈+0.02 可忽略 → **底部領先 macro 改善、dovish 是落後確認非領先訊號**，不給實證權重、維持低權規則式。`core/relative_low.py` `PENDING_FIT_SUBDIMS_LOW={}` → 新增 `WEAK_SUBDIMS_LOW`（記錄回測弱維結論）；`core/relative_high.py` 註記 hawkish 已驗；note 字串、`tests/relative_low_backtest.py::macro_note`、`CLAUDE.md` 同步。再添一筆頂底非對稱證據（頂靠升息環境、底靠估值/槓桿清洗）。
+
 ### v3.22 (2026-06-26)
 - **fix(tw)**: `service/tw_chip.get_tdcc` TDCC 多週 walk-back。原只試 `latest_tdcc_friday()` 單一週五，遇 TDCC 尚未公布（頁面「查無」）即回 None。抽出 `_fetch_tdcc_week(symbol, date_str)`（單週抓取＋快取），`get_tdcc` 新增 `max_back_weeks=4` 自最近週五往前逐週試到抓到已公布資料為止（鏡像 tw_stock_climber preflight）；傳明確 `date_str` 時只查該週。全 repo 僅 `get_chip_bundle` 一處呼叫 `get_tdcc(symbol)`，靠預設 walk-back，簽名相容。
 - **fix(tw)**: `service/tw_chip.get_chip_bundle` 探測改「三檔齊備」。原 as_of 探測只要 BWIBBU(估值)檔非空即採用，但估值/融資/法人三日檔公布時間不同步（實測 20260626 BWIBBU/T86 已出但 MI_MARGN 未出 → as_of 鎖在當日 → 融資整片 None）。改為 BWIBBU＋MI_MARGN＋T86 三檔皆非空才採用該 as_of，否則往前一天；探測即預熱 `_fetch_market_file` 快取、採用日不重抓。實證 6782/8 與 2330 as_of 退至 20260625、籌碼四維（融資/法人/估值/大戶）皆齊。
