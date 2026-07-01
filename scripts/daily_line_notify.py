@@ -64,6 +64,7 @@ from core.indicators import calculate_technical_indicators, calculate_ahr999
 from core.bear_bottom import calculate_bear_bottom_indicators, calculate_market_cycle_score
 from core.season_forecast import forecast_price, STATS as _SEASON_STATS
 from core.bottom_floors import compute_all_bottom_estimates
+from core.risk import compute_atr_risk
 from service.bottom_metrics import get_latest_bottom_metrics, fetch_hashrate_history_ths
 
 
@@ -203,6 +204,11 @@ def get_decision_data():
             summary["floor_ma200w"]    = _by.get("ma200w")
             summary["floor_power_law"] = _by.get("power_law")
             summary["floor_miner_cost"] = bottom_eval.get("miner_elec")
+
+            # ATR 風控框架（同源 core/risk，watcher 共用）：支撐用動態地板 final_low，
+            # 算不出時 compute_atr_risk 內部退回近 60 日低點。
+            summary["atr_risk"] = compute_atr_risk(
+                btc_df, current_price, support=bottom_eval.get("final_low"))
 
             # 分數計算
             score = calculate_market_cycle_score(curr)

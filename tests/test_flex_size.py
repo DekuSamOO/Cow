@@ -63,6 +63,24 @@ def test_composite_action_line_rendered():
     assert "今日行動" not in json.dumps(build_flex_message(s2), ensure_ascii=False)
 
 
+def test_risk_box_rendered_when_atr_risk_present():
+    s = _minimal_summary()
+    s["atr_risk"] = {
+        "atr": 2192.0, "atr_pct": 3.7, "k": 2.0,
+        "stop_long": 54401.0, "stop_short": 63167.0,
+        "support": 61608.0, "support_pct": 4.8,
+        "resistance": 82829.0, "resistance_pct": 40.9,
+        "lookback": 60, "reward_risk": 5.5,
+    }
+    rendered = json.dumps(build_flex_message(s), ensure_ascii=False)
+    assert "🎯 風控框架" in rendered
+    assert "$54,401" in rendered and "$63,167" in rendered
+    assert "風報 1:5.5" in rendered
+    # 無 atr_risk（缺 ATR 欄/資料不足）時不顯示
+    s2 = _minimal_summary()
+    assert "🎯 風控框架" not in json.dumps(build_flex_message(s2), ensure_ascii=False)
+
+
 def test_snapshot_stale_warning_rendered():
     s = _minimal_summary()
     s["snapshot_stale_days"] = 5

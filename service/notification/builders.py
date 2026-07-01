@@ -307,6 +307,41 @@ def _build_swing_radar_box(s):
     }
 
 
+def _build_risk_box(s):
+    """🎯 風控框架（ATR 停損＋支撐壓力風報比）— 同源 core/risk，與 watcher 一致。
+    緊接在「今日行動」之後：行動建議講方向，這裡講萬一做了要怎麼設風控。
+    無 atr_risk 資料（ATR 欄缺/資料不足）時回 None。"""
+    r = s.get("atr_risk")
+    if not r:
+        return None
+    resist_text = f"${r['resistance']:,.0f} ({r['resistance_pct']:+.1f}%)"
+    if r.get("reward_risk") is not None:
+        resist_text += f"｜風報 1:{r['reward_risk']:.1f}"
+    return {
+        "type": "box", "layout": "vertical", "margin": "lg",
+        "backgroundColor": "#FFF9E6", "cornerRadius": "8px", "paddingAll": "md",
+        "contents": [
+            {"type": "text", "text": "🎯 風控框架", "color": "#2C3E50", "size": "sm", "weight": "bold"},
+            {"type": "text",
+             "text": f"ATR(14) ${r['atr']:,.0f} ({r['atr_pct']:.1f}%/日)"
+                     f"｜{r['k']:g}×ATR 停損：多 ${r['stop_long']:,.0f} / 空 ${r['stop_short']:,.0f}",
+             "color": "#555555", "size": "xs", "margin": "sm", "wrap": True},
+            {"type": "box", "layout": "horizontal", "margin": "xs", "contents": [
+                {"type": "text", "text": "支撐", "color": "#555555", "size": "xs", "flex": 2},
+                {"type": "text", "text": f"${r['support']:,.0f} ({r['support_pct']:+.1f}%)",
+                 "color": "#2C3E50", "size": "xs", "align": "end", "flex": 5, "wrap": True},
+            ]},
+            {"type": "box", "layout": "horizontal", "margin": "xs", "contents": [
+                {"type": "text", "text": f"壓力(近{r['lookback']}日高)", "color": "#555555", "size": "xs", "flex": 2},
+                {"type": "text", "text": resist_text,
+                 "color": "#2C3E50", "size": "xs", "align": "end", "flex": 5, "wrap": True},
+            ]},
+            {"type": "text", "text": "停損用 ATR 界定正常波動幅度，非精準點位；風報比僅供參考",
+             "color": "#AAAAAA", "size": "xxs", "margin": "sm", "wrap": True},
+        ],
+    }
+
+
 def _build_advice_box(label, text, color):
     """黃底建議 box（每日 Flex「策略建議」與逃頂警報「操作建議」共用）。"""
     return {
@@ -788,6 +823,11 @@ def build_flex_message(s):
     swing_box = _build_swing_radar_box(s)
     if swing_box:
         body_contents.append(swing_box)
+
+    # 3b. 風控框架（ATR 停損 + 支撐壓力風報比）— 緊接在今日行動之後
+    risk_box = _build_risk_box(s)
+    if risk_box:
+        body_contents.append(risk_box)
 
     # 4. 四季雷達（季節 + 週期頂底 + 通道 + 頂錨依據 + 牛頂/熊底分）
     season_radar = _build_season_radar_box(s)

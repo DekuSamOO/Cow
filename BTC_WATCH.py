@@ -22,10 +22,13 @@ logging.getLogger("streamlit").setLevel(logging.ERROR)
 #   ImportError fallback：環境缺套件時退化為極簡模式（僅價格/資金費率/OI，無評分）。
 # ──────────────────────────────────────────────────────────────────────────────
 _COW = os.path.dirname(os.path.abspath(__file__))
+if _COW not in sys.path:
+    sys.path.insert(0, _COW)
+# core.risk 只依賴 math，無重依賴 → 獨立於下方 try/except 之外，極簡模式（_COW_OK=False）仍可用
+from core.risk import atr_risk_rows as _atr_risk_rows
+
 _COW_OK = False
 try:
-    if _COW not in sys.path:
-        sys.path.insert(0, _COW)
     from core.indicators import calculate_technical_indicators, calculate_ahr999
     from core.bear_bottom import calculate_bear_bottom_indicators
     from core.relative_high import (compute_escape_top_score, escape_top_meta,
@@ -110,37 +113,6 @@ def _ref_rows(ref: dict) -> list:
     for v in ref.values():
         out.append(f"     {v['label']}（{v['value']}）")
     return out
-
-
-def _atr_risk_rows(df, price, support=None, lookback=60, k=2.0):
-    """ATR 風控框架（純函數，可測）。
-
-    出自「技術指標的真實用途」筆記最被低估的實戰點：**停損位置用 ATR（1.5–3×）而非拍腦袋、
-    用支撐壓力判風險報酬比**。ATR 不預測方向，只界定「正常波動」尺度 → 停損別設在會被正常
-    波動掃掉的位置。回傳 0–2 列字串；資料不足回 []。
-    """
-    if df is None or getattr(df, "empty", True) or "ATR" not in getattr(df, "columns", []) \
-       or len(df) < 20 or not price or price <= 0:
-        return []
-    atr = float(df["ATR"].iloc[-1])
-    if math.isnan(atr) or atr <= 0:
-        return []
-    atr_pct = atr / price * 100
-    stop_long, stop_short = price - k * atr, price + k * atr
-    hh = float(df["high"].tail(lookback).max())          # 近 lookback 日壓力（前高）
-    ll = float(df["low"].tail(lookback).min())           # 近 lookback 日支撐
-    sup = support if (support and support > 0) else ll    # BTC 用動態地板、其餘用近期低
-    rows = [
-        f"  風控框架      ATR(14) ${atr:,.0f} ({atr_pct:.1f}%/日)"
-        f"｜{k:g}×ATR 停損：多 ${stop_long:,.0f} / 空 ${stop_short:,.0f}",
-        f"  風報參考      支撐 ${sup:,.0f} ({(sup/price-1)*100:+.1f}%)"
-        f"｜壓力(近{lookback}日高) ${hh:,.0f} ({(hh/price-1)*100:+.1f}%)",
-    ]
-    # 風報比（若上方有前高空間）：報酬=距前高、風險=k×ATR；下行盤 reward≤0 則省略
-    reward, risk = hh - price, k * atr
-    if reward > 0 and risk > 0:
-        rows[1] += f"｜多方風報 1:{reward / risk:.1f}"
-    return rows
 
 
 def _bar_signed(net):
