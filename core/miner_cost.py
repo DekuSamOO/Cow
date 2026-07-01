@@ -10,7 +10,7 @@ core/miner_cost.py
   ① btc_per_day 依減半日切換（50→25→12.5→6.25→3.125 BTC/block × 144）
   ② eff_jth(date)：全網平均礦機效率（J/TH）隨時間下降，用 anchor 分段線性插值
      ⚠️ eff 是本模型最大不確定來源，anchor 為業界粗估，非精確值
-  ③ rate：電價預設 0.055 USD/kWh（與 scripts/daily_line_notify 一致）
+  ③ rate：電價預設 0.05 USD/kWh（對齊 Cambridge CBECI；單一來源 config.MINER_ELECTRICITY_RATE）
 
 歷史回測用途：對 2015 / 2018 / 2022 熊底，比較熊底價 vs 電費盈虧價 / all-in 成本。
 """

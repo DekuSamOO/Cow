@@ -61,13 +61,14 @@ dashboard（tab D2.5）**共用同一函式**，杜絕兩邊算法漂移。整�
 **礦工成本模型 `core/miner_cost.py`**（純數學）：
 `電費盈虧 = hashrate_ths × eff_jth(date)/1000 × 24 × rate / btc_per_day(date)`；
 btc_per_day 依減半切換（3600→1800→900→450）、eff_jth 分段 era 插值（**最大不確定來源**）、
-all-in = 電費 × 1.6。
+all-in = 電費 × 1.6。rate＝電價，**2026-06 對齊 Cambridge CBECI 改 0.05**（舊 0.055；
+config.MINER_ELECTRICITY_RATE 單一來源；eff_jth anchors 因缺實際 CBECI 硬體籃資料維持不動）。
 
 **回測關鍵發現（2015/2018/2022 三輪熊底，`tests/bottom_floors_backtest.py`）**：
-- **熊底/純電費 = 1.98→1.10→1.06x**（收斂、**從未跌破** → 電費=硬地板）
-- **熊底/all-in = 1.24/0.69/0.67x**（2018/2022 牛末跌破 all-in 至 ~0.67×）
+- **熊底/純電費 = 2.18→1.21→1.17x**（rate=0.05；收斂、**從未跌破** → 電費=硬地板；舊 0.055 為 1.98→1.10→1.06x）
+- **熊底/all-in = 1.36/0.76/0.73x**（2018/2022 牛末仍跌破 all-in 至 ~0.73×；舊 0.055 為 ~0.67×）
 - 2022 熊底 $15,476 落在 Balanced($11.4k)~Realized($20.5k) 之間
-- 現況（2026-06）電費 ~$53.5k／all-in ~$85.6k → 「1.06×電費」與「0.67×all-in」收斂於 ~$57k
+- 現況（2026-06，rate=0.05）礦工電費硬地板 ≈ $61.6k（隨算力動態；舊 0.055 約 $67.8k）
 
 ### 已知陷阱（本系統）
 - **bitcoin-data.com 429 burst 限流**：連續 ~6 次請求即冷卻數分鐘。`service/bottom_metrics.py`

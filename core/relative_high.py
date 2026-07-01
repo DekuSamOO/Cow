@@ -95,13 +95,22 @@ def _score_derivatives(funding_8h, oi_stats) -> dict:
         elif pct >= 70: o_s, o_lbl = 4, "🟡 偏高"
         else:           o_s, o_lbl = 0, "⚪ 中性"
 
+    # OI×Funding 同向交互（2026-06；⚠️ NOT VERIFIED：AUC 待網路回測 relative_high_backtest 驗證）：
+    # 「funding 過熱(≥30%年化 → f_s≥14)但 OI 分位低(<70：槓桿未同步堆積/去槓桿)」= 假頂高風險
+    # （對應筆記 2026-05 $82k→$60k 事後論）→ 折減 funding 貢獻 25%，**從不灌分**（只下修假頂）。
+    # OI「累積中/無資料」時不折減（不因缺資料而懲罰已校準的 funding 維）。
+    oi_pct = (oi_stats or {}).get("percentile")
+    synergy = 0.75 if (f_s >= 14 and oi_pct is not None and oi_pct < 70) else 1.0
+    f_s_eff = round(f_s * synergy)
+    syn_lbl = f"；⚠OI未confirm 假頂折減×{synergy:g}" if synergy < 1.0 else ""
+
     return {
         "value": f"資費 {f_val}｜OI {o_val}",
-        "score": f_s + o_s, "max": WEIGHTS["derivatives"],
-        "label": f"資費 {f_lbl}；OI {o_lbl}",
-        "note": "資金費率年化（筆記閾值 50/90%）+ OI 自建快照分位",
-        "sub": {"funding_ann": ann, "funding_score": f_s,
-                "oi_percentile": (oi_stats or {}).get("percentile"), "oi_score": o_s},
+        "score": f_s_eff + o_s, "max": WEIGHTS["derivatives"],
+        "label": f"資費 {f_lbl}；OI {o_lbl}{syn_lbl}",
+        "note": "資金費率年化 + OI 分位；OI×Funding 假頂折減（NOT VERIFIED，AUC 待回測）",
+        "sub": {"funding_ann": ann, "funding_score": f_s, "funding_score_eff": f_s_eff,
+                "oi_percentile": oi_pct, "oi_score": o_s, "synergy_discount": synergy},
     }
 
 

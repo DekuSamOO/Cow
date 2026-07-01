@@ -144,9 +144,14 @@ STATS = {
 # _apply_diminishing_returns 做週期遞減，熊底側卻無對稱的趨勢修正。此處補上：對
 # cycle_index 做線性迴歸外插，得當前輪的 bottom_mult 點估與上下band。
 # n=3 樣本脆弱，band 用固定相對寬度涵蓋模型不確定。
-_BOTTOM_TREND_BAND_REL = 0.15   # 點估 ±15% 為深/淺目標
-_BOTTOM_MULT_FLOOR     = 0.08   # 外插下限保護（避免極端外插）
-_BOTTOM_MULT_CAP       = 0.50   # 外插上限保護
+# 非對稱 band（2026-06）：deep(悲觀) 放寬至 -25%、shallow(樂觀) 維持 +15%。
+# 理由：2026-02 ETF 放大波動（BlackRock 現貨 ETF 單日成交 $100億、機構參與）部分反證
+# 「底部越來越淺」單調假設，自 2025-10 高點回撤已達 52.5%（史上第7大）→ 下尾需加防護，
+# 深方向放寬以涵蓋「跌幅回到前輪 84% 線」的尾部情境；點估與淺方向不動。
+_BOTTOM_TREND_BAND_DEEP    = 0.25   # 點估 -25% 為最深(悲觀)目標
+_BOTTOM_TREND_BAND_SHALLOW = 0.15   # 點估 +15% 為最淺(樂觀)目標
+_BOTTOM_MULT_FLOOR         = 0.08   # 外插下限保護（避免極端外插）
+_BOTTOM_MULT_CAP           = 0.50   # 外插上限保護
 
 
 def _fit_bottom_mult_trend():
@@ -173,8 +178,8 @@ def extrapolate_bottom_mult(cycle_idx: int):
     """
     raw = _BM_INTERCEPT + _BM_SLOPE * cycle_idx
     point = min(max(raw, _BOTTOM_MULT_FLOOR), _BOTTOM_MULT_CAP)
-    deep    = max(point * (1 - _BOTTOM_TREND_BAND_REL), _BOTTOM_MULT_FLOOR)
-    shallow = min(point * (1 + _BOTTOM_TREND_BAND_REL), _BOTTOM_MULT_CAP)
+    deep    = max(point * (1 - _BOTTOM_TREND_BAND_DEEP),    _BOTTOM_MULT_FLOOR)
+    shallow = min(point * (1 + _BOTTOM_TREND_BAND_SHALLOW), _BOTTOM_MULT_CAP)
     return point, deep, shallow
 
 

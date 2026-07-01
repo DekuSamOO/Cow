@@ -4,10 +4,37 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from core.relative_high import reference_top_signals, compute_escape_top_score
+from core.relative_high import (
+    reference_top_signals, compute_escape_top_score, _score_derivatives,
+)
 from core.relative_low import (
     reference_low_signals, _hash_ribbon_read, compute_relative_low_score,
 )
+
+
+# funding_8h 對應年化：annualize = rate × 3 × 365。要 f_s≥14（年化≥30%）需 rate≥30/1095≈0.0274
+_HOT_FUNDING_8H = 0.05   # 年化 ≈ 54.75% → f_s=20（極端過熱）
+
+
+def test_oi_funding_synergy_discount_only_in_false_top():
+    """OI×Funding 交互：高 funding + OI 分位低 → 折減；OI 高或無資料 → 不折減；從不灌分。"""
+    # OI 分位低（去槓桿/未confirm）→ funding 貢獻被折減
+    low_oi = _score_derivatives(_HOT_FUNDING_8H, {"percentile": 30})
+    # OI 分位高（confirm）→ 不折減
+    high_oi = _score_derivatives(_HOT_FUNDING_8H, {"percentile": 90})
+    # OI 無資料 → 不折減（不因缺資料懲罰）
+    no_oi = _score_derivatives(_HOT_FUNDING_8H, None)
+
+    assert low_oi["sub"]["synergy_discount"] == 0.75
+    assert high_oi["sub"]["synergy_discount"] == 1.0
+    assert no_oi["sub"]["synergy_discount"] == 1.0
+    # 折減後 funding 有效分 < 原始分；OI 低時整體 deriv 分被下修
+    assert low_oi["sub"]["funding_score_eff"] < low_oi["sub"]["funding_score"]
+    # 從不超過「純相加」上限
+    assert low_oi["score"] <= low_oi["sub"]["funding_score"] + low_oi["sub"]["oi_score"]
+    # 不過熱（f_s<14）時不折減
+    mild = _score_derivatives(0.01, {"percentile": 30})   # 年化≈10.95% → f_s=0
+    assert mild["sub"]["synergy_discount"] == 1.0
 
 
 def test_reference_top_mvrv():

@@ -151,8 +151,9 @@ PUELL_BOTTOM: float = 0.5
 MAYER_BOTTOM_RATIO: float = 0.6
 # AHR999 抄底區上界
 AHR999_DCA_CEIL: float = 0.45
-# 全網平均電價（USD/kWh）
-MINER_ELECTRICITY_RATE: float = 0.055
+# 全網平均電價（USD/kWh）— 2026-06 對齊 Cambridge CBECI production-cost 標準值 0.05
+# （舊值 0.055；改後 tests/bottom_floors_backtest.py section_a 三輪底/電費仍 >1，硬地板性質守）
+MINER_ELECTRICITY_RATE: float = 0.05
 # all-in / 純電費 加成（礦機折舊 + 場地 + 運維；業界估 1.5~2.0）
 MINER_ALLIN_FACTOR: float = 1.6
 # 全網平均礦機效率 anchor（ISO日期, J/TH）——業界粗估，分段線性插值；

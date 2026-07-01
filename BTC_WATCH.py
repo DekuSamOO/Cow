@@ -29,8 +29,9 @@ try:
     from core.indicators import calculate_technical_indicators, calculate_ahr999
     from core.bear_bottom import calculate_bear_bottom_indicators
     from core.relative_high import (compute_escape_top_score, escape_top_meta,
-                                    annualize_funding)
-    from core.relative_low import compute_relative_low_score, relative_low_meta
+                                    annualize_funding, reference_top_signals)
+    from core.relative_low import (compute_relative_low_score, relative_low_meta,
+                                   reference_low_signals)
     from core.trend_direction import compute_trend_score, trend_meta
     from core.bottom_floors import compute_all_bottom_estimates
     from core.action_ensemble import compute_composite_action
@@ -98,6 +99,16 @@ def _panel(result, meta_fn, cap, name, dims):
     rows = [f"  {sig[d]['score']:>2}/{sig[d]['max']:<2}  {sig[d]['label']}" for d in dims]
     rows.append(f"  → {action}")
     return title, rows
+
+
+def _ref_rows(ref: dict) -> list:
+    """社群參考訊號（MVRV-Z / Hash Ribbons）→ 顯示列。**未計入加權總分**，啟用需先過回測。"""
+    if not ref:
+        return []
+    out = ["  〔參考·未計入分數，待回測啟用〕"]
+    for v in ref.values():
+        out.append(f"     {v['label']}（{v['value']}）")
+    return out
 
 
 def _bar_signed(net):
@@ -365,7 +376,8 @@ class BitcoinMonitor:
         通膨/就業 dovish/hawkish flags 需 FRED → 略，故 cap=93 而非 100）。
         dashboard `_gather_radar_externals` 的精簡鏡像（同 service 單一來源）。
         """
-        ext = {"etf": None, "sopr": None, "btcd": None, "macro": None}
+        ext = {"etf": None, "sopr": None, "btcd": None, "macro": None,
+               "mvrv_z": None, "hashrate_hist": None}   # 後二者＝參考訊號（未計入加權）
         if not self.is_btc:
             # 非 BTC 幣對：ETF(Farside BTC)/SOPR(bitcoin-data BTC)/BTC.D 皆 BTC 專屬 → 僅取本地總經事件
             try:
@@ -382,9 +394,16 @@ class BitcoinMonitor:
             print(f"ETF 摘要取得失敗：{e}")
         try:
             from service.bottom_metrics import get_latest_bottom_metrics
-            ext["sopr"] = get_latest_bottom_metrics().get("sopr")   # bitcoin-data，12h json 持久化快取
+            _bm = get_latest_bottom_metrics()                      # bitcoin-data，12h json 持久化快取
+            ext["sopr"] = _bm.get("sopr")
+            ext["mvrv_z"] = _bm.get("mvrv_zscore")                 # 參考訊號（未計入加權，待回測）
         except Exception as e:
-            print(f"SOPR 取得失敗：{e}")
+            print(f"SOPR/MVRV-Z 取得失敗：{e}")
+        try:
+            from service.bottom_metrics import fetch_hashrate_history_ths
+            ext["hashrate_hist"] = fetch_hashrate_history_ths()    # 12h 快取；Hash Ribbons 參考訊號
+        except Exception as e:
+            print(f"算力歷史取得失敗：{e}")
         try:
             from service.market_snapshot import get_btcd_trend
             ext["btcd"] = get_btcd_trend()                   # 本地 OI 快照累積的 BTC.D 趨勢（change_pp）
@@ -414,7 +433,8 @@ class BitcoinMonitor:
         return self.FALLBACK_SUPPORT, "fallback 靜態防線", None
 
     # ── 畫面 ────────────────────────────────────────────────────────────────────
-    def render(self, md, funding, oi_stats, top, low, trend=None, mom=None):
+    def render(self, md, funding, oi_stats, top, low, trend=None, mom=None,
+               ref_top=None, ref_low=None):
         os.system("cls" if os.name == "nt" else "clear")
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         nxt = (datetime.datetime.now() + datetime.timedelta(seconds=60)).strftime("%H:%M:%S")
@@ -470,6 +490,11 @@ class BitcoinMonitor:
                                      ("derivatives", "technical", "onchain", "sentiment", "macro"))
         low_title, low_rows = _panel(low, relative_low_meta, self.LOW_CAP, "抄底訊號（進場）",
                                      ("cycle", "derivatives", "technical", "sentiment", "onchain", "macro"))
+        # 社群參考訊號（未計入加權）插在各面板「→ 操作建議」之前
+        if top_rows and ref_top:
+            top_rows[-1:-1] = _ref_rows(ref_top)
+        if low_rows and ref_low:
+            low_rows[-1:-1] = _ref_rows(ref_low)
         trend_title, trend_rows = _panel_trend(trend, "趨勢方向（順勢）",
                                                ("ma_structure", "macd", "slope", "adx"))
 
@@ -558,6 +583,7 @@ class BitcoinMonitor:
             oi_stats = self.get_oi_stats()
 
             top = low = trend = mom = None
+            ref_top = ref_low = None
             if _COW_OK:
                 self._refresh_daily()
                 df = self._daily_cache
@@ -575,7 +601,12 @@ class BitcoinMonitor:
                         btc_d_trend=ext.get("btcd"), macro=ext.get("macro"))
                     trend = compute_trend_score(row, df)
                     mom = _short_momentum(df)
-                self.render(md, funding, oi_stats, top, low, trend, mom)
+                    # 社群參考訊號（MVRV-Z / Hash Ribbons）— 未計入加權，僅顯示
+                    ref_top = reference_top_signals(mvrv_z=ext.get("mvrv_z"))
+                    ref_low = reference_low_signals(mvrv_z=ext.get("mvrv_z"),
+                                                    hashrate_hist=ext.get("hashrate_hist"))
+                self.render(md, funding, oi_stats, top, low, trend, mom,
+                            ref_top=ref_top, ref_low=ref_low)
             else:
                 self.render_simple(md, funding, oi_stats)
 

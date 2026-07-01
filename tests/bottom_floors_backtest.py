@@ -37,7 +37,7 @@ def section_a():
         dt = datetime.fromisoformat(d); h = near(d)
         e = electricity_breakeven(h, dt); a = all_in_cost(h, dt)
         print(f"  {d:<12}{low:>9,.0f}{h/1e6:>8.1f}{eff_jth(dt):>5.0f}{e:>9,.0f}{a:>9,.0f}{low/e:>7.2f}x{low/a:>8.2f}x")
-    print("  → 熊底/電費 收斂且 >1（電費=硬地板）；2018/2022 底/allin≈0.67（牛末跌破 allin）\n")
+    print("  → 熊底/電費 收斂且 >1（電費=硬地板）；2018/2022 底/allin<1（牛末跌破 allin，電價0.05 下 ≈0.73-0.76）\n")
 
 
 def section_b():
