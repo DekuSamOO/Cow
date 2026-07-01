@@ -136,6 +136,12 @@ config.MINER_ELECTRICITY_RATE 單一來源；eff_jth anchors 因缺實際 CBECI 
 SOPR（`get_latest_bottom_metrics`，bitcoin-data 12h 快取）、BTC.D 趨勢（`get_btcd_trend`，
 本地 OI 快照）、總經事件（`get_next_macro_event`，本地 `macro_events.json`，**不打被擋的 FRED**）。
 可得天花板升至 **逃頂/抄底各 93**（唯缺 macro 通膨/就業 dovish/hawkish flags 需 FRED → 缺 7 分）。
+
+**⚠️ 陷阱：Farside ETF 佔位 0.0（2026-07 修）**：Farside 對「最新未定案日」回 `0.0`，若當真實值
+存入 `db/etf_flow.json`，會被 streak 邏輯當成非流出 → `consecutive_outflow_days` 歸 0、latest 誤標
+中性；實測曾把「連續 8 天機構流出」顯示成「🟢 淨流入」（完全反向、遮蔽逃頂派發訊號）。修法：
+`service/etf_flow._parse_html_to_daily` 不寫入 `val==0.0`、純函數 `_summarize` 過濾所有 0.0（見
+`tests/test_etf_flow.py`）。**交易日淨流量恰為 0.0 極罕見，一律視為當日無資料。**
 > 註：dovish/hawkish flags 已於 2026-07 用 FRED 回測（見上節）——逃頂 hawkish 有效(AUC 0.61/0.66)、
 > 抄底 dovish 弱（落後確認）。watcher 純幣安環境不打 FRED，故仍缺此 7 分；雲端 dashboard 可得 FRED。
 
