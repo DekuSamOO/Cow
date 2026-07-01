@@ -93,7 +93,10 @@ def _parse_html_to_daily(html: str) -> dict:
             except ValueError:
                 continue
             val = _parse_flow_value(row["Total"])
-            if val is not None:
+            # 跳過佔位 0.0：Farside 對「最新未定案日」常回 0（實測 06-30 夾在一串流出中為 0.0）。
+            # 交易日淨流量恰為 0.0 極罕見，且 0 流量本就無方向訊號 → 不寫入快取、不打斷 streak，
+            # 待該日真實值出來再由後續 fetch merge 覆蓋補上。
+            if val is not None and val != 0.0:
                 out[d] = val
         if out:
             break
@@ -130,28 +133,25 @@ def fetch_etf_flow(force: bool = False) -> dict:
     return cache.get("data", {})
 
 
-def get_etf_flow_summary(force: bool = False) -> dict:
+def _summarize(data: dict) -> dict:
+    """從 {date: total_flow} 算摘要（純函數，可測）。
+
+    佔位 0.0 一律視為當日無資料（過濾）：Farside 對最新未定案日常回 0，若計入會
+    (a) 把 latest 誤標中性、(b) 打斷連續流出/流入 streak（假 0 夾在流出串中會使
+    consecutive_outflow_days 歸 0，遮蔽真實派發訊號）。交易日淨流量恰為 0.0 極罕見，
+    且 0 流量本無方向訊號，過濾後 streak 正確跨越該日。
     """
-    回傳 ETF 流量摘要：
-      {latest, latest_date, consecutive_outflow_days, consecutive_inflow_days,
-       cum_5d, n, asof}
-    - consecutive_outflow_days：自最新日往回，連續淨流出（<0）天數（逃頂派發訊號）
-    - consecutive_inflow_days：自最新日往回，連續淨流入（>0）天數（抄底吸籌訊號）
-    - cum_5d：近 5 個交易日累計淨流量（百萬美元）
-    - n：可用資料筆數；無資料時各值為 None
-    """
-    data = fetch_etf_flow(force=force)
     out = {"latest": None, "latest_date": None, "consecutive_outflow_days": 0,
-           "consecutive_inflow_days": 0, "cum_5d": None, "n": len(data), "asof": None,
+           "consecutive_inflow_days": 0, "cum_5d": None, "n": 0, "asof": None,
            "stale_days": None}
-    if not data:
+    items = sorted((d, v) for d, v in data.items() if v != 0.0)   # 過濾佔位 0.0
+    out["n"] = len(items)
+    if not items:
         return out
-    items = sorted(data.items())          # 依日期升冪
     dates = [d for d, _ in items]
     vals  = [v for _, v in items]
     out["latest"] = vals[-1]
-    out["latest_date"] = dates[-1]
-    out["asof"] = dates[-1]
+    out["latest_date"] = out["asof"] = dates[-1]
     # 最新一筆距今天數（ETF 僅交易日更新：週末 1-3 天屬正常，>4 天代表來源久未更新）
     try:
         out["stale_days"] = (datetime.now(timezone.utc).date()
@@ -173,3 +173,17 @@ def get_etf_flow_summary(force: bool = False) -> dict:
     out["consecutive_outflow_days"] = out_cnt
     out["consecutive_inflow_days"] = in_cnt
     return out
+
+
+def get_etf_flow_summary(force: bool = False) -> dict:
+    """
+    回傳 ETF 流量摘要：
+      {latest, latest_date, consecutive_outflow_days, consecutive_inflow_days,
+       cum_5d, n, asof, stale_days}
+    - consecutive_outflow_days：自最新日往回，連續淨流出（<0）天數（逃頂派發訊號）
+    - consecutive_inflow_days：自最新日往回，連續淨流入（>0）天數（抄底吸籌訊號）
+    - cum_5d：近 5 個（非零）交易日累計淨流量（百萬美元）
+    - n：可用資料筆數（已排除佔位 0.0）；無資料時各值為 None
+    佔位 0.0 的處理見 `_summarize`。
+    """
+    return _summarize(fetch_etf_flow(force=force))
