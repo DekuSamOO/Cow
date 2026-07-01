@@ -36,7 +36,8 @@ from service.ohlc_universal import (classify_symbol, fetch_ohlc,            # no
                                     fetch_live_quote, live_quote_freshness, KIND_LABEL)
 # 重用 BTC_WATCH 既有的畫框 / 面板 / 等待 helper（單一真實來源，不重造）
 from BTC_WATCH import (BitcoinMonitor, _title, _row, _edge, _dw, _panel,  # noqa: E402
-                       _short_momentum, _panel_trend, _panel_stance, interruptible_wait)
+                       _short_momentum, _panel_trend, _panel_stance, interruptible_wait,
+                       _atr_risk_rows)
 
 
 def _fmt_price(v: float) -> str:
@@ -111,6 +112,8 @@ class UniversalMonitor:
             f"  52週高/低     {_fmt_price(hi)} / {_fmt_price(lo)}   （位置 {pos:.0f}%）",
             f"  短線動能      {mom}",
         ]
+        # 風控框架（ATR 停損 + 近 60 日支撐壓力風報比）— 支撐用近期低（股票無動態地板）
+        quote += _atr_risk_rows(df, close, support=None)
         trend_title, trend_rows = _panel_trend(trend, "趨勢方向（順勢）",
                                                ("ma_structure", "macd", "slope", "adx"))
 

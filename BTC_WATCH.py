@@ -111,6 +111,37 @@ def _ref_rows(ref: dict) -> list:
     return out
 
 
+def _atr_risk_rows(df, price, support=None, lookback=60, k=2.0):
+    """ATR 風控框架（純函數，可測）。
+
+    出自「技術指標的真實用途」筆記最被低估的實戰點：**停損位置用 ATR（1.5–3×）而非拍腦袋、
+    用支撐壓力判風險報酬比**。ATR 不預測方向，只界定「正常波動」尺度 → 停損別設在會被正常
+    波動掃掉的位置。回傳 0–2 列字串；資料不足回 []。
+    """
+    if df is None or getattr(df, "empty", True) or "ATR" not in getattr(df, "columns", []) \
+       or len(df) < 20 or not price or price <= 0:
+        return []
+    atr = float(df["ATR"].iloc[-1])
+    if math.isnan(atr) or atr <= 0:
+        return []
+    atr_pct = atr / price * 100
+    stop_long, stop_short = price - k * atr, price + k * atr
+    hh = float(df["high"].tail(lookback).max())          # 近 lookback 日壓力（前高）
+    ll = float(df["low"].tail(lookback).min())           # 近 lookback 日支撐
+    sup = support if (support and support > 0) else ll    # BTC 用動態地板、其餘用近期低
+    rows = [
+        f"  風控框架      ATR(14) ${atr:,.0f} ({atr_pct:.1f}%/日)"
+        f"｜{k:g}×ATR 停損：多 ${stop_long:,.0f} / 空 ${stop_short:,.0f}",
+        f"  風報參考      支撐 ${sup:,.0f} ({(sup/price-1)*100:+.1f}%)"
+        f"｜壓力(近{lookback}日高) ${hh:,.0f} ({(hh/price-1)*100:+.1f}%)",
+    ]
+    # 風報比（若上方有前高空間）：報酬=距前高、風險=k×ATR；下行盤 reward≤0 則省略
+    reward, risk = hh - price, k * atr
+    if reward > 0 and risk > 0:
+        rows[1] += f"｜多方風報 1:{reward / risk:.1f}"
+    return rows
+
+
 def _bar_signed(net):
     """有號淨方向分（-100~+100）置中條：│ 左為空頭、右為多頭，各 5 格。"""
     mag = int(round(min(abs(net), 100) / 100 * 5))
@@ -483,6 +514,8 @@ class BitcoinMonitor:
         # C：短線動能（補趨勢中長期軸缺的「這週」尺度，與順勢軸正交）
         if mom:
             quote.append(f"  短線動能      {mom}")
+        # 風控框架（ATR 停損 + 支撐壓力風報比）— 用動態地板當支撐，前高當壓力
+        quote += _atr_risk_rows(self._daily_cache, md["close"], support=sup)
         # A：即時項每 60s 更新；日線/地板/外部維度每小時刷新一次
         quote.append(f"  數據時效      即時 60s｜日線·地板·外部 {data_age}")
 
