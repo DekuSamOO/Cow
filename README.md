@@ -377,8 +377,8 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 
 ## 版本紀錄
 
-### v3.23 (2026-06-30)
-社群量化方法對標的程式優化（研究 → 實作）。雷達側新增的鏈上參考指標**刻意不計入已校準加權總分**，啟用前須先過 backtest AUC 驗證。
+### v3.24 (2026-07-01)
+社群量化方法對標的程式優化（研究 → 實作，含使用者核准的受保護參數校準）。雷達側新增的鏈上參考指標**刻意不計入已校準加權總分**，啟用前須先過 backtest AUC 驗證。
 - **fix(walkforward)**: `strategy/walkforward_backtest.py` Sharpe/MDD 改用含空手期的全期市值曲線 `_build_daily_equity`（對齊 swing.py：空手記現金、持倉記 position×close），取代舊「只用持倉期報酬」算法（系統性偏樂觀：低估波動、Sharpe 偏高、MDD 偏小）；舊 `all_rets` 累積移除。`annual_days` 維持 365（刻意值，有契約測試）。
 - **fix(walkforward)**: 進階模式 ATR 停損/目標改**盤中 high/low 觸發**並以停損/目標價結算（跳空用開盤、同日雙觸保守採停損），取代原以收盤價判定觸發；其餘多層出場（Climax/Chandelier/Time/EMA）維持收盤結算。
 - **feat(core)**: `core/bottom_floors.py` 新增 Puell Multiple 底錨 `_puell_bottom`（日礦工發行美元值 = `miner_cost.btc_per_day(date)×close`、解 puell=`PUELL_BOTTOM` 對應價，**零新資料源**，與電費硬地板互證）；`config.py` 加 `PUELL_BOTTOM=0.5` 與 reliability 64。Mayer 底 label 正名「2年線底」（SMA730×0.6）。
@@ -387,7 +387,14 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 - **feat(core)**: `core/indicators.calculate_technical_indicators` 新增 `backtest_mode` 參數，回測時週線 RSI `shift(1)` 防 look-ahead（即時 dashboard 預設 False、行為不變）。
 - **refactor(simplify)**: `core/backtest_robustness.deflated_sharpe_ratio` 移除 `probabilistic_sharpe_ratio` 三次重複呼叫（改用已算 skew/kurt/sr_pp 組共用分母內聯算 psr/dsr）；`reference_top_signals` 改用既有 `_nan()` helper；`_build_daily_equity` 持倉期逐日迴圈改向量化切片賦值。
 - **test**: 新增 `tests/core/test_backtest_robustness.py`（7 passed）、`tests/core/test_radar_reference.py`；`tests/core/test_bottom_floors.py` 敏感度測試 skew 目標改最低錨 cvdd（新增 puell 錨使 base ensemble 巧合等於舊目標 realized）。全套 **177 passed / 2 failed**（2 failed 為 `tests/test_market_data.py` yfinance 環境性 Yahoo 阻擋，非本次改動）。
+- **feat(radar,受保護)**: `core/relative_high._score_derivatives` 新增 OI×Funding 假頂折減——funding 過熱(年化≥30%→f_s≥14)但 OI 分位低(<70：去槓桿/未confirm) 時折減 funding 貢獻×0.75（**從不灌分、OI 無資料不折減**）。⚠️ **NOT VERIFIED**：交互優於相加的 AUC 待家用/雲端回測 `relative_high_backtest`（公司網路擋 Yahoo/Binance）。
+- **feat(miner,受保護)**: `config.MINER_ELECTRICITY_RATE` 0.055→0.05（對齊 Cambridge CBECI）；`bottom_floors_backtest` section_a 三輪底/電費仍 >1（2.18/1.21/1.17x，硬地板更穩）。eff_jth anchors 缺實際硬體籃資料**不動**、all-in 1.6 保留；礦工電費硬地板 ~$67.8k→~$61.6k、底/all-in 0.67×→~0.73×。
+- **feat(forecast,受保護)**: `core/season_forecast` bottom_mult band 改非對稱（`_BOTTOM_TREND_BAND_DEEP=0.25`／`_SHALLOW=0.15`）——2026-02 ETF 放大波動部分反證「底部漸淺」單調假設，深方向加下尾防護；點估與淺方向不變（idx3 deep 0.225→0.199）。
+- **feat(watch)**: `BTC_WATCH.BitcoinMonitor` 顯示 MVRV-Z / Hash Ribbons 參考訊號（`_gather_externals` 抓 mvrv_z＋hashrate_hist、`_ref_rows` 渲染，**未計入加權**），`python watcher.py` 選 BTCUSDT 可見。
+- **test**: `tests/core/test_radar_reference.py` 加 OI×Funding synergy 測試；全套 **178 passed / 2 failed**（yfinance 網路）。
 
+### v3.23 (2026-07-01)
+- **test(radar)**: 完成 macro dovish/hawkish flags 的 FRED 回測（原 `PENDING_FIT_SUBDIMS_LOW`，公司網路 FRED 被擋無法做、待家用網路）。新增 `tests/relative_low_macro_backtest.py`：用 FRED CPIAUCSL/PCEPI/PAYEMS/UNRATE 建 **point-in-time**（每月觀測掛 observation_date+發布延遲為 available_date、評估日只取已公布者 → 無前視）dovish/hawkish flag 序列，對 swing 轉折±18% 樣本測單維 AUC。**結論非對稱**：逃頂 hawkish（通膨升溫+就業強勁）全期 AUC **0.607**／費率era **0.660**（頂部觸發率 67%＞非頂 47%）→ 頂部與升息環境同步、方向明確有效；抄底 dovish（通膨降溫+就業轉弱）全期 AUC **0.448**（方向反，底部觸發率 53%＜非底 74%）／費率era 0.562（弱），增量在實際 macro 權重(λ≈0.07)下 Δ≈+0.02 可忽略 → **底部領先 macro 改善、dovish 是落後確認非領先訊號**，不給實證權重、維持低權規則式。`core/relative_low.py` `PENDING_FIT_SUBDIMS_LOW={}` → 新增 `WEAK_SUBDIMS_LOW`（記錄回測弱維結論）；`core/relative_high.py` 註記 hawkish 已驗；note 字串、`tests/relative_low_backtest.py::macro_note`、`CLAUDE.md` 同步。再添一筆頂底非對稱證據（頂靠升息環境、底靠估值/槓桿清洗）。
 ### v3.22 (2026-06-26)
 - **fix(tw)**: `service/tw_chip.get_tdcc` TDCC 多週 walk-back。原只試 `latest_tdcc_friday()` 單一週五，遇 TDCC 尚未公布（頁面「查無」）即回 None。抽出 `_fetch_tdcc_week(symbol, date_str)`（單週抓取＋快取），`get_tdcc` 新增 `max_back_weeks=4` 自最近週五往前逐週試到抓到已公布資料為止（鏡像 tw_stock_climber preflight）；傳明確 `date_str` 時只查該週。全 repo 僅 `get_chip_bundle` 一處呼叫 `get_tdcc(symbol)`，靠預設 walk-back，簽名相容。
 - **fix(tw)**: `service/tw_chip.get_chip_bundle` 探測改「三檔齊備」。原 as_of 探測只要 BWIBBU(估值)檔非空即採用，但估值/融資/法人三日檔公布時間不同步（實測 20260626 BWIBBU/T86 已出但 MI_MARGN 未出 → as_of 鎖在當日 → 融資整片 None）。改為 BWIBBU＋MI_MARGN＋T86 三檔皆非空才採用該 as_of，否則往前一天；探測即預熱 `_fetch_market_file` 快取、採用日不重抓。實證 6782/8 與 2330 as_of 退至 20260625、籌碼四維（融資/法人/估值/大戶）皆齊。

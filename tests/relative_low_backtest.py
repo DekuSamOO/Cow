@@ -379,8 +379,11 @@ def validate_unfitted_dims(btc, fit_bottoms, neg_idx, fund_daily, fng_map):
 
 
 def macro_note():
-    print("\n[macro] 回測樣本 macro=None（無歷史 CPI/就業/事件 flag 源）→ macro 子分恆 0，"
-          "對歷史 AUC 無任何影響；其判別力來自 live event-window 規則，非可回測量。")
+    print("\n[macro] 本檔回測樣本 macro=None（不打 FRED）→ macro 子分恆 0、對本檔 AUC 無影響。"
+          "\n        dovish/hawkish flags 的 FRED point-in-time 回測已獨立完成於"
+          "\n        tests/relative_low_macro_backtest.py（2026-07，家用網路 FRED 可達）："
+          "\n          抄底 dovish：全期 AUC 0.448（方向反）/ 費率era 0.562（弱）→ 落後確認、維持低權規則式；"
+          "\n          逃頂 hawkish：全期 AUC 0.607 / 費率era 0.660 → 頂部與升息環境同步，方向明確有效。")
 
 
 if __name__ == "__main__":

@@ -16,8 +16,9 @@ core/relative_low.py  ·  v1.0
     onchain 權重單調有益、門檻命中穩定（tests/relative_low_backtest.py::validate_unfitted_dims）
     → 已移出 UNFITTED；ETF 子項僅 2024+ 資料薄，沿用專家權重。
   - macro 拆兩子維：event-window（事件臨近）為規則式、永久不可統計擬合 → RULE_BASED_DIMS_LOW；
-    dovish flags（通膨/就業）可擬合但無歷史源（FRED 被擋）→ 待回補（PENDING_FIT_SUBDIMS_LOW）。
-    UNFITTED_DIMS_LOW 因此清空（onchain 已驗、macro 改規則式分類）。
+    dovish flags（通膨/就業）2026-07 已用 FRED point-in-time 回測（tests/relative_low_macro_backtest.py）：
+    對相對底部 全期 AUC 0.448（方向反）/ 費率era 0.562（弱）→ 落後確認非領先訊號 → WEAK_SUBDIMS_LOW，
+    維持低權規則式（PENDING 清空）。UNFITTED_DIMS_LOW 仍為空。
   - derivatives 負費率子項 2026-06 已回歸重校門檻（AUC 0.626，判別帶在淺負；見 funding_threshold_calib）。
 """
 import math
@@ -55,11 +56,17 @@ WEIGHTS_LOW = {
 #   RULE_BASED_DIMS_LOW ＝子項本質為規則式、不可統計擬合（macro 的 event-window 事件臨近）。
 # onchain：2026-06 敏感度驗證通過，已不在任一清單（見 backtest validate_unfitted_dims）。
 # macro：拆兩子維 — event-window(事件臨近)＝規則式(永久不可擬合)；dovish flags(通膨/就業)＝
-#        可擬合但目前無歷史源（FRED 公司網路被擋），待雲端/家用網路回補 FRED 後以 backtest 驗證。
+#        2026-07 已在家用網路（FRED 可達）回測（tests/relative_low_macro_backtest.py）：
+#        point-in-time（含發布延遲，無前視）dovish_score 對相對底部 全期 AUC=0.448（方向反，
+#        底部觸發率反低於非底）、資金費率時代 AUC=0.562（弱）；增量在實際 macro 權重(λ≈0.07)
+#        下 Δ≈+0.02 可忽略。結論：dovish 為「落後確認」非「領先底部訊號」（底部領先 macro 改善）
+#        → 不給實證權重，維持低權/規則式灰燈。已測畢，PENDING 清空。
+#        （逃頂側 hawkish flags 對相對頂部 AUC=0.607/0.660 明確有效 — 頂部與升息環境同步。）
 UNFITTED_DIMS_LOW = ()
 RULE_BASED_DIMS_LOW = ("macro",)
-# 待 FRED 歷史回補後可擬合的子項（文件用；非介面 tag 清單）
-PENDING_FIT_SUBDIMS_LOW = {"macro": "dovish flags（通膨/就業）待 FRED 歷史回補後回測"}
+# dovish flags 回測已完成（2026-07，弱維/落後確認）→ 不再列「待回補」；保留鍵供文件追溯。
+PENDING_FIT_SUBDIMS_LOW = {}
+WEAK_SUBDIMS_LOW = {"macro": "dovish flags（通膨/就業）FRED 回測=弱/落後確認（全期 AUC 0.45、費率era 0.56），維持低權規則式"}
 
 
 def _nan(v) -> bool:
@@ -253,7 +260,7 @@ def _score_macro_low(macro) -> dict:
     if not macro:
         return {"value": "—", "score": 0, "max": WEIGHTS_LOW["macro"],
                 "label": "⚪ 無資料源",
-                "note": "事件臨近=規則式(不可擬合)；通膨/就業 dovish=待 FRED 回補驗證",
+                "note": "事件臨近=規則式(不可擬合)；通膨/就業 dovish=FRED 回測弱/落後確認(低權)",
                 "sub": {}}
     h_s = 0
     bits = []
