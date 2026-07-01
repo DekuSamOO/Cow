@@ -206,6 +206,84 @@ def _panel_stance(prefix, level, action):
     return f"{prefix}  {level}", [f"  → {action}"]
 
 
+def _cut_display(s, width):
+    """回傳 (前段 display 寬度<=width, 剩餘字串)。維持 emoji + FE0F 修飾符不被拆開。"""
+    out, w, i, n = "", 0, 0, len(s)
+    while i < n:
+        seg = s[i:i + 2] if (i + 1 < n and s[i + 1] == "️") else s[i]
+        cw = _dw(seg)
+        if w + cw > width and out:
+            break
+        out += seg
+        w += cw
+        i += len(seg)
+    return out, s[i:]
+
+
+def _wrap_display(s, width, cont_indent=5):
+    """依顯示寬度把 s 折到 width 內（兩欄版每欄較窄，長列需換行）。
+    優先在 空白/；/｜/、 後斷行；單一片段仍超寬則逐字硬切。續行以 cont_indent 空白懸掛縮排。"""
+    if _dw(s) <= width:
+        return [s]
+    # 1) 切成「可斷行片段」（分隔符留在片段尾；含中文標點斷點，長句才不會硬切在字中間）
+    chunks, cur = [], ""
+    for ch in s:
+        cur += ch
+        if ch in "；｜、，：）」》 　":
+            chunks.append(cur)
+            cur = ""
+    if cur:
+        chunks.append(cur)
+    # 2) 過長片段逐字硬切成 <=width
+    pieces = []
+    for c in chunks:
+        while _dw(c) > width:
+            head, c = _cut_display(c, width)
+            pieces.append(head)
+        if c:
+            pieces.append(c)
+    # 3) 貪婪打包，續行懸掛縮排
+    lines, line = [], ""
+    for p in pieces:
+        if not line:
+            line = p
+        elif _dw(line + p) <= width:
+            line += p
+        else:
+            lines.append(line)
+            ip = " " * cont_indent + p
+            line = ip if _dw(ip) <= width else p
+    if line:
+        lines.append(line)
+    return lines
+
+
+def _panel_block(title, rows, inner_w):
+    """單一面板 → 固定內寬 inner_w 的完整框線 block（┌title┐ / │rows│ / └┘）。超寬列自動換行。"""
+    block = [_title(title, inner_w)]
+    for r in rows:
+        for seg in _wrap_display(r, inner_w):
+            block.append(_row(seg, inner_w))
+    block.append(_edge("└", "─", "┘", inner_w))
+    return block
+
+
+def _pad_block(block, h, inner_w):
+    """把 block 用空內容列（│   │）墊到高度 h，空列插在底框 └──┘ 之前 → 兩欄底框對齊。"""
+    if len(block) >= h:
+        return block
+    return block[:-1] + [_row("", inner_w)] * (h - len(block)) + [block[-1]]
+
+
+def _print_pair(pa, pb, wl, wr):
+    """兩面板 (title, rows) 左右並排列印；較短一側墊空列到同高，使 └──┘ 底框對齊。"""
+    a = _panel_block(pa[0], pa[1], wl)
+    b = _panel_block(pb[0], pb[1], wr)
+    h = max(len(a), len(b))
+    for la, lb in zip(_pad_block(a, h, wl), _pad_block(b, h, wr)):
+        print(la + lb)
+
+
 def interruptible_wait(seconds, nav=False):
     """
     等待 seconds 秒。nav=True（由 watcher 進入）時偵測鍵盤指令並提早返回：
@@ -522,33 +600,46 @@ class BitcoinMonitor:
         # A：即時項每 60s 更新；日線/地板/外部維度每小時刷新一次
         quote.append(f"  數據時效      即時 60s｜日線·地板·外部 {data_age}")
 
-        top_title, top_rows = _panel(top, escape_top_meta, self.TOP_CAP, "逃頂訊號（出貨）",
-                                     ("derivatives", "technical", "onchain", "sentiment", "macro"))
-        low_title, low_rows = _panel(low, relative_low_meta, self.LOW_CAP, "抄底訊號（進場）",
-                                     ("cycle", "derivatives", "technical", "sentiment", "onchain", "macro"))
+        _, top_rows = _panel(top, escape_top_meta, self.TOP_CAP, "逃頂訊號（出貨）",
+                             ("derivatives", "technical", "onchain", "sentiment", "macro"))
+        _, low_rows = _panel(low, relative_low_meta, self.LOW_CAP, "抄底訊號（進場）",
+                             ("cycle", "derivatives", "technical", "sentiment", "onchain", "macro"))
         # 社群參考訊號（未計入加權）插在各面板「→ 操作建議」之前
         if top_rows and ref_top:
             top_rows[-1:-1] = _ref_rows(ref_top)
         if low_rows and ref_low:
             low_rows[-1:-1] = _ref_rows(ref_low)
-        trend_title, trend_rows = _panel_trend(trend, "趨勢方向（順勢）",
-                                               ("ma_structure", "macd", "slope", "adx"))
+        _, trend_rows = _panel_trend(trend, "趨勢方向（順勢）",
+                                     ("ma_structure", "macd", "slope", "adx"))
 
         # 三軸融合操作訊號（頭條）：逃頂(貴)＋抄底(便宜)＋趨勢(方向) → 一個 stance。
         # 單看任一軸會漏判（2026-05 $82k→$59k：逃頂全程低、真正示警的是趨勢軸）。需三軸皆有才算。
-        comp_title, comp_rows = "", []
+        ct_comp, comp_rows = "", []
         if top is not None and low is not None and trend is not None:
             act = compute_composite_action(
                 trend[0], top[0], low[0], low[1]["cycle"]["score"])
             if act:
-                comp_title, comp_rows = _panel_stance(
-                    "操作訊號（三軸融合）", f"{act['emoji']} {act['action']}", act["detail"])
+                _, comp_rows = _panel_stance(
+                    "操作", f"{act['emoji']} {act['action']}", act["detail"])
                 comp_rows.append(f"     {act['pos_label']}")
+                ct_comp = f"操作  {act['emoji']} {act['action']}"
 
-        # 動態框寬 = 最長內容/標題行 + 邊距（右框一律對齊，cycle 長行不溢出）
-        content_w = max((_dw(c) for c in (header + quote + top_rows + low_rows + trend_rows + comp_rows)), default=40)
-        title_w = max(_dw(t) for t in (top_title, low_title, trend_title, comp_title, "即時行情")) + 4
-        W = max(content_w, title_w) + 2
+        # 兩欄並排：操作｜趨勢、逃頂｜抄底（省垂直高度、一頁看完）。緊湊標題（略「訊號/可得」字樣）。
+        ct_trend = (f"趨勢  {trend[0]:+d}/±100  {_bar_signed(trend[0])}  {trend_meta(trend[0])[0]}"
+                    if trend is not None else "")
+        ct_top = (f"逃頂  {top[0]}/100  ≤{self.TOP_CAP}  {_bar(top[0], self.TOP_CAP)}  {escape_top_meta(top[0])[0]}"
+                  if top is not None else "")
+        ct_low = (f"抄底  {low[0]}/100  ≤{self.LOW_CAP}  {_bar(low[0], self.LOW_CAP)}  {relative_low_meta(low[0])[0]}"
+                  if low is not None else "")
+        panels = [(t, r) for t, r in ((ct_comp, comp_rows), (ct_trend, trend_rows),
+                                      (ct_top, top_rows), (ct_low, low_rows)) if r]
+
+        # 全寬區（表頭 / 即時行情）自然寬度；兩欄區各欄需容得下緊湊標題，故 W 至少 2 欄寬。
+        w_full = max((_dw(c) for c in (header + quote)), default=40)
+        col_need = max((_dw(t) for t, _ in panels), default=40) + 4   # +4：┌─ … ─┐ 邊距
+        W = max(w_full, 2 * col_need + 2, _dw("即時行情") + 4)
+        wl = (W - 2) // 2
+        wr = (W - 2) - wl
 
         print(_edge("╔", "═", "╗", W))
         print(_row(header[0], W, "║"))
@@ -563,33 +654,17 @@ class BitcoinMonitor:
             print(_row(r, W))
         print(_edge("└", "─", "┘", W))
 
-        if comp_rows:
+        for i in range(0, len(panels), 2):
             print()
-            print(_title(comp_title, W))
-            for r in comp_rows:
-                print(_row(r, W))
-            print(_edge("└", "─", "┘", W))
-
-        if trend is not None:
-            print()
-            print(_title(trend_title, W))
-            for r in trend_rows:
-                print(_row(r, W))
-            print(_edge("└", "─", "┘", W))
-
-        if top is not None:
-            print()
-            print(_title(top_title, W))
-            for r in top_rows:
-                print(_row(r, W))
-            print(_edge("└", "─", "┘", W))
-
-        if low is not None:
-            print()
-            print(_title(low_title, W))
-            for r in low_rows:
-                print(_row(r, W))
-            print(_edge("└", "─", "┘", W))
+            if i + 1 < len(panels):
+                _print_pair(panels[i], panels[i + 1], wl, wr)
+            else:                                    # 奇數面板 → 最後一個佔全寬
+                t, rows = panels[i]
+                print(_title(t, W))
+                for r in rows:
+                    for seg in _wrap_display(r, W):
+                        print(_row(seg, W))
+                print(_edge("└", "─", "┘", W))
 
         hint = "b 重選代號｜q 結束" if self.nav else "Ctrl+C 結束"
         print(f"\n  下次刷新 {nxt}    （{hint}）")
