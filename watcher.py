@@ -35,6 +35,7 @@ from core.relative_low_tw import compute_relative_low_tw, relative_low_tw_meta  
 from service.ohlc_universal import (classify_symbol, fetch_ohlc,            # noqa: E402
                                     fetch_live_quote, live_quote_freshness, KIND_LABEL)
 # 重用 BTC_WATCH 既有的畫框 / 面板 / 等待 helper（單一真實來源，不重造）
+from core.momentum import momentum_ref_rows                             # noqa: E402
 from BTC_WATCH import (BitcoinMonitor, _title, _row, _edge, _dw, _panel,  # noqa: E402
                        _short_momentum, _panel_trend, _panel_stance, interruptible_wait,
                        _atr_risk_rows)
@@ -112,6 +113,8 @@ class UniversalMonitor:
             f"  52週高/低     {_fmt_price(hi)} / {_fmt_price(lo)}   （位置 {pos:.0f}%）",
             f"  短線動能      {mom}",
         ]
+        # 時間序列動能（3/6/12M 報酬）— 參考訊號，未計入加權（待回測）
+        quote += momentum_ref_rows(df)
         # 風控框架（ATR 停損 + 近 60 日支撐壓力風報比）— 支撐用近期低（股票無動態地板）
         quote += _atr_risk_rows(df, close, support=None)
         trend_title, trend_rows = _panel_trend(trend, "趨勢方向（順勢）",

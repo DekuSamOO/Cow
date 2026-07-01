@@ -33,6 +33,7 @@ try:
     from core.relative_low import (compute_relative_low_score, relative_low_meta,
                                    reference_low_signals)
     from core.trend_direction import compute_trend_score, trend_meta
+    from core.momentum import momentum_ref_rows
     from core.bottom_floors import compute_all_bottom_estimates
     from core.action_ensemble import compute_composite_action
     _COW_OK = True
@@ -514,6 +515,8 @@ class BitcoinMonitor:
         # C：短線動能（補趨勢中長期軸缺的「這週」尺度，與順勢軸正交）
         if mom:
             quote.append(f"  短線動能      {mom}")
+        # 時間序列動能（3/6/12M 報酬）— 參考訊號，未計入加權（待回測）
+        quote += momentum_ref_rows(self._daily_cache)
         # 風控框架（ATR 停損 + 支撐壓力風報比）— 用動態地板當支撐，前高當壓力
         quote += _atr_risk_rows(self._daily_cache, md["close"], support=sup)
         # A：即時項每 60s 更新；日線/地板/外部維度每小時刷新一次
