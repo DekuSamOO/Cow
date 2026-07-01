@@ -89,6 +89,13 @@ config.MINER_ELECTRICITY_RATE 單一來源；eff_jth anchors 因缺實際 CBECI 
 
 - **逃頂五維（30/25/20/15/10）**：合約過熱 / 技術衰竭 / 鏈上派發 / 情緒過熱 / 總經逆風。
   `compute_escape_top_score` + `escape_top_meta`。
+- **⚠️ 待驗證（NOT VERIFIED）— OI×Funding 假頂折減**：`relative_high._score_derivatives`
+  2026-07 新增「funding 過熱(年化≥30% → f_s≥14)但 OI 分位<70(去槓桿/未confirm)」時 funding
+  貢獻 ×0.75 的假頂折減（**從不灌分、OI 無資料不折減**，只下修假頂、保守可逆）。**「交互優於
+  相加」的 AUC 尚未驗證**（公司網路 Yahoo/Binance 被擋，`relative_high_backtest` 跑不動）。
+  → **【回家用/雲端網路做】跑 `D:\Users\63191\AppData\Local\anaconda3\python.exe
+  tests/relative_high_backtest.py`（含 funding 歷史），驗證折減後單維/整體 AUC 未退步才把
+  synergy 轉正；若無改善就從 `_score_derivatives` 移除該折減段。**
 - **抄底六維（25/20/20/15/10/10）**：長週期深跌 / 合約超冷 / 技術回穩 / 情緒恐慌 / 鏈上吸籌 / 總經順風。
   `compute_relative_low_score` + `relative_low_meta`。
 - **權重由敏感度測試決定**（`tests/relative_high_backtest.py` / `relative_low_backtest.py`，
