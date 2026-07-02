@@ -1,4 +1,4 @@
-# Cow — 比特幣投資戰情室 v3.25
+# Cow — 比特幣投資戰情室 v3.26
 
 > 比特幣多週期量化分析工具，整合技術指標、鏈上數據、期權與波段策略。
 
@@ -381,6 +381,14 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 ---
 
 ## 版本紀錄
+
+### v3.26 (2026-07-02)
+watcher 面板誠實化：移除已回測無效的 Hash Ribbons 參考訊號、過去報酬列拿掉誤導性燈號，並統一台股/美股逃頂抄底面板為「名稱 燈號 描述」讓燈號對齊生效。**本次不含任何評分權重變更。**
+- **refactor(radar)**: 移除 Hash Ribbons 參考訊號（`tests/relative_ref_signals_backtest.py` 2026-07 回測投降強度 AUC=0.359、方向反/無效，且顯示「🟡 礦工投降中→打底醞釀」本身即那個被證明方向相反的訊號，無中性事實價值、易誤讀成偏多）：刪除 `core/relative_low.py` 的 `_hash_ribbon_read`／`reference_low_signals`、`compute_relative_low` 的 `hashrate_hist` 參數與 `reference_signals` 輸出鍵；`BTC_WATCH.py` 刪 `_ref_rows`／import／`ext["hashrate_hist"]`／`render` 的 `ref_low` 參數與插入。**礦工電費硬地板路徑（`fetch_hashrate_history_ths`→`compute_all_bottom_estimates`）保留不動。** MVRV-Z 仍為已驗證正式計分（見 v3.24），不受影響。**勿再加回 Hash Ribbons。**
+- **feat(watch)**: `core/momentum.momentum_ref_rows` 標籤從「〔動能·參考·已回測無效〕…→🔴空頭動能」改為純事實「過去報酬  3M .. 6M .. 12M ..」，拿掉燈號與「多/空頭動能」判讀——TSM 當訊號在 BTC 上已回測否決（`tests/momentum_backtest.py`），掛燈號會被誤讀成看空交易訊號；過去報酬本身是中性事實，排版比照 quote 區其他讀數列（值起於第 16 欄對齊）。
+- **feat(watch)**: 台股/美股/通用逃頂抄底面板全 label 加名稱前綴（背離／RSI／PE／PB／量能／融資／法人／散戶／大戶／量價／結構，含「無資料」分支），與加密面板一致，讓 `_split_name_light` 燈號對齊生效——涉及 `core/relative_universal.py`、`core/relative_high_tw.py`、`core/relative_low_tw.py`，**僅動 label 字串、所有評分權重與門檻不變**。
+- **feat(scripts)**: 新增離線校準腳本（非 pytest）`scripts/tw_universal_backtest.py`（台股通用維 swing AUC，已實跑驗證）、`scripts/us_universal_backtest.py`（美股三維校準，需家用網路跑 Yahoo）。
+- **test**: `tests/core/test_radar_reference.py` 刪 3 個 Hash Ribbons 測試 + 清 import；`tests/core/test_relative_universal.py` 兩處精確比對字串更新（「量價 ⚪ 資料不足」「結構 ⚪ 資料不足」）。`pytest tests/core/ tests/test_momentum.py` **129 passed**。
 
 ### v3.25 (2026-07-02)
 台股/美股 watcher 儀表板新增 3 種相對高低點判斷方式（量價背離、即時成交量+週轉率、結構高低點），並新建純 OHLCV 通用軸供美股逃頂/抄底補齊。

@@ -93,21 +93,21 @@ def score_volume_price_top(df: pd.DataFrame, vol_short: int = 5, vol_long: int =
     """量價背離（逃頂用，max 15）：量增價縮＝買盤湧入卻推不動價格，出貨/籌碼鬆動訊號。"""
     max_score = 15
     if df is None or len(df) < max(vol_long, 2 * price_short + 1):
-        return {"score": 0, "max": max_score, "label": "⚪ 量價資料不足",
+        return {"score": 0, "max": max_score, "label": "量價 ⚪ 資料不足",
                 "note": "量增價縮＝出貨訊號（規則式，未回測校準，僅供參考）", "sub": {}}
     vol_ratio = _vol_ratio(df, vol_short, vol_long)
     ret = _price_ret_chg(df, price_short)
     if vol_ratio is None or ret is None:
-        return {"score": 0, "max": max_score, "label": "⚪ 量價資料不足",
+        return {"score": 0, "max": max_score, "label": "量價 ⚪ 資料不足",
                 "note": "量增價縮＝出貨訊號（規則式，未回測校準，僅供參考）", "sub": {}}
     ret_now, ret_prior = ret["ret_now"], ret["ret_prior"]
 
     if vol_ratio >= 1.5 and ret_now < ret_prior and ret_now < 0:
-        score, label = 15, f"🔴 量增{vol_ratio:.1f}x＋價轉弱（出貨徵兆）"
+        score, label = 15, f"量價 🔴 量增{vol_ratio:.1f}x＋價轉弱（出貨徵兆）"
     elif vol_ratio >= 1.3 and ret_now < ret_prior:
-        score, label = 8, f"🟠 量增{vol_ratio:.1f}x＋動能收斂"
+        score, label = 8, f"量價 🟠 量增{vol_ratio:.1f}x＋動能收斂"
     else:
-        score, label = 0, f"⚪ 量{vol_ratio:.1f}x（無背離）"
+        score, label = 0, f"量價 ⚪ 量{vol_ratio:.1f}x（無背離）"
 
     return {"score": score, "max": max_score, "label": label,
             "note": "量增價縮＝出貨訊號（規則式，未回測校準，僅供參考）",
@@ -119,21 +119,21 @@ def score_volume_price_bottom(df: pd.DataFrame, vol_short: int = 5, vol_long: in
     """量價背離（抄底用，max 15）：量縮價增＝賣壓輕、籌碼安定（惜售），打底/賣壓竭盡訊號。"""
     max_score = 15
     if df is None or len(df) < max(vol_long, 2 * price_short + 1):
-        return {"score": 0, "max": max_score, "label": "⚪ 量價資料不足",
+        return {"score": 0, "max": max_score, "label": "量價 ⚪ 資料不足",
                 "note": "量縮價增＝賣壓竭盡訊號（規則式，未回測校準，僅供參考）", "sub": {}}
     vol_ratio = _vol_ratio(df, vol_short, vol_long)
     ret = _price_ret_chg(df, price_short)
     if vol_ratio is None or ret is None:
-        return {"score": 0, "max": max_score, "label": "⚪ 量價資料不足",
+        return {"score": 0, "max": max_score, "label": "量價 ⚪ 資料不足",
                 "note": "量縮價增＝賣壓竭盡訊號（規則式，未回測校準，僅供參考）", "sub": {}}
     ret_now, ret_prior = ret["ret_now"], ret["ret_prior"]
 
     if vol_ratio <= 0.6 and ret_now > 0:
-        score, label = 15, f"🟢 量縮{vol_ratio:.1f}x＋價守穩（賣壓竭盡/惜售）"
+        score, label = 15, f"量價 🟢 量縮{vol_ratio:.1f}x＋價守穩（賣壓竭盡/惜售）"
     elif vol_ratio <= 0.75 and ret_now >= 0:
-        score, label = 8, f"🟡 量縮{vol_ratio:.1f}x＋價持穩"
+        score, label = 8, f"量價 🟡 量縮{vol_ratio:.1f}x＋價持穩"
     else:
-        score, label = 0, f"⚪ 量{vol_ratio:.1f}x（無背離）"
+        score, label = 0, f"量價 ⚪ 量{vol_ratio:.1f}x（無背離）"
 
     return {"score": score, "max": max_score, "label": label,
             "note": "量縮價增＝賣壓竭盡訊號（規則式，未回測校準，僅供參考）",
@@ -150,22 +150,22 @@ def _score_structure(df: pd.DataFrame, lookback: int, order: int, kind: str) -> 
     note = ("前高未過/結構轉弱＝頭部警訊（規則式，未回測校準，僅供參考）" if is_top
             else "前低未破/結構轉強＝底部訊號（規則式，未回測校準，僅供參考）")
     if struct["structure"] is None:
-        return {"score": 0, "max": max_score, "label": "⚪ 結構資料不足", "note": note, "sub": {}}
+        return {"score": 0, "max": max_score, "label": "結構 ⚪ 資料不足", "note": note, "sub": {}}
 
     if is_top:
         if struct["structure"] == "mixed" and struct["higher_low"] is True:
-            score, label = 10, "🟠 前高未過（結構轉弱）"
+            score, label = 10, "結構 🟠 前高未過（結構轉弱）"
         elif struct["structure"] == "LH_LL":
-            score, label = 6, "🔴 空頭結構延續（前高前低皆走低）"
+            score, label = 6, "結構 🔴 空頭結構延續（前高前低皆走低）"
         else:
-            score, label = 0, "⚪ 結構無轉弱訊號"
+            score, label = 0, "結構 ⚪ 無轉弱訊號"
     else:
         if struct["structure"] == "mixed" and struct["higher_high"] is False:
-            score, label = 10, "🟢 前低未破（結構轉強）"
+            score, label = 10, "結構 🟢 前低未破（結構轉強）"
         elif struct["structure"] == "HH_HL":
-            score, label = 6, "🟢 多頭結構延續（前高前低皆墊高）"
+            score, label = 6, "結構 🟢 多頭結構延續（前高前低皆墊高）"
         else:
-            score, label = 0, "⚪ 結構無轉強訊號"
+            score, label = 0, "結構 ⚪ 無轉強訊號"
 
     return {"score": score, "max": max_score, "label": label, "note": note, "sub": struct}
 

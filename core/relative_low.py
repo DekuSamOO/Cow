@@ -58,10 +58,11 @@ WEIGHTS_LOW = {
 # AUC=0.732，**比現役 SOPR(0.585) 還強**，過 0.55 門檻 → 從「參考顯示」（原
 # reference_low_signals 的 mvrv_z 分支）轉正式計分子項，配重給到跟 ETF 同級(6)。
 #
-# 同批驗證的 Hash Ribbons（礦工投降強度 (SMA60-SMA30)/SMA60）— n=191，AUC=0.359，方向反/無效，
-# **維持參考不計分**（見 _hash_ribbon_read 與 reference_low_signals）；不代表 Hash Ribbons 理論
-# 錯誤，可能是「黃金交叉事件」比本次測的「持續投降深度」更有預測力，但那是另一個假設，
-# 未來要驗證需另外設計「事件式」樣本，不在本次驗證範圍內。
+# 同批驗證的 Hash Ribbons（礦工投降強度 (SMA60-SMA30)/SMA60）— n=191，AUC=0.359，方向反/無效。
+# 原本以「參考顯示、不計分」保留在 watcher 面板，但顯示的「礦工投降中→打底醞釀」本身就是那個
+# 被證明方向相反的訊號（無中性事實價值、易誤讀成偏多），2026-07 已整段移除（_hash_ribbon_read /
+# reference_low_signals 一併刪除）。不代表 Hash Ribbons 理論錯誤，可能是「黃金交叉事件」比本次測的
+# 「持續投降深度」更有預測力，但那是另一個假設，需另設計「事件式」樣本，不在本次範圍。**勿再加回。**
 
 # 維度狀態標示（兩種不同性質，介面以不同 tag 呈現）：
 #   UNFITTED_DIMS_LOW   ＝權重採專家設定、歷史樣本不足「待累積後回測」即可擬合（如 OI 自建快照）。
@@ -346,52 +347,6 @@ def compute_relative_low_score(
     return score, signals
 
 
-def _hash_ribbon_read(hashrate_hist) -> Optional[dict]:
-    """Hash Ribbons：30/60 日算力 SMA 交叉（礦工投降→打底）。資料用
-    service.bottom_metrics.fetch_hashrate_history_ths()（已快取，零新資料源）。"""
-    if not hashrate_hist:
-        return None
-    try:
-        s = pd.Series(hashrate_hist)
-        s.index = pd.to_datetime(s.index)
-        s = s.sort_index().astype(float)
-    except Exception:
-        return None
-    if len(s) < 60:
-        return None
-    sma30, sma60 = s.rolling(30).mean(), s.rolling(60).mean()
-    a, b = sma30.iloc[-1], sma60.iloc[-1]
-    if _nan(a) or _nan(b):
-        return None
-    cross_up = False
-    if len(s) >= 6 and not _nan(sma30.iloc[-6]) and not _nan(sma60.iloc[-6]):
-        cross_up = (sma30.iloc[-6] < sma60.iloc[-6]) and (a >= b)
-    if cross_up:
-        lbl = "🟢 Hash Ribbon 黃金交叉（礦工投降結束，歷史買訊）"
-    elif a < b:
-        lbl = "🟡 礦工投降中（SMA30<SMA60，打底訊號醞釀）"
-    else:
-        lbl = "⚪ 算力健康（無礦工投降）"
-    return {"value": f"SMA30 {a:.3g}/SMA60 {b:.3g} TH/s", "label": lbl,
-            "note": "⚠️ 已回測(2026-07)：投降強度((SMA60-SMA30)/SMA60) AUC=0.359，方向反/無效，"
-                    "維持參考不計分。可能是「持續投降深度」非最佳代理，黃金交叉事件本身未另測"}
-
-
-def reference_low_signals(*, hashrate_hist=None) -> Dict[str, dict]:
-    """抄底側社群參考指標（**不計入 low_score**）。
-
-    僅剩 Hash Ribbons：2026-07 已回測（tests/relative_ref_signals_backtest.py），投降強度
-    AUC=0.359 方向反/無效，維持參考不計分（見 `_hash_ribbon_read` note）。MVRV-Z 已於
-    2026-07 驗證通過（AUC 0.732）並移入 `_score_onchain_low` 正式計分，不再是參考訊號
-    （呼叫端若仍傳 mvrv_z 參數會是 TypeError，需改用 `compute_relative_low_score(mvrv_z=...)`）。
-    """
-    out: Dict[str, dict] = {}
-    hr = _hash_ribbon_read(hashrate_hist)
-    if hr is not None:
-        out["hash_ribbon"] = hr
-    return out
-
-
 def relative_low_meta(score: int) -> Tuple[str, str, str]:
     """(等級, 顏色, 操作建議) — 鏡像 escape_top_meta 的反向。"""
     if score >= 75:
@@ -407,11 +362,10 @@ def relative_low_meta(score: int) -> Tuple[str, str, str]:
 
 def compute_relative_low(
     price: float, row, df: Optional[pd.DataFrame] = None, *,
-    mvrv_z: Optional[float] = None, hashrate_hist=None, **kwargs,
+    mvrv_z: Optional[float] = None, **kwargs,
 ) -> dict:
     """相對底部完整評估（評分 + 等級）。所有外部資料由呼叫端注入（本層零網路請求）。
-    mvrv_z：2026-07 已驗證計入 low_score（onchain 子分，AUC 0.732）。hashrate_hist 仍僅
-    顯示於 reference_signals（Hash Ribbons 已回測方向反/無效，見 core.relative_low._hash_ribbon_read）。"""
+    mvrv_z：2026-07 已驗證計入 low_score（onchain 子分，AUC 0.732）。"""
     score, signals = compute_relative_low_score(row, df, mvrv_z=mvrv_z, **kwargs)
     level, color, action = relative_low_meta(score)
     return {
@@ -422,5 +376,4 @@ def compute_relative_low(
         "low_signals": signals,
         "unfitted_dims": list(UNFITTED_DIMS_LOW),
         "rule_based_dims": list(RULE_BASED_DIMS_LOW),
-        "reference_signals": reference_low_signals(hashrate_hist=hashrate_hist),
     }

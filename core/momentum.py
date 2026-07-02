@@ -55,14 +55,17 @@ def time_series_momentum(df, lookbacks=_LOOKBACKS) -> dict:
 
 
 def momentum_ref_rows(df) -> list:
-    """TSM 參考訊號顯示列。回傳 0–1 列。
+    """過去報酬顯示列（僅事實數字）。回傳 0–1 列。
 
-    ⚠️ 標籤寫「已回測無效」而非「待回測」：`tests/momentum_backtest.py` 2026-07 已跑過
-    （見檔頭），結論是負面（無預測力、打不贏 B&H），不是「還沒測」。維持顯示僅供參考、
-    不計分是**已下的結論**，寫成待回測會誤導成「還沒驗證」。"""
+    ⚠️ 刻意只顯示 3M/6M/12M 過去報酬、**不掛 🟢/🔴 燈號與「多/空頭動能」判讀**：
+    TSM 當訊號在 BTC 上已回測否決（`tests/momentum_backtest.py` 2026-07，無預測力、
+    打不贏 B&H），掛燈號會被誤讀成「看多/看空的交易訊號」。過去報酬本身是中性事實、
+    僅供背景參考，故排版比照 quote 區其他讀數列（現價/短線動能）：label「過去報酬」補到
+    值欄、值起於第 16 欄對齊。**勿再把 TSM stance 塞回加權評分**（否決結論見本檔檔頭與
+    `time_series_momentum`）。"""
     m = time_series_momentum(df)
     if not m["rets"]:
         return []
     parts = "  ".join(f"{_LB_LABEL.get(lb, f'{lb}d')} {r * 100:+.0f}%"
                       for lb, r in m["rets"].items())
-    return [f"  〔動能·參考·已回測無效〕 {parts} → {m['label']}"]
+    return [f"  過去報酬      {parts}"]

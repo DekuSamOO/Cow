@@ -2,16 +2,11 @@
 
 2026-07 用 tests/relative_ref_signals_backtest.py 驗證 MVRV-Z 逃頂/抄底皆過 AUC≥0.55
 門檻（0.592/0.732），已從「參考顯示、不計分」轉為 onchain 子分正式計分項；
-`reference_top_signals`（原本只含 mvrv_z）已整支移除，`reference_low_signals` 拿掉
-mvrv_z 分支、僅剩 Hash Ribbons（同批驗證 AUC=0.359，方向反/無效，維持參考不計分）。"""
-import numpy as np
-import pandas as pd
-import pytest
-
+`reference_top_signals`（原本只含 mvrv_z）已整支移除。Hash Ribbons（同批驗證 AUC=0.359，
+方向反/無效）原以參考顯示保留，2026-07 亦整段移除（`reference_low_signals` / `_hash_ribbon_read`
+連同 watcher 面板顯示一併刪除，見 core/relative_low.py 檔頭）。"""
 from core.relative_high import compute_escape_top_score, _score_derivatives, _score_onchain
-from core.relative_low import (
-    reference_low_signals, _hash_ribbon_read, compute_relative_low_score, _score_onchain_low,
-)
+from core.relative_low import compute_relative_low_score, _score_onchain_low
 
 
 # funding_8h 對應年化：annualize = rate × 3 × 365。要 f_s≥14（年化≥30%）需 rate≥30/1095≈0.0274
@@ -65,37 +60,3 @@ def test_mvrv_z_now_scored_in_relative_low_onchain():
     score_deep, _ = compute_relative_low_score({"RSI_14": 50.0}, None, mvrv_z=-0.5)
     score_none, _ = compute_relative_low_score({"RSI_14": 50.0}, None, mvrv_z=None)
     assert score_deep > score_none
-
-
-def test_reference_low_signals_only_has_hash_ribbon():
-    """reference_low_signals 不再接受 mvrv_z 參數（已移入正式計分），只剩 hash_ribbon。"""
-    with pytest.raises(TypeError):
-        reference_low_signals(mvrv_z=-1.0)   # 舊參數已移除，呼叫端仍傳會直接報錯（防止悄悄失效）
-    out = reference_low_signals(hashrate_hist=None)
-    assert out == {}   # 無算力資料時為空 dict，不含 mvrv_z
-
-
-def test_hash_ribbon_capitulation_and_cross():
-    dates = pd.date_range("2024-01-01", periods=120, freq="D")
-    # 算力先升後驟跌（製造 SMA30<SMA60 投降）
-    vals = np.concatenate([np.linspace(100, 160, 60), np.linspace(160, 110, 60)])
-    hist = {d.strftime("%Y-%m-%d"): v for d, v in zip(dates, vals)}
-    r = _hash_ribbon_read(hist)
-    assert r is not None and "礦工投降" in r["label"]
-    assert "已回測" in r["note"] and "0.359" in r["note"]   # 誠實反映已測、非「待回測」
-
-    # 資料不足 → None
-    assert _hash_ribbon_read({d.strftime("%Y-%m-%d"): 1.0
-                              for d in pd.date_range("2024-01-01", periods=30)}) is None
-    assert _hash_ribbon_read({}) is None
-    assert _hash_ribbon_read(None) is None
-
-
-def test_hash_ribbon_reference_does_not_affect_score():
-    """Hash Ribbons 仍與加權分數完全解耦：score 計算不吃 hashrate_hist。"""
-    row = {"RSI_14": 50.0}
-    score_a, _ = compute_relative_low_score(row, None)
-    score_b, _ = compute_relative_low_score(row, None)
-    assert score_a == score_b
-    ref = reference_low_signals(hashrate_hist=None)
-    assert "score" not in ref.get("hash_ribbon", {})

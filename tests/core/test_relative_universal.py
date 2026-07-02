@@ -88,7 +88,7 @@ def test_volume_price_top_insufficient_data():
     res = score_volume_price_top(df)
     assert res["score"] == 0
     assert res["max"] == 15
-    assert res["label"] == "⚪ 量價資料不足"
+    assert res["label"] == "量價 ⚪ 資料不足"
     assert res["sub"] == {}
 
 
@@ -122,7 +122,7 @@ def test_volume_price_bottom_insufficient_data():
     res = score_volume_price_bottom(df)
     assert res["score"] == 0
     assert res["max"] == 15
-    assert res["label"] == "⚪ 量價資料不足"
+    assert res["label"] == "量價 ⚪ 資料不足"
     assert res["sub"] == {}
 
 
@@ -202,8 +202,8 @@ def test_structure_bottom_zero_when_bear_continuation():
 def test_structure_insufficient_data():
     res_top = score_structure_top(None)
     res_bot = score_structure_bottom(pd.DataFrame())
-    assert res_top["score"] == 0 and res_top["label"] == "⚪ 結構資料不足"
-    assert res_bot["score"] == 0 and res_bot["label"] == "⚪ 結構資料不足"
+    assert res_top["score"] == 0 and res_top["label"] == "結構 ⚪ 資料不足"
+    assert res_bot["score"] == 0 and res_bot["label"] == "結構 ⚪ 資料不足"
 
 
 # ---------------------------------------------------------------------------

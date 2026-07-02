@@ -154,19 +154,21 @@ SOPR（`get_latest_bottom_metrics`，bitcoin-data 12h 快取）、BTC.D 趨勢�
 - **MVRV-Z 逃頂**：swing 高點 n_pos=20/n_neg=53，值越高越像頂 → **AUC=0.592**，過 0.55 門檻。
 - **MVRV-Z 抄底**：swing 低點 n_pos=23/n_neg=104，用 -z 當單調子分數 → **AUC=0.732**，
   **比現役 SOPR(0.585) 還強**，過門檻。
-- **Hash Ribbons 抄底**（投降強度 (SMA60-SMA30)/SMA60）：n=191 → **AUC=0.359，方向反/無效**，
-  維持參考不計分。不代表理論錯誤，可能是「持續投降深度」非最佳代理（黃金交叉事件本身未另測，
-  Hash Ribbons 官方定義的最強訊號其實是交叉瞬間，不是投降期間的持續深度）。
+- **Hash Ribbons 抄底**（投降強度 (SMA60-SMA30)/SMA60）：n=191 → **AUC=0.359，方向反/無效**。
+  不代表理論錯誤，可能是「持續投降深度」非最佳代理（黃金交叉事件本身未另測，Hash Ribbons 官方
+  定義的最強訊號其實是交叉瞬間，不是投降期間的持續深度）。**2026-07 已整段移除**：原本以「參考
+  顯示不計分」保留在 watcher 面板，但顯示的「🟡 礦工投降中→打底醞釀」本身就是那個被證明方向相反的
+  訊號（無中性事實價值、易誤讀成偏多），故連同 `core/relative_low._hash_ribbon_read`/
+  `reference_low_signals` 與 `BTC_WATCH._ref_rows` 一併刪除。**勿再加回**（否決理由見 relative_low.py 檔頭）。
 
 **結論已落地**：MVRV-Z 從「參考顯示」轉正式計分——`core/relative_high.py::_score_onchain`
 onchain 維度 20→26（+MVRV-Z 6，AUC 較弱給保守配重）；`core/relative_low.py::_score_onchain_low`
 onchain 維度 10→16（+MVRV-Z 6，配重與 ETF 同級因 AUC 是全維度最強）。兩側 `compute_escape_top_score`/
 `compute_relative_low_score` 新增 `mvrv_z` 參數，三個消費端（`BTC_WATCH.py`、
 `handler/tab_macro_compass.py::_gather_radar_externals`、`scripts/daily_line_notify.py::_compute_radars`）
-皆已補上 `mvrv_z=ext.get("mvrv_z")`／`bm.get("mvrv_zscore")` 餵入。`reference_top_signals` 整支移除
-（原本只含 mvrv_z）；`reference_low_signals` 拿掉 mvrv_z 參數，只剩 Hash Ribbons。**注意**：呼叫端
-若仍對 `reference_low_signals` 傳 `mvrv_z=` 會直接 `TypeError`（刻意不做向後相容的靜默 no-op，
-避免悄悄失效沒人發現）。
+皆已補上 `mvrv_z=ext.get("mvrv_z")`／`bm.get("mvrv_zscore")` 餵入。`reference_top_signals`（原本只含
+mvrv_z）與 `reference_low_signals`（拿掉 mvrv_z 後只剩 Hash Ribbons、AUC 0.359 方向反）皆已整支移除，
+雷達不再有任何「參考顯示不計分」的社群訊號。
 
 ---
 
