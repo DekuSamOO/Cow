@@ -40,7 +40,8 @@ from service.ohlc_universal import (classify_symbol, fetch_ohlc,            # no
 from core.momentum import momentum_ref_rows                             # noqa: E402
 from BTC_WATCH import (BitcoinMonitor, _title, _row, _edge, _dw, _bar, _bar_signed,  # noqa: E402
                        _panel, _short_momentum, _panel_trend, _panel_stance,
-                       interruptible_wait, _atr_risk_rows, _print_pair, _wrap_display)
+                       interruptible_wait, _atr_risk_rows, _print_pair, _wrap_display,
+                       _panel_block, _MIN_COL_W)
 
 
 def _fmt_price(v: float) -> str:
@@ -194,6 +195,7 @@ class UniversalMonitor:
 
         w_full = max((_dw(c) for c in (header + quote + note)), default=40)
         col_need = max((_dw(t) for t, _ in panels), default=40) + 4   # +4：┌─ … ─┐ 邊距
+        col_need = max(col_need, _MIN_COL_W)   # 每欄至少 _MIN_COL_W（拉寬 + 容對齊後子項）
         W = max(w_full, 2 * col_need + 2, _dw("即時行情") + 4)
         wl = (W - 2) // 2
         wr = (W - 2) - wl
@@ -216,12 +218,8 @@ class UniversalMonitor:
             if i + 1 < len(panels):
                 _print_pair(panels[i], panels[i + 1], wl, wr)
             else:                                    # 奇數面板（美股僅操作+趨勢時不會發生）→ 佔全寬
-                t, rows = panels[i]
-                print(_title(t, W))
-                for r in rows:
-                    for seg in _wrap_display(r, W):
-                        print(_row(seg, W))
-                print(_edge("└", "─", "┘", W))
+                for ln in _panel_block(panels[i][0], panels[i][1], W):
+                    print(ln)
 
         print()
         print(_title("說明", W))

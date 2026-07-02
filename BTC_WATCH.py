@@ -200,6 +200,7 @@ def _cut_display(s, width):
 
 _SCORE_PREFIX_RE = re.compile(r"^(\s+[+\-]?\d{1,3}/[±]?\d{1,3}\s+)")
 _LIGHTS = "🔴🟢🟡🟠⚪🔵🟣"   # 燈號集合（子項格式「名稱 燈號 描述」的對齊錨點）
+_MIN_COL_W = 50   # 兩欄版每欄最小內寬（容標題 + 對齊後最長子項；亦即使用者要的「拉寬」）
 
 
 def _split_name_light(sub):
@@ -210,49 +211,57 @@ def _split_name_light(sub):
     return None, sub
 
 
-def _align_subitems(s, prefix, width, cont_indent):
-    """分數列超寬且含多個「；」子項 → 每子項各自一行、名稱右補空白使燈號對齊。
-    有任一子項拆不出名稱（如假頂折減 ⚠ 警語）→ 回 None，交回貪婪斷行。"""
-    subs = [x.strip() for x in s[len(prefix):].split("；") if x.strip()]
-    parts = [_split_name_light(x) for x in subs]
-    if len(parts) < 2 or any(name is None for name, _ in parts):
+def _row_subitems(r):
+    """分數列 → (prefix, [(name, light_desc), ...])；非分數列（→/〔參考〕等無 NN/MM 前綴）回 None。"""
+    m = _SCORE_PREFIX_RE.match(r)
+    if not m:
         return None
-    namew = max(_dw(name) for name, _ in parts)
-    indent = " " * cont_indent
+    prefix = m.group(1)
+    subs = [x.strip() for x in r[len(prefix):].split("；") if x.strip()]
+    return prefix, [_split_name_light(x) for x in subs]
+
+
+def _panel_name_width(rows):
+    """全 panel 分數列所有『有名稱』子項的最大名稱顯示寬 → 燈號對齊欄基準。無則 0。"""
+    w = 0
+    for r in rows:
+        parsed = _row_subitems(r)
+        if not parsed:
+            continue
+        for name, _ in parsed[1]:
+            if name:
+                w = max(w, _dw(name))
+    return w
+
+
+def _render_score_row(prefix, parts, inner_w, namew):
+    """分數列 → 每子項各自一行、名稱右補到 namew 使燈號對齊到同一欄。描述超寬則續行硬切。"""
+    indent = " " * _dw(prefix)
+    deep = " " * (_dw(prefix) + namew + 1)
     out = []
     for k, (name, rest) in enumerate(parts):
         lead = prefix if k == 0 else indent
         line = f"{lead}{name}{' ' * (namew - _dw(name))} {rest}"
-        if _dw(line) <= width:
+        if _dw(line) <= inner_w:
             out.append(line)
-        else:   # 該子項描述仍超寬 → 逐字硬切，續行縮到名稱欄之後
-            deep = " " * (cont_indent + namew + 1)
-            head, remain = _cut_display(line, width)
+        else:
+            head, remain = _cut_display(line, inner_w)
             out.append(head)
             while remain:
-                head, remain = _cut_display(deep + remain, width)
+                head, remain = _cut_display(deep + remain, inner_w)
                 out.append(head)
     return out
 
 
 def _wrap_display(s, width, cont_indent=None):
-    """依顯示寬度把 s 折到 width 內（兩欄版每欄較窄，長列需換行）。
-
-    分數列（`_panel`/`_panel_trend` 產出，開頭「  NN/MM  」）且超寬含多個「；」子項時：每個
-    子項各自一行、名稱右補空白使燈號對齊（見 _align_subitems，對應使用者「分號換行＋每項燈號
-    對齊」需求）。塞得下一行的短列不動（早返回）→ 不無謂變高、維持「一頁看完」。
-
-    其餘（→操作建議、〔參考〕、礦工/籌碼說明等非分數列）：在 空白/；/｜/、/，/：/） 後貪婪
-    斷行，單一片段仍超寬則逐字硬切；cont_indent 自動偵測分數前綴寬度、非分數列退回 5 格。"""
+    """依顯示寬度把 s 折到 width 內。非分數列（→操作建議、〔參考〕、礦工/籌碼說明、即時行情）用：
+    在 空白/；/｜/、/，/：/） 後貪婪斷行，單一片段仍超寬則逐字硬切；cont_indent 自動偵測分數前綴
+    寬度、非分數列退回 5 格。（分數列的燈號對齊改由 _panel_block/_render_score_row 於面板層處理。）"""
     if _dw(s) <= width:
         return [s]
     m = _SCORE_PREFIX_RE.match(s)
     if cont_indent is None:
         cont_indent = _dw(m.group(1)) if m else 5
-    if m and "；" in s:
-        aligned = _align_subitems(s, m.group(1), width, cont_indent)
-        if aligned is not None:
-            return aligned
     # 1) 切成「可斷行片段」（分隔符留在片段尾；含中文標點斷點，長句才不會硬切在字中間）
     chunks, cur = [], ""
     for ch in s:
@@ -287,10 +296,19 @@ def _wrap_display(s, width, cont_indent=None):
 
 
 def _panel_block(title, rows, inner_w):
-    """單一面板 → 完整框線 block（title + 各列 wrap 後的行 + └──┘）。各欄由上往下緊貼排。"""
+    """單一面板 → 完整框線 block（title + 內容行 + └──┘）。各欄由上往下緊貼排。
+
+    分數列（有名稱子項的）→ 每子項各自一行、名稱補齊使燈號對齊到全 panel 同一欄
+    （namew 取全 panel 最長名稱）；其餘列（→操作、〔參考〕、礦工、趨勢無名稱列）走一般換行。"""
     block = [_title(title, inner_w)]
+    namew = _panel_name_width(rows)
     for r in rows:
-        for seg in _wrap_display(r, inner_w):
+        parsed = _row_subitems(r)
+        if namew and parsed and parsed[1] and all(name is not None for name, _ in parsed[1]):
+            segs = _render_score_row(parsed[0], parsed[1], inner_w, namew)
+        else:
+            segs = _wrap_display(r, inner_w)
+        for seg in segs:
             block.append(_row(seg, inner_w))
     block.append(_edge("└", "─", "┘", inner_w))
     return block
@@ -662,7 +680,9 @@ class BitcoinMonitor:
 
         # 全寬區（表頭 / 即時行情）自然寬度；兩欄區各欄需容得下緊湊標題，故 W 至少 2 欄寬。
         w_full = max((_dw(c) for c in (header + quote)), default=40)
+        # 每欄至少 _MIN_COL_W 寬：容得下標題、及對齊後最長子項（如 Mayer「…×0.8 (極度低估)」約 46）
         col_need = max((_dw(t) for t, _ in panels), default=40) + 4   # +4：┌─ … ─┐ 邊距
+        col_need = max(col_need, _MIN_COL_W)
         W = max(w_full, 2 * col_need + 2, _dw("即時行情") + 4)
         wl = (W - 2) // 2
         wr = (W - 2) - wl
@@ -684,13 +704,9 @@ class BitcoinMonitor:
             print()
             if i + 1 < len(panels):
                 _print_pair(panels[i], panels[i + 1], wl, wr)
-            else:                                    # 奇數面板 → 最後一個佔全寬
-                t, rows = panels[i]
-                print(_title(t, W))
-                for r in rows:
-                    for seg in _wrap_display(r, W):
-                        print(_row(seg, W))
-                print(_edge("└", "─", "┘", W))
+            else:                                    # 奇數面板 → 最後一個佔全寬（同用 _panel_block 對齊）
+                for ln in _panel_block(panels[i][0], panels[i][1], W):
+                    print(ln)
 
         hint = "b 重選代號｜q 結束" if self.nav else "Ctrl+C 結束"
         print(f"\n  下次刷新 {nxt}    （{hint}）")
