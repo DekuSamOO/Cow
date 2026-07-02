@@ -130,24 +130,24 @@ def _score_technical(row, df) -> dict:
                                                                   "n_confirm": 0, "strength": 0.0}
     n = div.get("n_confirm", 0)
     strength = div.get("strength", 0.0)
-    if   n >= 2: d_s, d_lbl = 18, "🔴 RSI+MACD 雙頂背離"
-    elif n == 1: d_s, d_lbl = round(8 + 4 * strength), "🟠 單指標頂背離"
-    else:        d_s, d_lbl = 0, "⚪ 無頂背離"
+    if   n >= 2: d_s, d_lbl = 18, "🔴 RSI+MACD 雙頂"
+    elif n == 1: d_s, d_lbl = round(8 + 4 * strength), "🟠 單指標頂"
+    else:        d_s, d_lbl = 0, "⚪ 無"
 
     rsi = row.get("RSI_14") if hasattr(row, "get") else None
     if _nan(rsi):
         r_s, r_lbl, r_val = 0, "⚪ 無資料", "—"
     else:
         r_val = f"{rsi:.0f}"
-        if   rsi >= 80: r_s, r_lbl = 7, "🔴 極度超買 (≥80)"
-        elif rsi >= 75: r_s, r_lbl = 5, "🟠 超買 (≥75)"
-        elif rsi >= 70: r_s, r_lbl = 3, "🟡 偏超買 (≥70)"
-        else:           r_s, r_lbl = 0, "⚪ 中性"
+        if   rsi >= 80: r_s, r_lbl = 7, f"🔴 極度超買({r_val})"
+        elif rsi >= 75: r_s, r_lbl = 5, f"🟠 超買({r_val})"
+        elif rsi >= 70: r_s, r_lbl = 3, f"🟡 偏超買({r_val})"
+        else:           r_s, r_lbl = 0, f"⚪ 中性({r_val})"
 
     return {
         "value": f"背離×{n}｜RSI {r_val}",
         "score": d_s + r_s, "max": WEIGHTS["technical"],
-        "label": f"{d_lbl}；RSI {r_lbl}",
+        "label": f"背離 {d_lbl}；RSI {r_lbl}",
         "note": "日線頂背離（價HH/指標LH）+ RSI_14 超買",
         "sub": {"divergence_n": n, "divergence_strength": strength,
                 "divergence_score": d_s, "rsi": (None if _nan(rsi) else float(rsi)),
@@ -176,26 +176,26 @@ def _score_onchain(etf_summary, sopr, mvrv_z=None) -> dict:
         s_s, s_lbl, s_val = 0, "⚪ 無資料", "—"
     else:
         s_val = f"{sopr:.3f}"
-        if   sopr >= 1.08: s_s, s_lbl = 8, "🔴 SOPR 飆高 (大量獲利了結)"
-        elif sopr >= 1.05: s_s, s_lbl = 6, "🟠 SOPR 偏高"
-        elif sopr >= 1.03: s_s, s_lbl = 4, "🟡 SOPR 微高"
-        elif sopr >= 1.01: s_s, s_lbl = 2, "⚪ 小幅獲利了結"
-        else:              s_s, s_lbl = 0, "⚪ 中性/虧損賣出"
+        if   sopr >= 1.08: s_s, s_lbl = 8, f"🔴 飆高({sopr:.2f}) 大量獲利了結"
+        elif sopr >= 1.05: s_s, s_lbl = 6, f"🟠 偏高({sopr:.2f})"
+        elif sopr >= 1.03: s_s, s_lbl = 4, f"🟡 微高({sopr:.2f})"
+        elif sopr >= 1.01: s_s, s_lbl = 2, f"⚪ 小幅獲利({sopr:.2f})"
+        else:              s_s, s_lbl = 0, f"⚪ 中性/虧損({sopr:.2f})"
 
     # MVRV-Z（市值/實現市值 z-score；越高越貴，歷史大頂多在 ≥7）
     if _nan(mvrv_z):
         m_s, m_lbl, m_val = 0, "⚪ 無資料", "—"
     else:
         m_val = f"{mvrv_z:.2f}"
-        if   mvrv_z >= 7: m_s, m_lbl = 6, "🔴 MVRV-Z≥7 歷史大頂"
-        elif mvrv_z >= 5: m_s, m_lbl = 4, "🟠 MVRV-Z≥5 過熱"
-        elif mvrv_z >= 3: m_s, m_lbl = 2, "🟡 MVRV-Z≥3 偏熱"
-        else:             m_s, m_lbl = 0, "⚪ MVRV-Z 中性/偏低"
+        if   mvrv_z >= 7: m_s, m_lbl = 6, f"🔴 歷史大頂({mvrv_z:.1f})"
+        elif mvrv_z >= 5: m_s, m_lbl = 4, f"🟠 過熱({mvrv_z:.1f})"
+        elif mvrv_z >= 3: m_s, m_lbl = 2, f"🟡 偏熱({mvrv_z:.1f})"
+        else:             m_s, m_lbl = 0, f"⚪ 中性/偏低({mvrv_z:.1f})"
 
     return {
         "value": f"ETF {e_val}｜SOPR {s_val}｜MVRV-Z {m_val}",
         "score": e_s + s_s + m_s, "max": WEIGHTS["onchain"],
-        "label": f"ETF {e_lbl}；{s_lbl}；{m_lbl}",
+        "label": f"ETF {e_lbl}；SOPR {s_lbl}；MVRV-Z {m_lbl}",
         "note": "⚠️ ETF/SOPR 未擬合；MVRV-Z 已驗證(AUC 0.592，2026-07)",
         "sub": {"etf_consecutive_outflow": (etf_summary or {}).get("consecutive_outflow_days"),
                 "mvrv_z": (None if _nan(mvrv_z) else float(mvrv_z)), "mvrv_z_score": m_s,
@@ -210,25 +210,25 @@ def _score_sentiment(fng, btc_d_trend) -> dict:
         g_s, g_lbl, g_val = 0, "⚪ 無資料", "—"
     else:
         g_val = f"{fng:.0f}"
-        if   fng >= 90: g_s, g_lbl = 10, "🔴 極度貪婪 (≥90)"
-        elif fng >= 80: g_s, g_lbl = 8,  "🟠 貪婪 (≥80)"
-        elif fng >= 75: g_s, g_lbl = 5,  "🟡 偏貪 (≥75)"
-        elif fng >= 70: g_s, g_lbl = 3,  "⚪ 偏多 (≥70)"
-        else:           g_s, g_lbl = 0,  "⚪ 中性/恐懼"
+        if   fng >= 90: g_s, g_lbl = 10, f"🔴 極度貪婪({g_val})"
+        elif fng >= 80: g_s, g_lbl = 8,  f"🟠 貪婪({g_val})"
+        elif fng >= 75: g_s, g_lbl = 5,  f"🟡 偏貪({g_val})"
+        elif fng >= 70: g_s, g_lbl = 3,  f"⚪ 偏多({g_val})"
+        else:           g_s, g_lbl = 0,  f"⚪ 中性/恐懼({g_val})"
 
     if not btc_d_trend or btc_d_trend.get("change_pp") is None:
         b_s, b_lbl, b_val = 0, "⚪ 累積中", "—"
     else:
         chg = btc_d_trend["change_pp"]
         b_val = f"{chg:+.1f}pp"
-        if   btc_d_trend.get("is_falling") or chg <= -1.0: b_s, b_lbl = 5, "🟠 BTC.D 下降 (山寨輪動)"
-        elif chg <= -0.5:                                  b_s, b_lbl = 3, "🟡 BTC.D 偏弱"
-        else:                                              b_s, b_lbl = 0, "⚪ BTC.D 穩定/上升"
+        if   btc_d_trend.get("is_falling") or chg <= -1.0: b_s, b_lbl = 5, f"🟠 下降({b_val}) 山寨輪動"
+        elif chg <= -0.5:                                  b_s, b_lbl = 3, f"🟡 偏弱({b_val})"
+        else:                                              b_s, b_lbl = 0, f"⚪ 穩定/上升({b_val})"
 
     return {
         "value": f"F&G {g_val}｜BTC.D {b_val}",
         "score": g_s + b_s, "max": WEIGHTS["sentiment"],
-        "label": f"{g_lbl}；{b_lbl}",
+        "label": f"F&G {g_lbl}；BTC.D {b_lbl}",
         "note": "恐懼貪婪極貪 + BTC.D 下降（資金末端輪動）",
         "sub": {"fng": (None if _nan(fng) else float(fng)), "fng_score": g_s,
                 "btcd_change_pp": (btc_d_trend or {}).get("change_pp"), "btcd_score": b_s},
@@ -246,7 +246,7 @@ def _score_macro(macro) -> dict:
     """
     if not macro:
         return {"value": "—", "score": 0, "max": WEIGHTS["macro"],
-                "label": "⚪ 無資料", "note": "通膨/就業 hawkish + 事件臨近（Notion 行事曆）",
+                "label": "總經 ⚪ 無資料", "note": "通膨/就業 hawkish + 事件臨近（Notion 行事曆）",
                 "sub": {}}
     h_s = 0
     bits = []
@@ -266,7 +266,7 @@ def _score_macro(macro) -> dict:
     return {
         "value": "｜".join(bits) if bits else "中性",
         "score": h_s + e_s, "max": WEIGHTS["macro"],
-        "label": ("🟠 " + "、".join(bits)) if bits else "⚪ 中性",
+        "label": ("總經 🟠 " + "、".join(bits)) if bits else "總經 ⚪ 中性",
         "note": "通膨/就業 hawkish + 事件臨近（Notion 行事曆）",
         "sub": {"hawkish_score": h_s, "event_score": e_s,
                 "event_within_days": ev},

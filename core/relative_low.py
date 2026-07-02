@@ -175,24 +175,24 @@ def _score_technical_low(row, df) -> dict:
     div = detect_bottom_divergence_combo(df) if df is not None else {"n_confirm": 0, "strength": 0.0}
     n = div.get("n_confirm", 0)
     strength = div.get("strength", 0.0)
-    if   n >= 2: d_s, d_lbl = 14, "🟢 RSI+MACD 雙底背離"
-    elif n == 1: d_s, d_lbl = round(6 + 4 * strength), "🟡 單指標底背離"
-    else:        d_s, d_lbl = 0, "⚪ 無底背離"
+    if   n >= 2: d_s, d_lbl = 14, "🟢 RSI+MACD 雙底"
+    elif n == 1: d_s, d_lbl = round(6 + 4 * strength), "🟡 單指標底"
+    else:        d_s, d_lbl = 0, "⚪ 無"
 
     rsi = row.get("RSI_14") if hasattr(row, "get") else None
     if _nan(rsi):
         r_s, r_lbl, r_val = 0, "⚪ 無資料", "—"
     else:
         r_val = f"{rsi:.0f}"
-        if   rsi <= 20: r_s, r_lbl = 6, "🟢 極度超賣 (≤20)"
-        elif rsi <= 25: r_s, r_lbl = 4, "🟡 超賣 (≤25)"
-        elif rsi <= 30: r_s, r_lbl = 2, "⚪ 偏超賣 (≤30)"
-        else:           r_s, r_lbl = 0, "⚪ 中性"
+        if   rsi <= 20: r_s, r_lbl = 6, f"🟢 極度超賣({r_val})"
+        elif rsi <= 25: r_s, r_lbl = 4, f"🟡 超賣({r_val})"
+        elif rsi <= 30: r_s, r_lbl = 2, f"⚪ 偏超賣({r_val})"
+        else:           r_s, r_lbl = 0, f"⚪ 中性({r_val})"
 
     return {
         "value": f"背離×{n}｜RSI {r_val}",
         "score": d_s + r_s, "max": WEIGHTS_LOW["technical"],
-        "label": f"{d_lbl}；RSI {r_lbl}",
+        "label": f"背離 {d_lbl}；RSI {r_lbl}",
         "note": "日線底背離（價LL/指標HL）+ RSI_14 超賣",
         "sub": {"divergence_n": n, "divergence_strength": strength,
                 "divergence_score": d_s, "rsi": (None if _nan(rsi) else float(rsi)),
@@ -206,25 +206,25 @@ def _score_sentiment_low(fng, btc_d_trend) -> dict:
         g_s, g_lbl, g_val = 0, "⚪ 無資料", "—"
     else:
         g_val = f"{fng:.0f}"
-        if   fng <= 10: g_s, g_lbl = 10, "🟢 極度恐懼 (≤10)"
-        elif fng <= 20: g_s, g_lbl = 8,  "🟢 恐懼 (≤20)"
-        elif fng <= 25: g_s, g_lbl = 5,  "🟡 偏恐懼 (≤25)"
-        elif fng <= 30: g_s, g_lbl = 3,  "⚪ 偏空 (≤30)"
-        else:           g_s, g_lbl = 0,  "⚪ 中性/貪婪"
+        if   fng <= 10: g_s, g_lbl = 10, f"🟢 極度恐懼({g_val})"
+        elif fng <= 20: g_s, g_lbl = 8,  f"🟢 恐懼({g_val})"
+        elif fng <= 25: g_s, g_lbl = 5,  f"🟡 偏恐懼({g_val})"
+        elif fng <= 30: g_s, g_lbl = 3,  f"⚪ 偏空({g_val})"
+        else:           g_s, g_lbl = 0,  f"⚪ 中性/貪婪({g_val})"
 
     if not btc_d_trend or btc_d_trend.get("change_pp") is None:
         b_s, b_lbl, b_val = 0, "⚪ 累積中", "—"
     else:
         chg = btc_d_trend["change_pp"]
         b_val = f"{chg:+.1f}pp"
-        if   btc_d_trend.get("is_rising") or chg >= 1.0: b_s, b_lbl = 5, "🟢 BTC.D 上升 (避險回流)"
-        elif chg >= 0.5:                                 b_s, b_lbl = 3, "🟡 BTC.D 偏強"
-        else:                                            b_s, b_lbl = 0, "⚪ BTC.D 穩定/下降"
+        if   btc_d_trend.get("is_rising") or chg >= 1.0: b_s, b_lbl = 5, f"🟢 上升({b_val}) 避險回流"
+        elif chg >= 0.5:                                 b_s, b_lbl = 3, f"🟡 偏強({b_val})"
+        else:                                            b_s, b_lbl = 0, f"⚪ 穩定/下降({b_val})"
 
     return {
         "value": f"F&G {g_val}｜BTC.D {b_val}",
         "score": g_s + b_s, "max": WEIGHTS_LOW["sentiment"],
-        "label": f"{g_lbl}；{b_lbl}",
+        "label": f"F&G {g_lbl}；BTC.D {b_lbl}",
         "note": "恐懼貪婪極度恐懼 + BTC.D 上升（資金避險回流主鏈）",
         "sub": {"fng": (None if _nan(fng) else float(fng)), "fng_score": g_s,
                 "btcd_change_pp": (btc_d_trend or {}).get("change_pp"), "btcd_score": b_s},
@@ -248,24 +248,24 @@ def _score_onchain_low(etf_summary, sopr, mvrv_z=None) -> dict:
         s_s, s_lbl, s_val = 0, "⚪ 無資料源", "—"
     else:
         s_val = f"{sopr:.3f}"
-        if   sopr <= 0.92: s_s, s_lbl = 4, "🟢 SOPR 深度割肉 (投降)"
-        elif sopr <= 0.95: s_s, s_lbl = 3, "🟢 SOPR 割肉"
-        elif sopr <= 0.98: s_s, s_lbl = 2, "🟡 SOPR 微虧賣出"
-        else:              s_s, s_lbl = 0, "⚪ 中性/獲利賣出"
+        if   sopr <= 0.92: s_s, s_lbl = 4, f"🟢 深度割肉({sopr:.2f}) 投降"
+        elif sopr <= 0.95: s_s, s_lbl = 3, f"🟢 割肉({sopr:.2f})"
+        elif sopr <= 0.98: s_s, s_lbl = 2, f"🟡 微虧賣出({sopr:.2f})"
+        else:              s_s, s_lbl = 0, f"⚪ 中性/獲利({sopr:.2f})"
 
     if _nan(mvrv_z):
         m_s, m_lbl, m_val = 0, "⚪ 無資料源", "—"
     else:
         m_val = f"{mvrv_z:.2f}"
-        if   mvrv_z <= 0: m_s, m_lbl = 6, "🟢 MVRV-Z≤0 歷史底部區"
-        elif mvrv_z <= 1: m_s, m_lbl = 4, "🟢 MVRV-Z≤1 深度低估"
-        elif mvrv_z <= 2: m_s, m_lbl = 2, "🟡 MVRV-Z≤2 偏低"
-        else:             m_s, m_lbl = 0, "⚪ MVRV-Z 中性/偏高"
+        if   mvrv_z <= 0: m_s, m_lbl = 6, f"🟢 歷史底部區({mvrv_z:.1f})"
+        elif mvrv_z <= 1: m_s, m_lbl = 4, f"🟢 深度低估({mvrv_z:.1f})"
+        elif mvrv_z <= 2: m_s, m_lbl = 2, f"🟡 偏低({mvrv_z:.1f})"
+        else:             m_s, m_lbl = 0, f"⚪ 中性/偏高({mvrv_z:.1f})"
 
     return {
         "value": f"ETF {e_val}｜SOPR {s_val}｜MVRV-Z {m_val}",
         "score": e_s + s_s + m_s, "max": WEIGHTS_LOW["onchain"],
-        "label": f"ETF {e_lbl}；{s_lbl}；{m_lbl}",
+        "label": f"ETF {e_lbl}；SOPR {s_lbl}；MVRV-Z {m_lbl}",
         "note": "SOPR(AUC 0.585)/MVRV-Z(AUC 0.732)已驗證；ETF 連續淨流入 2024+ 資料薄沿用專家權重",
         "sub": {"etf_consecutive_inflow": (etf_summary or {}).get("consecutive_inflow_days"),
                 "etf_score": e_s, "sopr": (None if _nan(sopr) else float(sopr)),
@@ -282,7 +282,7 @@ def _score_macro_low(macro) -> dict:
     """
     if not macro:
         return {"value": "—", "score": 0, "max": WEIGHTS_LOW["macro"],
-                "label": "⚪ 無資料源",
+                "label": "總經 ⚪ 無資料源",
                 "note": "事件臨近=規則式(不可擬合)；通膨/就業 dovish=FRED 回測弱/落後確認(低權)",
                 "sub": {}}
     h_s = 0
@@ -303,7 +303,7 @@ def _score_macro_low(macro) -> dict:
     return {
         "value": "｜".join(bits) if bits else "中性",
         "score": h_s + e_s, "max": WEIGHTS_LOW["macro"],
-        "label": ("🟢 " + "、".join(bits)) if bits else "⚪ 中性",
+        "label": ("總經 🟢 " + "、".join(bits)) if bits else "總經 ⚪ 中性",
         "note": "事件臨近=規則式(不可擬合)；通膨/就業 dovish=待 FRED 回補驗證",
         "sub": {"dovish_score": h_s, "event_score": e_s, "event_within_days": ev},
     }

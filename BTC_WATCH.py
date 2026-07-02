@@ -199,20 +199,60 @@ def _cut_display(s, width):
 
 
 _SCORE_PREFIX_RE = re.compile(r"^(\s+[+\-]?\d{1,3}/[±]?\d{1,3}\s+)")
+_LIGHTS = "🔴🟢🟡🟠⚪🔵🟣"   # 燈號集合（子項格式「名稱 燈號 描述」的對齊錨點）
+
+
+def _split_name_light(sub):
+    """把子項「名稱 燈號 描述」拆成 (名稱去尾空白, 燈號起的其餘)。找不到燈號回 (None, sub)。"""
+    for i, ch in enumerate(sub):
+        if ch in _LIGHTS:
+            return sub[:i].rstrip(), sub[i:]
+    return None, sub
+
+
+def _align_subitems(s, prefix, width, cont_indent):
+    """分數列超寬且含多個「；」子項 → 每子項各自一行、名稱右補空白使燈號對齊。
+    有任一子項拆不出名稱（如假頂折減 ⚠ 警語）→ 回 None，交回貪婪斷行。"""
+    subs = [x.strip() for x in s[len(prefix):].split("；") if x.strip()]
+    parts = [_split_name_light(x) for x in subs]
+    if len(parts) < 2 or any(name is None for name, _ in parts):
+        return None
+    namew = max(_dw(name) for name, _ in parts)
+    indent = " " * cont_indent
+    out = []
+    for k, (name, rest) in enumerate(parts):
+        lead = prefix if k == 0 else indent
+        line = f"{lead}{name}{' ' * (namew - _dw(name))} {rest}"
+        if _dw(line) <= width:
+            out.append(line)
+        else:   # 該子項描述仍超寬 → 逐字硬切，續行縮到名稱欄之後
+            deep = " " * (cont_indent + namew + 1)
+            head, remain = _cut_display(line, width)
+            out.append(head)
+            while remain:
+                head, remain = _cut_display(deep + remain, width)
+                out.append(head)
+    return out
+
 
 def _wrap_display(s, width, cont_indent=None):
     """依顯示寬度把 s 折到 width 內（兩欄版每欄較窄，長列需換行）。
-    在 空白/；/｜/、/，/：/） 後貪婪斷行；單一片段仍超寬則逐字硬切。**不強制每個分號都換行**
-    （使用者要「一頁看完」→ 能塞同一行就塞，只有真的放不下才折，避免面板無謂變高）。
 
-    cont_indent=None（預設）時自動偵測：`_panel()`/`_panel_trend()` 產出的分數列開頭固定是
-    「  NN/MM  」或「  +NN/±MM 」這種分數前綴，續行縮排到前綴結束處，讓內容（如 Mayer/ETF
-    這些標籤文字）跟第一行對齊。非分數列（→/籌碼資料等）偵測不到前綴則退回 5 格。"""
+    分數列（`_panel`/`_panel_trend` 產出，開頭「  NN/MM  」）且超寬含多個「；」子項時：每個
+    子項各自一行、名稱右補空白使燈號對齊（見 _align_subitems，對應使用者「分號換行＋每項燈號
+    對齊」需求）。塞得下一行的短列不動（早返回）→ 不無謂變高、維持「一頁看完」。
+
+    其餘（→操作建議、〔參考〕、礦工/籌碼說明等非分數列）：在 空白/；/｜/、/，/：/） 後貪婪
+    斷行，單一片段仍超寬則逐字硬切；cont_indent 自動偵測分數前綴寬度、非分數列退回 5 格。"""
     if _dw(s) <= width:
         return [s]
+    m = _SCORE_PREFIX_RE.match(s)
     if cont_indent is None:
-        m = _SCORE_PREFIX_RE.match(s)
         cont_indent = _dw(m.group(1)) if m else 5
+    if m and "；" in s:
+        aligned = _align_subitems(s, m.group(1), width, cont_indent)
+        if aligned is not None:
+            return aligned
     # 1) 切成「可斷行片段」（分隔符留在片段尾；含中文標點斷點，長句才不會硬切在字中間）
     chunks, cur = [], ""
     for ch in s:
