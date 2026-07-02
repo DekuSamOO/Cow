@@ -257,7 +257,20 @@ S1 抽 panel（多檔×多日 + fwd_ret）→ S2 每日 ±18% 二分單維 AUC �
 **美股新框架（`core/relative_high_us.py`／`relative_low_us.py`，v0.1 新建）**：美股個股槓桿/
 法人/IV 無免費源，改用純 OHLCV 三維：技術背離 50（複用 `relative_high_tw._score_technical_high`，
 市場無關）+ 量價背離 30 + 結構轉折 20。watcher.py 美股分支從此有逃頂/抄底面板（原本只有趨勢軸）。
-**全數規則式、未在美股資料上回測過**，權重為專家經驗值。
+權重為專家經驗值。
+
+### 美股三維 swing-only 回測結論（2026-07-02，家用網路，`scripts/us_universal_backtest.py`）
+50 檔大型美股 10 年日線（Yahoo v8，全抓零 429）、swing-only out-of-sample（≥2024）單維 AUC：
+- **三維全部近雜訊，無一達 0.55**：抄底 swing low technical 0.497／vol_price 0.500／structure 0.511；
+  逃頂 swing high technical 0.467／vol_price 0.499／structure 0.488（樣本 919 low / 933 high，
+  真底 251、真頂僅 87）。
+- **現行專家權重 50/30/20 無實證背書，不宜據此重配**（沒有任一維賺到更高權重）。結構性原因：
+  權值股 10 年長多、真頂只有 87/933≈9%，純 OHLCV 抓頂在 mega-cap 上近乎不可能——與台股/加密
+  「頂靠估值貴、底靠槓桿清洗」一致，**純技術面缺籌碼/估值維度時美股雷達本質偏弱**。維持專家權重
+  但視為「僅參考、未獲實證」。
+- 踩坑：`us_universal_backtest._fill` 原用 `pd.concat(...).reindex(rows.index)` 對齊分數，但 alldf
+  跨 50 檔 concat → DatetimeIndex 重複日期 → `ValueError: cannot reindex on an axis with duplicate
+  labels`（任何網路都會崩）。已改逐檔 positional 賦值（commit 41e88fc）。
 
 **即時成交量 + 台股週轉率**：`service/ohlc_universal.fetch_live_quote` 新增 `volume`
 （Yahoo v8 chart `meta.regularMarketVolume`，同一次請求內、零額外網路成本，台股/美股皆有）。
@@ -270,10 +283,10 @@ S1 抽 panel（多檔×多日 + fwd_ret）→ S2 每日 ±18% 二分單維 AUC �
   邏輯 `if not self.encoding` 才觸發 BOM 猜測，設了就走 `.text` 走指定編碼，故此設定確實有效）。
 - 回應體積大（~1MB+全市場），實測 20–45 秒，故 **timeout 拉到 60s、快取拉到 24h**（不比照其他
   籌碼檔每小時重抓，股本變動極不頻繁）；抓取失敗退回舊快取而非清空。
-- **⚠️ NOT VERIFIED（僅 mock 測試過）**：`tests/test_tw_chip_shares.py` 全部用假回應測試，
-  這次 session 因公司網路環境未對本次寫的程式碼碼本身做過真實網路呼叫驗證（Agent A 是用獨立
-  探索腳本測的，非這裡最終落地的 `get_shares_outstanding` 本體）。**首次連正式環境時建議先跑一次
-  `watcher.py` 進台股標的觀察週轉率數字是否合理**，不要假設 mock 測試通過＝真實 API 一定正常。
+- **✅ 已驗證（2026-07-02 家用網路實打正式 API）**：`watcher.py` 進 2330，`get_shares_outstanding`
+  本體實連 TWSE OpenAPI 回 **25,932,370,067 股（≈259.3 億股，量級正確）**，週轉率
+  29,457,313÷股本×100 = **0.11%**（<0.5% 合理）。先前僅 `tests/test_tw_chip_shares.py` mock 測試，
+  本次為首次真實網路呼叫驗證通過。
 
 **已知陷阱（本次新增，避免重蹈）**：
 - watcher.py 的 `_panel(result, meta_fn, cap, name, dims)` 呼叫端 **`dims` tuple 必須與
