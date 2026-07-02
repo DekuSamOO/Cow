@@ -28,7 +28,7 @@ if _COW not in sys.path:
     sys.path.insert(0, _COW)
 
 from core.indicators import calculate_technical_indicators          # noqa: E402
-from core.trend_direction import compute_trend_score                # noqa: E402
+from core.trend_direction import compute_trend_score, trend_meta    # noqa: E402
 from core.action_ensemble import compute_trend_stance, compute_composite_action  # noqa: E402
 from core.relative_high_tw import compute_relative_high_tw, relative_high_tw_meta  # noqa: E402
 from core.relative_low_tw import compute_relative_low_tw, relative_low_tw_meta     # noqa: E402
@@ -36,9 +36,9 @@ from service.ohlc_universal import (classify_symbol, fetch_ohlc,            # no
                                     fetch_live_quote, live_quote_freshness, KIND_LABEL)
 # 重用 BTC_WATCH 既有的畫框 / 面板 / 等待 helper（單一真實來源，不重造）
 from core.momentum import momentum_ref_rows                             # noqa: E402
-from BTC_WATCH import (BitcoinMonitor, _title, _row, _edge, _dw, _panel,  # noqa: E402
-                       _short_momentum, _panel_trend, _panel_stance, interruptible_wait,
-                       _atr_risk_rows)
+from BTC_WATCH import (BitcoinMonitor, _title, _row, _edge, _dw, _bar, _bar_signed,  # noqa: E402
+                       _panel, _short_momentum, _panel_trend, _panel_stance,
+                       interruptible_wait, _atr_risk_rows, _print_pair, _wrap_display)
 
 
 def _fmt_price(v: float) -> str:
@@ -117,37 +117,48 @@ class UniversalMonitor:
         quote += momentum_ref_rows(df)
         # 風控框架（ATR 停損 + 近 60 日支撐壓力風報比）— 支撐用近期低（股票無動態地板）
         quote += _atr_risk_rows(df, close, support=None)
-        trend_title, trend_rows = _panel_trend(trend, "趨勢方向（順勢）",
-                                               ("ma_structure", "macd", "slope", "adx"))
+        _, trend_rows = _panel_trend(trend, "趨勢方向（順勢）",
+                                     ("ma_structure", "macd", "slope", "adx"))
+        ct_trend = f"趨勢  {trend[0]:+d}/±100  {_bar_signed(trend[0])}  {trend_meta(trend[0])[0]}"
 
         # 台股：完整逃頂/抄底（籌碼面）+ 三軸 composite；美股：僅趨勢×短線 stance
-        top_title = top_rows = low_title = low_rows = None
+        top_rows = low_rows = None
+        ct_top = ct_low = ""
         if self.is_tw and self._chip is not None:
             high = compute_relative_high_tw(row, df, chip=self._chip)
             low = compute_relative_low_tw(row, df, chip=self._chip)
-            top_title, top_rows = _panel(high, relative_high_tw_meta, 100, "逃頂訊號（台股籌碼）",
-                                         ("technical", "valuation", "volume", "leverage", "institution", "tdcc"))
-            low_title, low_rows = _panel(low, relative_low_tw_meta, 100, "抄底訊號（台股籌碼）",
-                                         ("leverage", "technical", "institution", "tdcc", "valuation"))
+            _, top_rows = _panel(high, relative_high_tw_meta, 100, "逃頂訊號（台股籌碼）",
+                                 ("technical", "valuation", "volume", "leverage", "institution", "tdcc"))
+            _, low_rows = _panel(low, relative_low_tw_meta, 100, "抄底訊號（台股籌碼）",
+                                 ("leverage", "technical", "institution", "tdcc", "valuation"))
+            ct_top = f"逃頂  {high[0]}/100  {_bar(high[0], 100)}  {relative_high_tw_meta(high[0])[0]}"
+            ct_low = f"抄底  {low[0]}/100  {_bar(low[0], 100)}  {relative_low_tw_meta(low[0])[0]}"
             # 三軸 composite：不傳 cycle_score（台股估值對底部是雜訊、且 max 僅 10 達不到 cycle 門檻）；
             # 由重配重後的 low_score≥60 驅動 value 分支（已含融資清洗權重30 這個校準最強底部維）。
             act = compute_composite_action(trend[0], high[0], low[0])
-            comp_title, comp_rows = _panel_stance(
-                "操作訊號（三軸融合）", f"{act['emoji']} {act['action']}", act["detail"])
+            _, comp_rows = _panel_stance(
+                "操作", f"{act['emoji']} {act['action']}", act["detail"])
             comp_rows.append(f"     {act['pos_label']}")
+            ct_comp = f"操作  {act['emoji']} {act['action']}"
             note = [f"  籌碼資料截至 {self._chip.get('as_of', '—')}（TWSE EOD；今日未收/連假自動取最近交易日）",
                     "  ⚠ 台股逃頂/抄底 v0.2〔2026-06 swing 回測校準〕：逃頂靠估值(PE/PB絕對 AUC~0.63)、",
                     "     抄底靠融資清洗(AUC 0.564)；法人/TDCC 為弱維(AUC<0.55)僅參考。"]
         else:
             st = compute_trend_stance(trend[0], mom)
-            comp_title, comp_rows = _panel_stance(
-                "操作訊號（趨勢×短線）", f"{st['emoji']} {st['action']}", st["detail"])
+            _, comp_rows = _panel_stance(
+                "操作", f"{st['emoji']} {st['action']}", st["detail"])
+            ct_comp = f"操作  {st['emoji']} {st['action']}"
             note = ["  ⚠ 美股：個股槓桿/法人/IV 無免費源 → 僅通用軸（趨勢方向＋技術＋短線動能）。"]
 
-        panels_rows = (top_rows or []) + (low_rows or [])
-        content_w = max((_dw(c) for c in (header + quote + trend_rows + comp_rows + panels_rows + note)), default=40)
-        W = max(content_w, _dw(trend_title) + 4, _dw(comp_title) + 4,
-                _dw(top_title or "") + 4, _dw(low_title or "") + 4, _dw("即時行情") + 4) + 2
+        # 兩欄並排：操作｜趨勢、逃頂｜抄底（台股才有後者）— 與 BTC_WATCH 同一套版面（省垂直高度、一頁看完）
+        panels = [(t, r) for t, r in ((ct_comp, comp_rows), (ct_trend, trend_rows),
+                                      (ct_top, top_rows), (ct_low, low_rows)) if r]
+
+        w_full = max((_dw(c) for c in (header + quote + note)), default=40)
+        col_need = max((_dw(t) for t, _ in panels), default=40) + 4   # +4：┌─ … ─┐ 邊距
+        W = max(w_full, 2 * col_need + 2, _dw("即時行情") + 4)
+        wl = (W - 2) // 2
+        wr = (W - 2) - wl
 
         print(_edge("╔", "═", "╗", W))
         print(_row(header[0], W, "║"))
@@ -162,30 +173,23 @@ class UniversalMonitor:
             print(_row(r, W))
         print(_edge("└", "─", "┘", W))
 
-        print()
-        print(_title(comp_title, W))
-        for r in comp_rows:
-            print(_row(r, W))
-        print(_edge("└", "─", "┘", W))
-
-        print()
-        print(_title(trend_title, W))
-        for r in trend_rows:
-            print(_row(r, W))
-        print(_edge("└", "─", "┘", W))
-
-        for ttl, rws in ((top_title, top_rows), (low_title, low_rows)):
-            if rws:
-                print()
-                print(_title(ttl, W))
-                for r in rws:
-                    print(_row(r, W))
+        for i in range(0, len(panels), 2):
+            print()
+            if i + 1 < len(panels):
+                _print_pair(panels[i], panels[i + 1], wl, wr)
+            else:                                    # 奇數面板（美股僅操作+趨勢時不會發生）→ 佔全寬
+                t, rows = panels[i]
+                print(_title(t, W))
+                for r in rows:
+                    for seg in _wrap_display(r, W):
+                        print(_row(seg, W))
                 print(_edge("└", "─", "┘", W))
 
         print()
         print(_title("說明", W))
         for r in note:
-            print(_row(r, W))
+            for seg in _wrap_display(r, W):
+                print(_row(seg, W))
         print(_edge("└", "─", "┘", W))
 
         print(f"\n  下次刷新 {nxt}    （b 重選代號｜q 結束）")
