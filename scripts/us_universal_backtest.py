@@ -21,7 +21,6 @@ import sys
 import time
 import argparse
 
-import numpy as np
 import pandas as pd
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -125,17 +124,20 @@ def main():
     highs = test[test["is_swing_high"] & test["fwd_ret"].notna()].copy()
     print(f"[2] test swing low {len(lows):,} / high {len(highs):,}；逐點算三維分數…")
 
-    # 逐檔算（trailing 窗須同檔），再合併
+    # 逐檔算（trailing 窗須同檔），再合併。
+    # 註：alldf 跨 50 檔 concat → DatetimeIndex 有重複日期，不能用 reindex（會 ValueError:
+    # duplicate labels）。改為逐檔 positional 賦值：_scores_at 依 sub_rows.index 順序算分、
+    # pd.Series(dict) 保序，故 .to_numpy() 與該 ticker 的 rows 逐列對齊；AUC 不在意 row 順序。
     def _fill(rows, side):
-        parts = {"technical": [], "vol_price": [], "structure": []}
+        blocks = []
         for tk, sub_rows in rows.groupby("ticker"):
             dsub = alldf[alldf["ticker"] == tk]
             sc = _scores_at(dsub, sub_rows, side)
-            for k in parts:
-                parts[k].append(sc[k])
-        for k in parts:
-            rows[k] = pd.concat(parts[k]).reindex(rows.index) if parts[k] else np.nan
-        return rows
+            block = sub_rows.copy()
+            for k in ("technical", "vol_price", "structure"):
+                block[k] = sc[k].to_numpy()
+            blocks.append(block)
+        return pd.concat(blocks)
 
     lows = _fill(lows, "low")
     highs = _fill(highs, "high")
