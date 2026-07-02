@@ -141,7 +141,7 @@ def _gather_radar_externals(cache_key: str) -> dict:
     macro 同時帶逃頂（hot/strong = 逆風）與抄底（cool/weak = 順風）兩套布林欄位，
     兩側雷達各取所需：逃頂吃 cpi_hot/jobs_strong，抄底吃 cpi_cool/jobs_weak。
     """
-    out = {"etf": None, "sopr": None, "btcd": None, "macro": None, "asof": None}
+    out = {"etf": None, "sopr": None, "btcd": None, "macro": None, "asof": None, "mvrv_z": None}
     try:
         out["etf"] = get_etf_flow_summary()
     except Exception:
@@ -150,6 +150,7 @@ def _gather_radar_externals(cache_key: str) -> dict:
         bm = get_latest_bottom_metrics()
         out["sopr"] = bm.get("sopr")
         out["asof"] = bm.get("asof")
+        out["mvrv_z"] = bm.get("mvrv_zscore")   # 2026-07 已驗證計入 onchain 子分，見 core/relative_high.py
     except Exception:
         pass
     try:
@@ -249,6 +250,7 @@ def _render_escape_block(btc, curr, funding_rate, fng_val, realtime_data):
             fng=float(fng_val) if fng_val is not None else None,
             btc_d_trend=ext.get('btcd'),
             macro=ext.get('macro'),
+            mvrv_z=ext.get('mvrv_z'),
         )
     except Exception as e:
         _warn_unavailable('逃頂評分', e)
@@ -335,6 +337,7 @@ def _render_dip_block(btc, curr, funding_rate, fng_val, realtime_data):
             fng=float(fng_val) if fng_val is not None else None,
             btc_d_trend=ext.get('btcd'),
             macro=ext.get('macro'),   # 同時含 cool/weak 欄位，抄底側取順風項
+            mvrv_z=ext.get('mvrv_z'),
         )
     except Exception as e:
         _warn_unavailable('抄底評分', e)

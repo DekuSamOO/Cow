@@ -318,8 +318,11 @@ def _compute_radars(btc_df, curr, latest_funding, price) -> dict:
     except Exception:
         pass
 
-    sopr = btcd = etf = macro = None
-    try: sopr = get_latest_bottom_metrics().get("sopr")
+    sopr = btcd = etf = macro = mvrv_z = None
+    try:
+        _bm = get_latest_bottom_metrics()
+        sopr = _bm.get("sopr")
+        mvrv_z = _bm.get("mvrv_zscore")   # 2026-07 已驗證計入 onchain 子分，見 core/relative_high.py
     except Exception: pass
     try: btcd = get_btcd_trend()
     except Exception: pass
@@ -347,7 +350,7 @@ def _compute_radars(btc_df, curr, latest_funding, price) -> dict:
         pass
 
     common = dict(funding_8h=latest_funding, oi_stats=None, etf_summary=etf,
-                  sopr=sopr, fng=fng, btc_d_trend=btcd, macro=macro)
+                  sopr=sopr, fng=fng, btc_d_trend=btcd, macro=macro, mvrv_z=mvrv_z)
     rh = compute_relative_high(price, curr, btc_df, **common)
     rl = compute_relative_low(price, curr, btc_df, **common)
     td = compute_trend_direction(curr, btc_df)

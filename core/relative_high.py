@@ -39,17 +39,23 @@ from core.season_forecast import forecast_price, get_current_season
 FUNDING_ANN_YELLOW = 30.0    # 年化 % — 過熱起點（回撤轉折；黃）
 FUNDING_ANN_RED    = 50.0    # 年化 % — 極端/滿分（回撤飽和；紅）
 
-# Layer A 五維權重（各維最高分；總和 100）
+# Layer A 五維權重（各維最高分；理論總和 106，compute_escape_top_score clamp 到 100）
 WEIGHTS = {
     "derivatives": 30,   # 一、合約過熱（資金費率 20 + OI 10）
     "technical":   25,   # 二、技術衰竭（頂背離 18 + RSI 超買 7）
-    "onchain":     20,   # 三、鏈上派發（ETF 連續流出 12 + SOPR 8）
+    "onchain":     26,   # 三、鏈上派發（ETF 連續流出 12 + SOPR 8 + MVRV-Z 6，見下方 2026-07 驗證）
     "sentiment":   15,   # 四、情緒過熱（F&G 10 + BTC.D 輪動 5）
     "macro":       10,   # 五、總經逆風（通膨/就業 hawkish + 事件臨近）
 }
 
-# 權重未經回測擬合的維度（歷史資料不足；介面需標示）
+# 權重未經回測擬合的維度（歷史資料不足；介面需標示）— onchain 內 ETF/SOPR（頂側）仍未擬合，
+# 但 MVRV-Z 子項已於下方驗證通過，UNFITTED_DIMS 是「維度級」標記，混合狀態不拆更細的粒度。
 UNFITTED_DIMS = ("onchain",)   # OI 無歷史、ETF 僅 2024+ → onchain 維度視為未擬合
+
+# 2026-07 MVRV-Z 逃頂側驗證（tests/relative_ref_signals_backtest.py，本地已快取 db/bottom_metrics_cache.json
+# 的 mvrv_zscore，2022-07+，零新網路請求）：swing 高點 order=10、60日內回撤≥18% 為正樣本，
+# n_pos=20/n_neg=53，值越高越像頂 → AUC=0.592，過 0.55 門檻 → 從「參考顯示」（原 reference_top_signals）
+# 轉正式計分子項（權重 6，明顯低於 SOPR 的 8，因 AUC 較弱、樣本亦較少，屬保守配重）。
 # macro hawkish flags（通膨/就業）：2026-07 家用網路（FRED 可達）回測通過
 #   （tests/relative_low_macro_backtest.py）：point-in-time hawkish_score 對相對頂部
 #   全期 AUC=0.607、資金費率時代 AUC=0.660（頂部觸發率 67% > 非頂 47%）— 頂部與升息環境
@@ -149,8 +155,9 @@ def _score_technical(row, df) -> dict:
     }
 
 
-def _score_onchain(etf_summary, sopr) -> dict:
-    """鏈上派發（max 20）= ETF 連續淨流出(12) + SOPR 飆高(8)。未擬合維度。"""
+def _score_onchain(etf_summary, sopr, mvrv_z=None) -> dict:
+    """鏈上派發（max 26）= ETF 連續淨流出(12) + SOPR 飆高(8) + MVRV-Z 過熱(6)。
+    ETF/SOPR 未擬合；MVRV-Z 2026-07 已驗證（AUC 0.592，見 WEIGHTS 上方註解）。"""
     # ETF 連續淨流出天數（筆記：連續 13 天淨流出為強訊號）
     if not etf_summary or etf_summary.get("n", 0) == 0:
         e_s, e_lbl, e_val = 0, "⚪ 無資料", "—"
@@ -175,12 +182,23 @@ def _score_onchain(etf_summary, sopr) -> dict:
         elif sopr >= 1.01: s_s, s_lbl = 2, "⚪ 小幅獲利了結"
         else:              s_s, s_lbl = 0, "⚪ 中性/虧損賣出"
 
+    # MVRV-Z（市值/實現市值 z-score；越高越貴，歷史大頂多在 ≥7）
+    if _nan(mvrv_z):
+        m_s, m_lbl, m_val = 0, "⚪ 無資料", "—"
+    else:
+        m_val = f"{mvrv_z:.2f}"
+        if   mvrv_z >= 7: m_s, m_lbl = 6, "🔴 MVRV-Z≥7 歷史大頂"
+        elif mvrv_z >= 5: m_s, m_lbl = 4, "🟠 MVRV-Z≥5 過熱"
+        elif mvrv_z >= 3: m_s, m_lbl = 2, "🟡 MVRV-Z≥3 偏熱"
+        else:             m_s, m_lbl = 0, "⚪ MVRV-Z 中性/偏低"
+
     return {
-        "value": f"ETF {e_val}｜SOPR {s_val}",
-        "score": e_s + s_s, "max": WEIGHTS["onchain"],
-        "label": f"ETF {e_lbl}；{s_lbl}",
-        "note": "⚠️ 未擬合：ETF 連續淨流出(Farside) + SOPR(bitcoin-data)",
+        "value": f"ETF {e_val}｜SOPR {s_val}｜MVRV-Z {m_val}",
+        "score": e_s + s_s + m_s, "max": WEIGHTS["onchain"],
+        "label": f"ETF {e_lbl}；{s_lbl}；{m_lbl}",
+        "note": "⚠️ ETF/SOPR 未擬合；MVRV-Z 已驗證(AUC 0.592，2026-07)",
         "sub": {"etf_consecutive_outflow": (etf_summary or {}).get("consecutive_outflow_days"),
+                "mvrv_z": (None if _nan(mvrv_z) else float(mvrv_z)), "mvrv_z_score": m_s,
                 "etf_score": e_s, "sopr": (None if _nan(sopr) else float(sopr)),
                 "sopr_score": s_s},
     }
@@ -264,6 +282,7 @@ def compute_escape_top_score(
     fng: Optional[float] = None,
     btc_d_trend: Optional[dict] = None,
     macro: Optional[dict] = None,
+    mvrv_z: Optional[float] = None,
 ) -> Tuple[int, Dict[str, dict]]:
     """
     Layer A 逃頂綜合評分（0–100）。鏡像 bear_bottom.calculate_bear_bottom_score。
@@ -272,11 +291,12 @@ def compute_escape_top_score(
     row：最新日線（含 RSI_14 等技術欄位，pd.Series 或 dict-like）。
     df ：完整日線（背離偵測用）。其餘為各資料服務算好的純量/dict（呼叫端注入，
          本層不做任何網路請求 → 易測、可被 BTC_WATCH 以自抓資料餵入）。
+    mvrv_z：2026-07 已驗證計入 onchain 子分（見 WEIGHTS 上方註解），不再是純參考。
     """
     signals = {
         "derivatives": _score_derivatives(funding_8h, oi_stats),
         "technical":   _score_technical(row, df),
-        "onchain":     _score_onchain(etf_summary, sopr),
+        "onchain":     _score_onchain(etf_summary, sopr, mvrv_z),
         "sentiment":   _score_sentiment(fng, btc_d_trend),
         "macro":       _score_macro(macro),
     }
@@ -298,24 +318,9 @@ def escape_top_meta(score: int) -> Tuple[str, str, str]:
     return "🟢 無過熱", "#00cc88", "無逃頂壓力"
 
 
-def reference_top_signals(*, mvrv_z: Optional[float] = None) -> Dict[str, dict]:
-    """逃頂側社群參考指標（**不計入 escape_score**；dashboard/BTC_WATCH 顯示用）。
-
-    MVRV-Z 為社群命中力最強的單一鏈上頂底指標，真值已由 service/bottom_metrics
-    （get_latest_bottom_metrics()['mvrv_zscore']）抓取。此處僅判讀、未納入加權——
-    納入加權前須以 tests/relative_high_backtest.py 的 swing + Mann-Whitney AUC 驗證
-    （AUC≥0.55），避免憑社群閾值直接調已校準權重。
-    """
-    out: Dict[str, dict] = {}
-    if not _nan(mvrv_z):
-        z = float(mvrv_z)
-        if   z >= 7: lbl = "🔴 MVRV-Z≥7 歷史大頂派發區"
-        elif z >= 5: lbl = "🟠 MVRV-Z≥5 過熱"
-        elif z >= 3: lbl = "🟡 MVRV-Z≥3 偏熱"
-        else:        lbl = "⚪ MVRV-Z 中性/偏低"
-        out["mvrv_z"] = {"value": f"{z:.2f}", "label": lbl,
-                         "note": "參考（未計入加權，待回測 AUC 驗證）"}
-    return out
+# reference_top_signals（原「MVRV-Z 參考顯示，未計入加權」）已於 2026-07 移除：
+# tests/relative_ref_signals_backtest.py 驗證 MVRV-Z 逃頂方向 AUC=0.592（過 0.55 門檻），
+# 改為 _score_onchain 的正式計分子項（見上方 WEIGHTS 與 UNFITTED_DIMS 註解），不再是純參考。
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -409,11 +414,12 @@ def compute_relative_high(
     """
     相對高點完整評估（Layer A + Layer B + 價位錨）。
     所有外部資料由呼叫端注入（本層零網路請求），dashboard 與 BTC_WATCH 共用。
-    mvrv_z：社群參考指標，僅顯示於 reference_signals，不計入 escape_score（待回測）。
+    mvrv_z：2026-07 已驗證計入 escape_score（onchain 子分，見 core.relative_high.WEIGHTS 註解），
+    不再只是參考顯示（舊版 reference_signals/reference_top_signals 已移除）。
     """
     score, signals = compute_escape_top_score(
         row, df, funding_8h=funding_8h, oi_stats=oi_stats, etf_summary=etf_summary,
-        sopr=sopr, fng=fng, btc_d_trend=btc_d_trend, macro=macro)
+        sopr=sopr, fng=fng, btc_d_trend=btc_d_trend, macro=macro, mvrv_z=mvrv_z)
     level, color, action = escape_top_meta(score)
     return {
         "escape_score":   score,
@@ -424,5 +430,4 @@ def compute_relative_high(
         "cycle_top":      compute_cycle_top_state(row, df, price),
         "top_estimates":  compute_cycle_top_estimates(price, df),
         "unfitted_dims":  list(UNFITTED_DIMS),
-        "reference_signals": reference_top_signals(mvrv_z=mvrv_z),
     }

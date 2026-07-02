@@ -147,6 +147,27 @@ SOPR（`get_latest_bottom_metrics`，bitcoin-data 12h 快取）、BTC.D 趨勢�
 
 詳見 PLAN：`Obsidian/Github/Cow/20260608plan_相對高點判斷.md`、`20260609plan_相對底部判斷.md`。
 
+### MVRV-Z / Hash Ribbons 社群參考訊號回測結論（2026-07，`tests/relative_ref_signals_backtest.py`）
+原本 `reference_top_signals`/`reference_low_signals` 的 MVRV-Z、Hash Ribbons 只是「顯示不計分」，
+用本地已快取歷史（`db/bottom_metrics_cache.json` 的 mvrv_zscore 2022-07+、`db/hashrate_history.json`
+全史，零新網路請求）跑 swing 高低點 AUC 驗證（方法同 relative_high/low_backtest.py）：
+- **MVRV-Z 逃頂**：swing 高點 n_pos=20/n_neg=53，值越高越像頂 → **AUC=0.592**，過 0.55 門檻。
+- **MVRV-Z 抄底**：swing 低點 n_pos=23/n_neg=104，用 -z 當單調子分數 → **AUC=0.732**，
+  **比現役 SOPR(0.585) 還強**，過門檻。
+- **Hash Ribbons 抄底**（投降強度 (SMA60-SMA30)/SMA60）：n=191 → **AUC=0.359，方向反/無效**，
+  維持參考不計分。不代表理論錯誤，可能是「持續投降深度」非最佳代理（黃金交叉事件本身未另測，
+  Hash Ribbons 官方定義的最強訊號其實是交叉瞬間，不是投降期間的持續深度）。
+
+**結論已落地**：MVRV-Z 從「參考顯示」轉正式計分——`core/relative_high.py::_score_onchain`
+onchain 維度 20→26（+MVRV-Z 6，AUC 較弱給保守配重）；`core/relative_low.py::_score_onchain_low`
+onchain 維度 10→16（+MVRV-Z 6，配重與 ETF 同級因 AUC 是全維度最強）。兩側 `compute_escape_top_score`/
+`compute_relative_low_score` 新增 `mvrv_z` 參數，三個消費端（`BTC_WATCH.py`、
+`handler/tab_macro_compass.py::_gather_radar_externals`、`scripts/daily_line_notify.py::_compute_radars`）
+皆已補上 `mvrv_z=ext.get("mvrv_z")`／`bm.get("mvrv_zscore")` 餵入。`reference_top_signals` 整支移除
+（原本只含 mvrv_z）；`reference_low_signals` 拿掉 mvrv_z 參數，只剩 Hash Ribbons。**注意**：呼叫端
+若仍對 `reference_low_signals` 傳 `mvrv_z=` 會直接 `TypeError`（刻意不做向後相容的靜默 no-op，
+避免悄悄失效沒人發現）。
+
 ---
 
 ## 台股版逃頂/抄底（watcher 台股分支，2026-06-21 v0.1 → 2026-06-23 v0.2 回測校準）

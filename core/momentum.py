@@ -55,10 +55,14 @@ def time_series_momentum(df, lookbacks=_LOOKBACKS) -> dict:
 
 
 def momentum_ref_rows(df) -> list:
-    """TSM 參考訊號顯示列（**未計入加權，待回測啟用**）。回傳 0–1 列。"""
+    """TSM 參考訊號顯示列。回傳 0–1 列。
+
+    ⚠️ 標籤寫「已回測無效」而非「待回測」：`tests/momentum_backtest.py` 2026-07 已跑過
+    （見檔頭），結論是負面（無預測力、打不贏 B&H），不是「還沒測」。維持顯示僅供參考、
+    不計分是**已下的結論**，寫成待回測會誤導成「還沒驗證」。"""
     m = time_series_momentum(df)
     if not m["rets"]:
         return []
     parts = "  ".join(f"{_LB_LABEL.get(lb, f'{lb}d')} {r * 100:+.0f}%"
                       for lb, r in m["rets"].items())
-    return [f"  〔動能·參考·未計入分數，待回測〕 {parts} → {m['label']}"]
+    return [f"  〔動能·參考·已回測無效〕 {parts} → {m['label']}"]

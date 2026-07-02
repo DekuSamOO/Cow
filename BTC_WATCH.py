@@ -32,8 +32,7 @@ _COW_OK = False
 try:
     from core.indicators import calculate_technical_indicators, calculate_ahr999
     from core.bear_bottom import calculate_bear_bottom_indicators
-    from core.relative_high import (compute_escape_top_score, escape_top_meta,
-                                    annualize_funding, reference_top_signals)
+    from core.relative_high import compute_escape_top_score, escape_top_meta, annualize_funding
     from core.relative_low import (compute_relative_low_score, relative_low_meta,
                                    reference_low_signals)
     from core.trend_direction import compute_trend_score, trend_meta
@@ -107,10 +106,16 @@ def _panel(result, meta_fn, cap, name, dims):
 
 
 def _ref_rows(ref: dict) -> list:
-    """社群參考訊號（MVRV-Z / Hash Ribbons）→ 顯示列。**未計入加權總分**，啟用需先過回測。"""
+    """社群參考訊號（僅剩 Hash Ribbons）→ 顯示列。**未計入加權總分**。
+
+    2026-07 用 tests/relative_ref_signals_backtest.py 實測：MVRV-Z 逃頂/抄底皆過 AUC≥0.55
+    門檻（0.592/0.732），已移入 core/relative_high.py::_score_onchain／relative_low.py::
+    _score_onchain_low 正式計分，不再經過這裡。Hash Ribbons 投降強度同批測得 AUC=0.359
+    （方向反/無效），維持參考不計分——標籤寫「已回測」而非「待回測」，理由同
+    core/momentum.py::momentum_ref_rows。"""
     if not ref:
         return []
-    out = ["  〔參考·未計入分數，待回測啟用〕"]
+    out = ["  〔參考·已回測弱〕"]
     for v in ref.values():
         out.append(f"     {v['label']}（{v['value']}）")
     return out
@@ -242,30 +247,25 @@ def _wrap_display(s, width, cont_indent=None):
     return lines
 
 
-def _panel_block(title, rows, inner_w):
-    """單一面板 → 固定內寬 inner_w 的完整框線 block（┌title┐ / │rows│ / └┘）。超寬列自動換行。"""
-    block = [_title(title, inner_w)]
-    for r in rows:
-        for seg in _wrap_display(r, inner_w):
-            block.append(_row(seg, inner_w))
-    block.append(_edge("└", "─", "┘", inner_w))
-    return block
-
-
-def _pad_block(block, h, inner_w):
-    """把 block 用空內容列（│   │）墊到高度 h，空列插在底框 └──┘ 之前 → 兩欄底框對齊。"""
-    if len(block) >= h:
-        return block
-    return block[:-1] + [_row("", inner_w)] * (h - len(block)) + [block[-1]]
-
-
 def _print_pair(pa, pb, wl, wr):
-    """兩面板 (title, rows) 左右並排列印；較短一側墊空列到同高，使 └──┘ 底框對齊。"""
-    a = _panel_block(pa[0], pa[1], wl)
-    b = _panel_block(pb[0], pb[1], wr)
-    h = max(len(a), len(b))
-    for la, lb in zip(_pad_block(a, h, wl), _pad_block(b, h, wr)):
-        print(la + lb)
+    """兩面板 (title, rows) 左右並排列印，逐「列」（非逐「行」）配對：
+    若某一列在其中一欄因內容過長換行成多行，另一欄同一列即使沒換行也補空行撐到同高，
+    確保後續列不會因為某一欄先換行、另一欄沒換行而整段錯位（例如逃頂/抄底同一列「資費」
+    長度不對稱時，舊版是各自 wrap 完再攤平成一維列表逐行 zip，兩欄從此點之後全部對不上；
+    新版逐列比較兩欄各自的換行行數，取較高者同步補齊，之後每一列仍能對齊）。"""
+    ta, ra = pa
+    tb, rb = pb
+    print(_title(ta, wl) + _title(tb, wr))
+    wrapped_a = [_wrap_display(r, wl) for r in ra]
+    wrapped_b = [_wrap_display(r, wr) for r in rb]
+    for i in range(max(len(wrapped_a), len(wrapped_b))):
+        la_lines = wrapped_a[i] if i < len(wrapped_a) else []
+        lb_lines = wrapped_b[i] if i < len(wrapped_b) else []
+        for j in range(max(len(la_lines), len(lb_lines))):
+            la = la_lines[j] if j < len(la_lines) else ""
+            lb = lb_lines[j] if j < len(lb_lines) else ""
+            print(_row(la, wl) + _row(lb, wr))
+    print(_edge("└", "─", "┘", wl) + _edge("└", "─", "┘", wr))
 
 
 def interruptible_wait(seconds, nav=False):
@@ -527,8 +527,7 @@ class BitcoinMonitor:
         return self.FALLBACK_SUPPORT, "fallback 靜態防線", None
 
     # ── 畫面 ────────────────────────────────────────────────────────────────────
-    def render(self, md, funding, oi_stats, top, low, trend=None, mom=None,
-               ref_top=None, ref_low=None):
+    def render(self, md, funding, oi_stats, top, low, trend=None, mom=None, ref_low=None):
         os.system("cls" if os.name == "nt" else "clear")
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         nxt = (datetime.datetime.now() + datetime.timedelta(seconds=60)).strftime("%H:%M:%S")
@@ -569,7 +568,9 @@ class BitcoinMonitor:
             quote.append(f"  動態地板      ${sup:>12,.0f}   （{basis}，需 {drop_to:+.1f}% 觸及）")
         if ens:
             quote.append(f"  多錨中位      ${ens:>12,.0f}   （需 {(ens/md['close']-1)*100:+.1f}% 觸及）")
-        quote.append(f"  總持倉量      {md['total_oi']:>12,.0f} {self.oi_unit} （U {md['u_oi']:,.0f} + 幣本位 {md['coin_oi_btc']:,.0f}）")
+        # 總持倉量沒有 $ 符號（跟現價/4h最低/動態地板/多錨中位不同），多補 1 格空白抵掉
+        # 缺的那個字元寬度，讓千位符號分隔的數字跟上面 4 行的 $ 後數字對齊在同一欄。
+        quote.append(f"  總持倉量       {md['total_oi']:>12,.0f} {self.oi_unit} （U {md['u_oi']:,.0f} + 幣本位 {md['coin_oi_btc']:,.0f}）")
         oi_line = "✕ 擷取失敗" if ch is None else f"{ch:+.2f}% (1h滾動)"
         pct_line = "" if pct is None else f"  |  近30日分位 {pct:.0f}%"
         quote.append(f"  OI 變化       {oi_line}{pct_line}")
@@ -588,9 +589,8 @@ class BitcoinMonitor:
                              ("derivatives", "technical", "onchain", "sentiment", "macro"))
         _, low_rows = _panel(low, relative_low_meta, self.LOW_CAP, "抄底訊號（進場）",
                              ("cycle", "derivatives", "technical", "sentiment", "onchain", "macro"))
-        # 社群參考訊號（未計入加權）插在各面板「→ 操作建議」之前
-        if top_rows and ref_top:
-            top_rows[-1:-1] = _ref_rows(ref_top)
+        # 社群參考訊號（未計入加權，僅剩 Hash Ribbons——MVRV-Z 已驗證轉正式計分見上方）
+        # 插在面板「→ 操作建議」之前
         if low_rows and ref_low:
             low_rows[-1:-1] = _ref_rows(ref_low)
         _, trend_rows = _panel_trend(trend, "趨勢方向（順勢）",
@@ -678,7 +678,7 @@ class BitcoinMonitor:
             oi_stats = self.get_oi_stats()
 
             top = low = trend = mom = None
-            ref_top = ref_low = None
+            ref_low = None
             if _COW_OK:
                 self._refresh_daily()
                 df = self._daily_cache
@@ -689,19 +689,16 @@ class BitcoinMonitor:
                     top = compute_escape_top_score(
                         row, df, funding_8h=funding_8h, oi_stats=oi_stats, fng=self._fng_cache,
                         etf_summary=ext.get("etf"), sopr=ext.get("sopr"),
-                        btc_d_trend=ext.get("btcd"), macro=ext.get("macro"))
+                        btc_d_trend=ext.get("btcd"), macro=ext.get("macro"), mvrv_z=ext.get("mvrv_z"))
                     low = compute_relative_low_score(
                         row, df, funding_8h=funding_8h, oi_stats=oi_stats, fng=self._fng_cache,
                         etf_summary=ext.get("etf"), sopr=ext.get("sopr"),
-                        btc_d_trend=ext.get("btcd"), macro=ext.get("macro"))
+                        btc_d_trend=ext.get("btcd"), macro=ext.get("macro"), mvrv_z=ext.get("mvrv_z"))
                     trend = compute_trend_score(row, df)
                     mom = _short_momentum(df)
-                    # 社群參考訊號（MVRV-Z / Hash Ribbons）— 未計入加權，僅顯示
-                    ref_top = reference_top_signals(mvrv_z=ext.get("mvrv_z"))
-                    ref_low = reference_low_signals(mvrv_z=ext.get("mvrv_z"),
-                                                    hashrate_hist=ext.get("hashrate_hist"))
-                self.render(md, funding, oi_stats, top, low, trend, mom,
-                            ref_top=ref_top, ref_low=ref_low)
+                    # 社群參考訊號（僅剩 Hash Ribbons）— 未計入加權，僅顯示
+                    ref_low = reference_low_signals(hashrate_hist=ext.get("hashrate_hist"))
+                self.render(md, funding, oi_stats, top, low, trend, mom, ref_low=ref_low)
             else:
                 self.render_simple(md, funding, oi_stats)
 

@@ -41,15 +41,27 @@ from core.relative_high import annualize_funding
 FUNDING_ANN_LOW_YELLOW = -5.0    # 年化 % — 明顯空方付費（主判別帶；黃）
 FUNDING_ANN_LOW_RED    = -20.0   # 年化 % — 極端空方付費（危機級洗盤；紅）
 
-# 六維權重（各維最高分；總和 100）— 經 relative_low_backtest 拍板（實證導向）
+# 六維權重（各維最高分；理論總和 106，compute_relative_low_score clamp 到 100）
+# — 經 relative_low_backtest 拍板（實證導向）
 WEIGHTS_LOW = {
     "cycle":       25,   # 一、長週期深跌（Mayer 10 + 200週 9 + 冪律 6）← AUC 最強
     "derivatives": 20,   # 二、合約超冷（負費率 10 + OI 滾動清洗 10）
     "technical":   20,   # 三、技術回穩（底背離 14 + RSI 超賣 6）
     "sentiment":   15,   # 四、情緒恐慌（F&G 10 + BTC.D 上升 5）
-    "onchain":     10,   # 五、鏈上吸籌（ETF 連續流入 6 + SOPR 割肉 4）灰燈
+    "onchain":     16,   # 五、鏈上吸籌（ETF 連續流入 6 + SOPR 割肉 4 + MVRV-Z 深度低估 6，見下方 2026-07 驗證）
     "macro":       10,   # 六、總經順風（降息/鴿派 7 + 事件臨近 3）灰燈
 }
+
+# 2026-07 MVRV-Z 抄底側驗證（tests/relative_ref_signals_backtest.py，本地已快取
+# db/bottom_metrics_cache.json 的 mvrv_zscore，2022-07+，零新網路請求）：swing 低點 order=10、
+# 60日內反彈≥18% 為正樣本，n_pos=23/n_neg=104，用 -z 當單調子分數（值越低越像底）→
+# AUC=0.732，**比現役 SOPR(0.585) 還強**，過 0.55 門檻 → 從「參考顯示」（原
+# reference_low_signals 的 mvrv_z 分支）轉正式計分子項，配重給到跟 ETF 同級(6)。
+#
+# 同批驗證的 Hash Ribbons（礦工投降強度 (SMA60-SMA30)/SMA60）— n=191，AUC=0.359，方向反/無效，
+# **維持參考不計分**（見 _hash_ribbon_read 與 reference_low_signals）；不代表 Hash Ribbons 理論
+# 錯誤，可能是「黃金交叉事件」比本次測的「持續投降深度」更有預測力，但那是另一個假設，
+# 未來要驗證需另外設計「事件式」樣本，不在本次驗證範圍內。
 
 # 維度狀態標示（兩種不同性質，介面以不同 tag 呈現）：
 #   UNFITTED_DIMS_LOW   ＝權重採專家設定、歷史樣本不足「待累積後回測」即可擬合（如 OI 自建快照）。
@@ -219,8 +231,9 @@ def _score_sentiment_low(fng, btc_d_trend) -> dict:
     }
 
 
-def _score_onchain_low(etf_summary, sopr) -> dict:
-    """鏈上吸籌（max 10）= ETF 連續淨流入(6) + SOPR 割肉投降(4)。灰燈/未擬合。"""
+def _score_onchain_low(etf_summary, sopr, mvrv_z=None) -> dict:
+    """鏈上吸籌（max 16）= ETF 連續淨流入(6) + SOPR 割肉投降(4) + MVRV-Z 深度低估(6)。
+    ETF 灰燈/未擬合；SOPR/MVRV-Z 皆已驗證（AUC 0.585/0.732，見 WEIGHTS_LOW 上方註解）。"""
     if not etf_summary or etf_summary.get("n", 0) == 0:
         e_s, e_lbl, e_val = 0, "⚪ 無資料源", "—"
     else:
@@ -240,14 +253,24 @@ def _score_onchain_low(etf_summary, sopr) -> dict:
         elif sopr <= 0.98: s_s, s_lbl = 2, "🟡 SOPR 微虧賣出"
         else:              s_s, s_lbl = 0, "⚪ 中性/獲利賣出"
 
+    if _nan(mvrv_z):
+        m_s, m_lbl, m_val = 0, "⚪ 無資料源", "—"
+    else:
+        m_val = f"{mvrv_z:.2f}"
+        if   mvrv_z <= 0: m_s, m_lbl = 6, "🟢 MVRV-Z≤0 歷史底部區"
+        elif mvrv_z <= 1: m_s, m_lbl = 4, "🟢 MVRV-Z≤1 深度低估"
+        elif mvrv_z <= 2: m_s, m_lbl = 2, "🟡 MVRV-Z≤2 偏低"
+        else:             m_s, m_lbl = 0, "⚪ MVRV-Z 中性/偏高"
+
     return {
-        "value": f"ETF {e_val}｜SOPR {s_val}",
-        "score": e_s + s_s, "max": WEIGHTS_LOW["onchain"],
-        "label": f"ETF {e_lbl}；{s_lbl}",
-        "note": "SOPR 方向驗證 2026-06（AUC 0.585，無害有益）；ETF 連續淨流入 2024+ 資料薄沿用專家權重",
+        "value": f"ETF {e_val}｜SOPR {s_val}｜MVRV-Z {m_val}",
+        "score": e_s + s_s + m_s, "max": WEIGHTS_LOW["onchain"],
+        "label": f"ETF {e_lbl}；{s_lbl}；{m_lbl}",
+        "note": "SOPR(AUC 0.585)/MVRV-Z(AUC 0.732)已驗證；ETF 連續淨流入 2024+ 資料薄沿用專家權重",
         "sub": {"etf_consecutive_inflow": (etf_summary or {}).get("consecutive_inflow_days"),
                 "etf_score": e_s, "sopr": (None if _nan(sopr) else float(sopr)),
-                "sopr_score": s_s},
+                "sopr_score": s_s, "mvrv_z": (None if _nan(mvrv_z) else float(mvrv_z)),
+                "mvrv_z_score": m_s},
     }
 
 
@@ -299,6 +322,7 @@ def compute_relative_low_score(
     fng: Optional[float] = None,
     btc_d_trend: Optional[dict] = None,
     macro: Optional[dict] = None,
+    mvrv_z: Optional[float] = None,
 ) -> Tuple[int, Dict[str, dict]]:
     """
     相對底部六維綜合評分（0–100）。鏡像 relative_high.compute_escape_top_score。
@@ -307,13 +331,14 @@ def compute_relative_low_score(
     row：最新日線（含 RSI_14 / Mayer_Multiple / SMA200W_Ratio / PowerLaw_Ratio 等，
          需先過 indicators + bear_bottom）。df：完整日線（底背離用）。
     其餘為呼叫端算好的純量/dict（本層零網路請求 → 易測、可被 BTC_WATCH 自抓資料餵入）。
+    mvrv_z：2026-07 已驗證計入 onchain 子分（AUC 0.732，見 WEIGHTS_LOW 上方註解），不再是純參考。
     """
     signals = {
         "cycle":       _score_cycle(row),
         "derivatives": _score_derivatives_low(funding_8h, oi_stats),
         "technical":   _score_technical_low(row, df),
         "sentiment":   _score_sentiment_low(fng, btc_d_trend),
-        "onchain":     _score_onchain_low(etf_summary, sopr),
+        "onchain":     _score_onchain_low(etf_summary, sopr, mvrv_z),
         "macro":       _score_macro_low(macro),
     }
     score = int(sum(s["score"] for s in signals.values()))
@@ -348,22 +373,19 @@ def _hash_ribbon_read(hashrate_hist) -> Optional[dict]:
     else:
         lbl = "⚪ 算力健康（無礦工投降）"
     return {"value": f"SMA30 {a:.3g}/SMA60 {b:.3g} TH/s", "label": lbl,
-            "note": "參考（未計入加權，待回測）；2023/8 有假訊號→須他維確認"}
+            "note": "⚠️ 已回測(2026-07)：投降強度((SMA60-SMA30)/SMA60) AUC=0.359，方向反/無效，"
+                    "維持參考不計分。可能是「持續投降深度」非最佳代理，黃金交叉事件本身未另測"}
 
 
-def reference_low_signals(*, mvrv_z: Optional[float] = None,
-                          hashrate_hist=None) -> Dict[str, dict]:
-    """抄底側社群參考指標（**不計入 low_score**；啟用加權須先過 relative_low_backtest
-    swing-low AUC≥0.55，避免憑社群閾值直接調已校準/已驗證(SOPR)權重）。"""
+def reference_low_signals(*, hashrate_hist=None) -> Dict[str, dict]:
+    """抄底側社群參考指標（**不計入 low_score**）。
+
+    僅剩 Hash Ribbons：2026-07 已回測（tests/relative_ref_signals_backtest.py），投降強度
+    AUC=0.359 方向反/無效，維持參考不計分（見 `_hash_ribbon_read` note）。MVRV-Z 已於
+    2026-07 驗證通過（AUC 0.732）並移入 `_score_onchain_low` 正式計分，不再是參考訊號
+    （呼叫端若仍傳 mvrv_z 參數會是 TypeError，需改用 `compute_relative_low_score(mvrv_z=...)`）。
+    """
     out: Dict[str, dict] = {}
-    if mvrv_z is not None and not _nan(mvrv_z):
-        z = float(mvrv_z)
-        if   z <= 0: lbl = "🟢 MVRV-Z≤0 歷史底部區（市值低於成本價）"
-        elif z <= 1: lbl = "🟢 MVRV-Z≤1 深度低估"
-        elif z <= 2: lbl = "🟡 MVRV-Z≤2 偏低"
-        else:        lbl = "⚪ MVRV-Z 中性/偏高"
-        out["mvrv_z"] = {"value": f"{z:.2f}", "label": lbl,
-                         "note": "參考（未計入加權，待回測 AUC 驗證）"}
     hr = _hash_ribbon_read(hashrate_hist)
     if hr is not None:
         out["hash_ribbon"] = hr
@@ -388,8 +410,9 @@ def compute_relative_low(
     mvrv_z: Optional[float] = None, hashrate_hist=None, **kwargs,
 ) -> dict:
     """相對底部完整評估（評分 + 等級）。所有外部資料由呼叫端注入（本層零網路請求）。
-    mvrv_z / hashrate_hist：社群參考指標，僅顯示於 reference_signals，不計入 low_score（待回測）。"""
-    score, signals = compute_relative_low_score(row, df, **kwargs)
+    mvrv_z：2026-07 已驗證計入 low_score（onchain 子分，AUC 0.732）。hashrate_hist 仍僅
+    顯示於 reference_signals（Hash Ribbons 已回測方向反/無效，見 core.relative_low._hash_ribbon_read）。"""
+    score, signals = compute_relative_low_score(row, df, mvrv_z=mvrv_z, **kwargs)
     level, color, action = relative_low_meta(score)
     return {
         "low_score":   score,
@@ -399,5 +422,5 @@ def compute_relative_low(
         "low_signals": signals,
         "unfitted_dims": list(UNFITTED_DIMS_LOW),
         "rule_based_dims": list(RULE_BASED_DIMS_LOW),
-        "reference_signals": reference_low_signals(mvrv_z=mvrv_z, hashrate_hist=hashrate_hist),
+        "reference_signals": reference_low_signals(hashrate_hist=hashrate_hist),
     }
