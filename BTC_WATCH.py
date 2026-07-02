@@ -200,15 +200,14 @@ def _cut_display(s, width):
 
 _SCORE_PREFIX_RE = re.compile(r"^(\s+[+\-]?\d{1,3}/[±]?\d{1,3}\s+)")
 
-
 def _wrap_display(s, width, cont_indent=None):
     """依顯示寬度把 s 折到 width 內（兩欄版每欄較窄，長列需換行）。
-    優先在 空白/；/｜/、 後斷行；單一片段仍超寬則逐字硬切。
+    在 空白/；/｜/、/，/：/） 後貪婪斷行；單一片段仍超寬則逐字硬切。**不強制每個分號都換行**
+    （使用者要「一頁看完」→ 能塞同一行就塞，只有真的放不下才折，避免面板無謂變高）。
 
     cont_indent=None（預設）時自動偵測：`_panel()`/`_panel_trend()` 產出的分數列開頭固定是
     「  NN/MM  」或「  +NN/±MM 」這種分數前綴，續行縮排到前綴結束處，讓內容（如 Mayer/ETF
-    這些標籤文字）跟第一行對齊，而不是固定縮 5 格跟分數前綴對不上。非分數列（→/籌碼資料等）
-    偵測不到前綴則退回舊的 5 格。"""
+    這些標籤文字）跟第一行對齊。非分數列（→/籌碼資料等）偵測不到前綴則退回 5 格。"""
     if _dw(s) <= width:
         return [s]
     if cont_indent is None:
@@ -247,25 +246,28 @@ def _wrap_display(s, width, cont_indent=None):
     return lines
 
 
+def _panel_block(title, rows, inner_w):
+    """單一面板 → 完整框線 block（title + 各列 wrap 後的行 + └──┘）。各欄由上往下緊貼排。"""
+    block = [_title(title, inner_w)]
+    for r in rows:
+        for seg in _wrap_display(r, inner_w):
+            block.append(_row(seg, inner_w))
+    block.append(_edge("└", "─", "┘", inner_w))
+    return block
+
+
 def _print_pair(pa, pb, wl, wr):
-    """兩面板 (title, rows) 左右並排列印，逐「列」（非逐「行」）配對：
-    若某一列在其中一欄因內容過長換行成多行，另一欄同一列即使沒換行也補空行撐到同高，
-    確保後續列不會因為某一欄先換行、另一欄沒換行而整段錯位（例如逃頂/抄底同一列「資費」
-    長度不對稱時，舊版是各自 wrap 完再攤平成一維列表逐行 zip，兩欄從此點之後全部對不上；
-    新版逐列比較兩欄各自的換行行數，取較高者同步補齊，之後每一列仍能對齊）。"""
-    ta, ra = pa
-    tb, rb = pb
-    print(_title(ta, wl) + _title(tb, wr))
-    wrapped_a = [_wrap_display(r, wl) for r in ra]
-    wrapped_b = [_wrap_display(r, wr) for r in rb]
-    for i in range(max(len(wrapped_a), len(wrapped_b))):
-        la_lines = wrapped_a[i] if i < len(wrapped_a) else []
-        lb_lines = wrapped_b[i] if i < len(wrapped_b) else []
-        for j in range(max(len(la_lines), len(lb_lines))):
-            la = la_lines[j] if j < len(la_lines) else ""
-            lb = lb_lines[j] if j < len(lb_lines) else ""
-            print(_row(la, wl) + _row(lb, wr))
-    print(_edge("└", "─", "┘", wl) + _edge("└", "─", "┘", wr))
+    """兩面板 (title, rows) 左右並排列印。**各欄獨立、由上往下緊貼**（不做跨欄逐列同步，
+    否則一欄某列換多行、另一欄就得插空行對齊 → 面板中間出現空行，且會撐高、與「一頁看完」衝突）。
+    只把較矮那欄用空列補在**最底部**（└──┘ 之前），讓兩欄底框對齊即可。"""
+    a = _panel_block(pa[0], pa[1], wl)
+    b = _panel_block(pb[0], pb[1], wr)
+    h = max(len(a), len(b))
+    # 空列插在各自 └──┘（最後一列）之前 → 內容緊貼、空白落在面板底部
+    a = a[:-1] + [_row("", wl)] * (h - len(a)) + [a[-1]]
+    b = b[:-1] + [_row("", wr)] * (h - len(b)) + [b[-1]]
+    for la, lb in zip(a, b):
+        print(la + lb)
 
 
 def interruptible_wait(seconds, nav=False):
