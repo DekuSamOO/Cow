@@ -118,7 +118,9 @@ def fetch_live_quote(yahoo_symbol: str) -> dict:
     """
     輕量即時報價（Yahoo v8 meta.regularMarketPrice）— 供股票盤中每 60s 更新現價，
     與每小時的日線+指標分離。盤中=即時成交價、盤後=收盤價（regularMarketTime 凍結在收盤）。
-    回傳 {price, ts, prev_close}；失敗回 {}（呼叫端退回日線收盤）。
+    回傳 {price, ts, prev_close, volume}；失敗回 {}（呼叫端退回日線收盤）。
+
+    volume 取 meta.regularMarketVolume（實測台股/美股皆有此欄，同一次請求內、不加額外網路成本）。
     """
     try:
         r = _session().get(_YF_CHART + yahoo_symbol,
@@ -129,7 +131,8 @@ def fetch_live_quote(yahoo_symbol: str) -> dict:
         if p is None:
             return {}
         return {"price": float(p), "ts": m.get("regularMarketTime"),
-                "prev_close": m.get("previousClose") or m.get("chartPreviousClose")}
+                "prev_close": m.get("previousClose") or m.get("chartPreviousClose"),
+                "volume": m.get("regularMarketVolume")}
     except Exception:
         return {}
 

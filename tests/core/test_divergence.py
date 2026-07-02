@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from core.divergence import detect_top_divergence, detect_bottom_divergence
+from core.divergence import detect_top_divergence, detect_bottom_divergence, detect_swing_structure
 
 
 def _make_df(prices, rsi, macd=None):
@@ -75,3 +75,81 @@ def test_stale_pivot_not_recent():
     df = _make_df(price, rsi)
     res = detect_top_divergence(df, lookback=len(df), order=4, recent_bars=10)
     assert res["has_divergence"] is False
+
+
+# ---------------------------------------------------------------------------
+# detect_swing_structure — 結構高低點偵測（合成階梯狀高低點，確定性）
+# ---------------------------------------------------------------------------
+
+def _zigzag(points, seg_len=8):
+    """把一串轉折值用 linspace 折線相連，中間每個轉折點會形成明確的局部極值。"""
+    seg = []
+    for i in range(len(points) - 1):
+        piece = list(np.linspace(points[i], points[i + 1], seg_len))
+        if i > 0:
+            piece = piece[1:]
+        seg += piece
+    return np.array(seg)
+
+
+def _structure_df(points, seg_len=8, low_offset=5.0):
+    """由一串轉折值造出 high/low/close 欄位：high=zigzag(points)，low=high-offset
+    （轉折位置與 high 相同，只是整體平移，讓 low 欄位也有對應的局部極值）。"""
+    high = _zigzag(points, seg_len)
+    low = high - low_offset
+    close = (high + low) / 2
+    n = len(high)
+    idx = pd.date_range("2025-01-01", periods=n, freq="D")
+    return pd.DataFrame({"high": high, "low": low, "close": close}, index=idx)
+
+
+def test_swing_structure_hh_hl_bull():
+    # 前高80→後高100（HH）、前低60→後低75（HL，低點也墊高）→ 多頭結構延續
+    df = _structure_df([50, 80, 60, 100, 75, 85])
+    res = detect_swing_structure(df, lookback=len(df), order=4)
+    assert res["structure"] == "HH_HL"
+    assert res["higher_high"] is True
+    assert res["higher_low"] is True
+    assert res["last_high"] == pytest.approx(100.0)
+    assert res["prior_high"] == pytest.approx(80.0)
+    assert res["last_low"] == pytest.approx(70.0)   # 75 - 5
+    assert res["prior_low"] == pytest.approx(55.0)  # 60 - 5
+    assert res["last_high_pivot_age"] is not None
+    assert res["last_low_pivot_age"] is not None
+
+
+def test_swing_structure_lh_ll_bear():
+    # 前高100→後高85（LH）、前低70→後低50（LL）→ 空頭結構延續
+    df = _structure_df([90, 100, 70, 85, 50, 60])
+    res = detect_swing_structure(df, lookback=len(df), order=4)
+    assert res["structure"] == "LH_LL"
+    assert res["higher_high"] is False
+    assert res["higher_low"] is False
+
+
+def test_swing_structure_mixed_front_high_not_breached():
+    # 前高100→後高90（未過前高，higher_high=False）、前低60→後低75（higher_low=True）
+    # → mixed（前高未過但前低墊高，可能是頭部/底部轉折）
+    df = _structure_df([50, 100, 60, 90, 75, 85])
+    res = detect_swing_structure(df, lookback=len(df), order=4)
+    assert res["structure"] == "mixed"
+    assert res["higher_high"] is False
+    assert res["higher_low"] is True
+
+
+def test_swing_structure_insufficient_data():
+    # df 太短 / 缺欄位 / pivot 不足 → 全部回 None，不 raise
+    assert detect_swing_structure(None)["structure"] is None
+    assert detect_swing_structure(pd.DataFrame())["structure"] is None
+    df_missing_col = pd.DataFrame({"close": np.linspace(50, 60, 30)})
+    assert detect_swing_structure(df_missing_col)["structure"] is None
+    # 只有單調上升、抓不到 2 個高點/低點 pivot
+    n = 30
+    idx = pd.date_range("2025-01-01", periods=n, freq="D")
+    df_monotonic = pd.DataFrame({
+        "high": np.linspace(50, 80, n), "low": np.linspace(45, 75, n),
+    }, index=idx)
+    res = detect_swing_structure(df_monotonic, order=4)
+    assert res["structure"] is None
+    assert res["last_high"] is None
+    assert res["last_high_pivot_age"] is None

@@ -216,6 +216,51 @@ S1 抽 panel（多檔×多日 + fwd_ret）→ S2 每日 ±18% 二分單維 AUC �
 
 ---
 
+## 通用量價/結構訊號 + 美股相對高低點框架（2026-07-02，swarm 3 輪迭代）
+
+**單一真實來源 `core/relative_universal.py`**（純 OHLCV，不依賴任何市場專屬籌碼資料）：
+- `score_volume_price_top/bottom`：量增價縮＝出貨（逃頂）／量縮價增＝賣壓竭盡（抄底）。
+  近 5 日／20 日均量比 + 近 5 日報酬率變化，純規則式門檻，**尚未回測校準**。
+- `score_structure_top/bottom`：前高未過／前低未破＝結構轉折警訊，複用
+  `core.divergence.detect_swing_structure`（新公開函數，底層沿用既有 `_local_extrema` 樞紐
+  偵測，判斷 HH_HL／LH_LL／mixed 結構）。
+- `rescale_dim(sig, new_max)`：把子維分數按比例縮放到新配額，供疊加進其他框架時用（見下）。
+
+**台股整合（`relative_high_tw.py` v0.4 / `relative_low_tw.py` v0.3）**：新維度**疊加**、
+**不動既有六/五維的內部分級**（無真實回測數據前不臆測精確配重，理論總分 108/110，
+`compute_relative_*_tw` 內部仍 clamp 到 100）。新維度權重：逃頂 vol_price 5 + structure 3、
+抄底 vol_price 6 + structure 4（抄底原本完全沒有量能維度，這維補上這個缺口）。
+
+**美股新框架（`core/relative_high_us.py`／`relative_low_us.py`，v0.1 新建）**：美股個股槓桿/
+法人/IV 無免費源，改用純 OHLCV 三維：技術背離 50（複用 `relative_high_tw._score_technical_high`，
+市場無關）+ 量價背離 30 + 結構轉折 20。watcher.py 美股分支從此有逃頂/抄底面板（原本只有趨勢軸）。
+**全數規則式、未在美股資料上回測過**，權重為專家經驗值。
+
+**即時成交量 + 台股週轉率**：`service/ohlc_universal.fetch_live_quote` 新增 `volume`
+（Yahoo v8 chart `meta.regularMarketVolume`，同一次請求內、零額外網路成本，台股/美股皆有）。
+台股週轉率＝即時成交量÷已發行股數，股本資料來源 `service/tw_chip.get_shares_outstanding`：
+- TWSE OpenAPI `https://openapi.twse.com.tw/v1/opendata/t187ap03_L`（上市，無需 date 參數/驗證，
+  已用 2330 實測：259.32 億股，與已知量級吻合）。
+- 上市查無（上櫃股）→ TPEx OpenAPI `mopsfin_t187ap03_O` fallback（欄位英文命名，
+  `SecuritiesCompanyCode`/`IssueShares`，已用 6488 驗證）。
+- **這個 domain 的 requests 自動編碼偵測常猜錯** → 強制 `r.encoding = "utf-8"`（`.json()` 內部
+  邏輯 `if not self.encoding` 才觸發 BOM 猜測，設了就走 `.text` 走指定編碼，故此設定確實有效）。
+- 回應體積大（~1MB+全市場），實測 20–45 秒，故 **timeout 拉到 60s、快取拉到 24h**（不比照其他
+  籌碼檔每小時重抓，股本變動極不頻繁）；抓取失敗退回舊快取而非清空。
+- **⚠️ NOT VERIFIED（僅 mock 測試過）**：`tests/test_tw_chip_shares.py` 全部用假回應測試，
+  這次 session 因公司網路環境未對本次寫的程式碼碼本身做過真實網路呼叫驗證（Agent A 是用獨立
+  探索腳本測的，非這裡最終落地的 `get_shares_outstanding` 本體）。**首次連正式環境時建議先跑一次
+  `watcher.py` 進台股標的觀察週轉率數字是否合理**，不要假設 mock 測試通過＝真實 API 一定正常。
+
+**已知陷阱（本次新增，避免重蹈）**：
+- watcher.py 的 `_panel(result, meta_fn, cap, name, dims)` 呼叫端 **`dims` tuple 必須與
+  `compute_relative_*` 回傳 signals dict 的 key 完全一致**（新增維度時容易忘記同步更新
+  呼叫端的 dims tuple——本次 swarm 第 2 輪就抓到台股逃頂/抄底面板漏了 `vol_price`/`structure`，
+  分數已算進總分但完全不會顯示在面板列表，使用者無從判讀分數從哪來）。改 `compute_relative_*`
+  的 signals keys 後，**務必 grep 所有 `_panel(...)` 呼叫端**確認 dims tuple 同步更新。
+
+---
+
 ## 已知陷阱
 
 ### 1. `@st.fragment` 靜默失效（現價停止自動更新）

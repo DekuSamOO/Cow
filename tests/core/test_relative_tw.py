@@ -82,11 +82,30 @@ def test_high_volume_pctile_dim():
     assert compute_relative_high_tw(row3, df3, chip=None)[1]["volume"]["score"] == 0
 
 
-def test_weights_sum_to_100():
-    from core.relative_high_tw import WEIGHTS_HIGH_TW
-    from core.relative_low_tw import WEIGHTS_LOW_TW
-    assert sum(WEIGHTS_HIGH_TW.values()) == 100
-    assert sum(WEIGHTS_LOW_TW.values()) == 100
+def test_weights_sum():
+    """v0.4：已校準六/五維仍總分 100；vol_price/structure 為疊加、未回測前不佔既有配額
+    （理論總分 108/110，compute_relative_*_tw 內部 clamp 到 100，見模組 docstring）。"""
+    from core.relative_high_tw import WEIGHTS_HIGH_TW, UNFITTED_DIMS_HIGH_TW
+    from core.relative_low_tw import WEIGHTS_LOW_TW, UNFITTED_DIMS_LOW_TW
+    calibrated_high = {k: v for k, v in WEIGHTS_HIGH_TW.items() if k not in UNFITTED_DIMS_HIGH_TW}
+    calibrated_low = {k: v for k, v in WEIGHTS_LOW_TW.items() if k not in UNFITTED_DIMS_LOW_TW}
+    assert sum(calibrated_high.values()) == 100
+    assert sum(calibrated_low.values()) == 100
+    assert sum(WEIGHTS_HIGH_TW.values()) == 108
+    assert sum(WEIGHTS_LOW_TW.values()) == 110
+
+
+def test_score_clamped_at_100_with_overlay_dims():
+    """疊加維度（vol_price/structure）滿分時，總分仍 clamp 在 100 不會溢出。"""
+    row, df = _df_vol_spike(rsi=82)
+    chip = {
+        "valuation": {"pe": 45, "pb": 6}, "margin": {"fin_chg_pct": 6.0},
+        "institutional": {"total_net": -500_000}, "tdcc": {"major_pct": 30, "retail_pct": 45},
+    }
+    score, sig = compute_relative_high_tw(row, df, chip=chip)
+    assert score <= 100
+    assert sig["vol_price"]["max"] == 5
+    assert sig["structure"]["max"] == 3
 
 
 def test_valuation_absolute_levels():

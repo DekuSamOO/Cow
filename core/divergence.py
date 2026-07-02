@@ -37,6 +37,65 @@ def _local_extrema(vals: np.ndarray, order: int, kind: str) -> list:
     return out
 
 
+def detect_swing_structure(df: pd.DataFrame, lookback: int = 120, order: int = 4,
+                            price_high_col: str = "high", price_low_col: str = "low") -> Dict[str, Any]:
+    """
+    波段結構偵測（公開函數）：用 `_local_extrema` 各自抓 high/low 欄位的近期樞紐，
+    比較最後兩個高點（h1 較舊／h2 較新）與最後兩個低點（l1 較舊／l2 較新），判斷：
+      HH_HL：h2>h1 且 l2>l1（前高後高、前低後低皆墊高）→ 多頭結構延續。
+      LH_LL：h2<=h1 且 l2<=l1（前高後高、前低後低皆走低）→ 空頭結構延續。
+      mixed：一個 higher 一個不是 → 結構轉換中，可能是頭部/底部轉折訊號
+             （由呼叫端依 higher_high/higher_low 進一步判讀是「前高未過」還是「前低未破」）。
+
+    只回傳原始 pivot 年齡（last_high_pivot_age / last_low_pivot_age，距今幾根 K 棒）；
+    年齡過大代表訊號已陳舊、效力應打折，但衰減邏輯留給呼叫端處理，這裡不做。
+
+    資料不足（df 太短、缺欄位、pivot 不足 2 個）時，所有欄位回 None，不 raise。
+    """
+    empty = {
+        "structure": None, "last_high": None, "prior_high": None,
+        "last_low": None, "prior_low": None,
+        "higher_high": None, "higher_low": None,
+        "last_high_pivot_age": None, "last_low_pivot_age": None,
+    }
+    if df is None or df.empty or price_high_col not in df.columns or price_low_col not in df.columns:
+        return empty
+
+    sub = df.tail(lookback)
+    highs = sub[price_high_col].to_numpy(dtype=float)
+    lows = sub[price_low_col].to_numpy(dtype=float)
+
+    high_pivots = _local_extrema(highs, order, "high")
+    low_pivots = _local_extrema(lows, order, "low")
+    if len(high_pivots) < 2 or len(low_pivots) < 2:
+        return empty
+
+    h1_idx, h2_idx = high_pivots[-2], high_pivots[-1]
+    l1_idx, l2_idx = low_pivots[-2], low_pivots[-1]
+    h1, h2 = float(highs[h1_idx]), float(highs[h2_idx])
+    l1, l2 = float(lows[l1_idx]), float(lows[l2_idx])
+
+    higher_high = bool(h2 > h1)
+    higher_low = bool(l2 > l1)
+
+    if higher_high and higher_low:
+        structure = "HH_HL"
+    elif (not higher_high) and (not higher_low):
+        structure = "LH_LL"
+    else:
+        structure = "mixed"
+
+    n = len(sub)
+    return {
+        "structure": structure,
+        "last_high": h2, "prior_high": h1,
+        "last_low": l2, "prior_low": l1,
+        "higher_high": higher_high, "higher_low": higher_low,
+        "last_high_pivot_age": int(n - 1 - h2_idx),
+        "last_low_pivot_age": int(n - 1 - l2_idx),
+    }
+
+
 def _detect(df: pd.DataFrame, lookback: int, order: int, indicator: str,
             kind: str, recent_bars: int) -> Dict[str, Any]:
     """頂/底背離共用核心。kind='top' 或 'bottom'。"""

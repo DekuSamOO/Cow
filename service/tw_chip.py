@@ -32,6 +32,11 @@ _TDCC = "https://www.tdcc.com.tw"
 _HEADERS = {"User-Agent": "Mozilla/5.0", "Accept-Encoding": "gzip, deflate"}  # 勿 br
 _CACHE_TTL = 3600  # 市場全量檔每小時抓一次（比照 watcher 日線刷新）
 
+# 已發行股數（週轉率用）：TWSE/TPEx OpenAPI，與上面 rwd/zh 系列不同 API 家族、無 date 參數。
+_TWSE_OPEN_T187 = "https://openapi.twse.com.tw/v1/opendata/t187ap03_L"
+_TPEX_OPEN_T187 = "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O"
+_SHARES_TTL = 86400  # 股本變動極不頻繁 → 日快取（非每小時）；全市場回應大，抓取實測 20-45s
+
 # TDCC 集保分級門檻（鏡像 tw_stock_climber，單位：股）
 _MAJOR_MIN_SHARES = 1_000_000   # 大戶 ≥ 1000 張
 _MID_MIN_SHARES = 400_000       # 中實戶 ≥ 400 張
@@ -42,6 +47,8 @@ _TDCC_PUBLISH_LAG_DAYS = 7      # 集保表基準日（週五）公布延遲緩�
 _cache: dict = {}
 # TDCC 週資料快取：{(symbol, date_str): result|None}（同檔週資料永久不重抓）
 _tdcc_cache: dict = {}
+# 已發行股數快取：{base_url: (ts, {symbol: shares})}
+_shares_cache: dict = {}
 
 
 def _session() -> requests.Session:
@@ -214,6 +221,50 @@ def _get_valuation_tpex(symbol: str, date_yyyymmdd: str) -> dict | None:
         return None
     return {"close": None, "yield_pct": _num(row[5]),
             "pe": _num(row[2]), "pb": _num(row[6])}
+
+
+# ── 已發行股數（週轉率用；2026-07 新增，資料源見 tests/core/test_relative_universal.py 同批調查）──
+def _fetch_shares_outstanding_market(base_url: str, code_key: str, shares_key: str) -> dict:
+    """
+    抓全市場已發行股數快照（TWSE/TPEx OpenAPI，全量單日檔、無 date 參數），日快取（見
+    `_SHARES_TTL`，股本變動極不頻繁，不比照其他籌碼檔每小時重抓）。
+    回應體積大（~1MB+，全市場一千多檔），實測耗時 20–45 秒 → timeout 拉長到 60s。
+    這個 domain 的 requests 自動編碼偵測常猜錯 → 強制 `r.encoding = "utf-8"`。
+    抓取失敗時退回舊快取（若有）而非清空——股本本來就幾乎不變，舊資料仍可信。
+    """
+    hit = _shares_cache.get(base_url)
+    if hit and time.time() - hit[0] < _SHARES_TTL:
+        return hit[1]
+    try:
+        r = _session().get(base_url, timeout=60)
+        r.raise_for_status()
+        r.encoding = "utf-8"
+        data = r.json()
+    except Exception as e:  # noqa: BLE001
+        print(f"[tw_chip] 股本端點抓取失敗（{base_url}）：{e}")
+        return hit[1] if hit else {}
+    out = {}
+    for row in data:
+        code = str(row.get(code_key, "")).strip()
+        shares = _num(row.get(shares_key))
+        if code and shares:
+            out[code] = shares
+    _shares_cache[base_url] = (time.time(), out)
+    return out
+
+
+def get_shares_outstanding(symbol: str) -> float | None:
+    """
+    已發行普通股數（股）。用於計算週轉率＝即時成交量÷已發行股數。
+    上市查 TWSE OpenAPI（`公司代號`/`已發行普通股數或TDR原股發行股數`）；
+    上市查無（上櫃股）→ 轉查 TPEx OpenAPI（`SecuritiesCompanyCode`/`IssueShares`）。查無回 None。
+    """
+    twse = _fetch_shares_outstanding_market(
+        _TWSE_OPEN_T187, "公司代號", "已發行普通股數或TDR原股發行股數")
+    if symbol in twse:
+        return twse[symbol]
+    tpex = _fetch_shares_outstanding_market(_TPEX_OPEN_T187, "SecuritiesCompanyCode", "IssueShares")
+    return tpex.get(symbol)
 
 
 # ── TDCC 集保大戶分布（鏡像 tw_stock_climber 的 GET→POST CSRF 爬法）─────────────
