@@ -73,12 +73,12 @@ def test_risk_box_rendered_when_atr_risk_present():
         "lookback": 60, "reward_risk": 5.5,
     }
     rendered = json.dumps(build_flex_message(s), ensure_ascii=False)
-    assert "🎯 風控框架" in rendered
+    assert "🎯 風控停損參考" in rendered
     assert "$54,401" in rendered and "$63,167" in rendered
     assert "風報 1:5.5" in rendered
     # 無 atr_risk（缺 ATR 欄/資料不足）時不顯示
     s2 = _minimal_summary()
-    assert "🎯 風控框架" not in json.dumps(build_flex_message(s2), ensure_ascii=False)
+    assert "🎯 風控停損參考" not in json.dumps(build_flex_message(s2), ensure_ascii=False)
 
 
 def test_snapshot_stale_warning_rendered():

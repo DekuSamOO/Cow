@@ -308,36 +308,45 @@ def _build_swing_radar_box(s):
 
 
 def _build_risk_box(s):
-    """🎯 風控框架（ATR 停損＋支撐壓力風報比）— 同源 core/risk，與 watcher 一致。
+    """🎯 風控停損參考（ATR 停損＋支撐壓力）— 同源 core/risk，與 watcher 一致。
     緊接在「今日行動」之後：行動建議講方向，這裡講萬一做了要怎麼設風控。
+    每行一個概念（比照 `_build_floor_support_box` 的列表式排版，避免長句擠在窄欄位被截斷）。
     無 atr_risk 資料（ATR 欄缺/資料不足）時回 None。"""
     r = s.get("atr_risk")
     if not r:
         return None
-    resist_text = f"${r['resistance']:,.0f} ({r['resistance_pct']:+.1f}%)"
+    items = [
+        ("停損（做多）", f"${r['stop_long']:,.0f}", None),
+        ("停損（做空）", f"${r['stop_short']:,.0f}", None),
+        ("支撐", f"${r['support']:,.0f}", f"{r['support_pct']:+.1f}%"),
+        ("壓力", f"${r['resistance']:,.0f}", f"{r['resistance_pct']:+.1f}%"),
+    ]
+    rows = []
+    for label, val, pct in items:
+        contents = [
+            {"type": "text", "text": label, "color": "#555555", "size": "xs", "flex": 4, "wrap": True},
+            {"type": "text", "text": val, "color": "#2C3E50", "size": "xs", "weight": "bold",
+             "align": "end", "flex": 3},
+        ]
+        if pct:
+            contents.append({"type": "text", "text": pct, "color": "#2C3E50", "size": "xs",
+                             "align": "end", "flex": 2})
+        rows.append({"type": "box", "layout": "horizontal", "margin": "xs", "contents": contents})
+
+    caption = f"ATR(14) ${r['atr']:,.0f}（近期日均波動 {r['atr_pct']:.1f}%）"
     if r.get("reward_risk") is not None:
-        resist_text += f"｜風報 1:{r['reward_risk']:.1f}"
+        caption += f"｜上檔風報 1:{r['reward_risk']:.1f}"
+
     return {
         "type": "box", "layout": "vertical", "margin": "lg",
         "backgroundColor": "#FFF9E6", "cornerRadius": "8px", "paddingAll": "md",
         "contents": [
-            {"type": "text", "text": "🎯 風控框架", "color": "#2C3E50", "size": "sm", "weight": "bold"},
-            {"type": "text",
-             "text": f"ATR(14) ${r['atr']:,.0f} ({r['atr_pct']:.1f}%/日)"
-                     f"｜{r['k']:g}×ATR 停損：多 ${r['stop_long']:,.0f} / 空 ${r['stop_short']:,.0f}",
-             "color": "#555555", "size": "xs", "margin": "sm", "wrap": True},
-            {"type": "box", "layout": "horizontal", "margin": "xs", "contents": [
-                {"type": "text", "text": "支撐", "color": "#555555", "size": "xs", "flex": 2},
-                {"type": "text", "text": f"${r['support']:,.0f} ({r['support_pct']:+.1f}%)",
-                 "color": "#2C3E50", "size": "xs", "align": "end", "flex": 5, "wrap": True},
-            ]},
-            {"type": "box", "layout": "horizontal", "margin": "xs", "contents": [
-                {"type": "text", "text": f"壓力(近{r['lookback']}日高)", "color": "#555555", "size": "xs", "flex": 2},
-                {"type": "text", "text": resist_text,
-                 "color": "#2C3E50", "size": "xs", "align": "end", "flex": 5, "wrap": True},
-            ]},
-            {"type": "text", "text": "停損用 ATR 界定正常波動幅度，非精準點位；風報比僅供參考",
-             "color": "#AAAAAA", "size": "xxs", "margin": "sm", "wrap": True},
+            {"type": "text", "text": "🎯 風控停損參考", "color": "#2C3E50", "size": "sm", "weight": "bold"},
+            *rows,
+            {"type": "text", "text": caption, "color": "#888888", "size": "xxs",
+             "margin": "sm", "wrap": True},
+            {"type": "text", "text": "停損用 ATR 抓正常波動幅度，非精準點位；僅供參考",
+             "color": "#AAAAAA", "size": "xxs", "margin": "xs", "wrap": True},
         ],
     }
 
