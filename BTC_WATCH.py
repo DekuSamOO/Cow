@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import time
 import math
@@ -192,11 +193,22 @@ def _cut_display(s, width):
     return out, s[i:]
 
 
-def _wrap_display(s, width, cont_indent=5):
+_SCORE_PREFIX_RE = re.compile(r"^(\s+[+\-]?\d{1,3}/[±]?\d{1,3}\s+)")
+
+
+def _wrap_display(s, width, cont_indent=None):
     """依顯示寬度把 s 折到 width 內（兩欄版每欄較窄，長列需換行）。
-    優先在 空白/；/｜/、 後斷行；單一片段仍超寬則逐字硬切。續行以 cont_indent 空白懸掛縮排。"""
+    優先在 空白/；/｜/、 後斷行；單一片段仍超寬則逐字硬切。
+
+    cont_indent=None（預設）時自動偵測：`_panel()`/`_panel_trend()` 產出的分數列開頭固定是
+    「  NN/MM  」或「  +NN/±MM 」這種分數前綴，續行縮排到前綴結束處，讓內容（如 Mayer/ETF
+    這些標籤文字）跟第一行對齊，而不是固定縮 5 格跟分數前綴對不上。非分數列（→/籌碼資料等）
+    偵測不到前綴則退回舊的 5 格。"""
     if _dw(s) <= width:
         return [s]
+    if cont_indent is None:
+        m = _SCORE_PREFIX_RE.match(s)
+        cont_indent = _dw(m.group(1)) if m else 5
     # 1) 切成「可斷行片段」（分隔符留在片段尾；含中文標點斷點，長句才不會硬切在字中間）
     chunks, cur = [], ""
     for ch in s:
