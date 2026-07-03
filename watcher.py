@@ -117,7 +117,7 @@ class UniversalMonitor:
         # 現價：每 60s 抓 Yahoo 即時報價（盤中即時、盤後為收盤）；與每小時的日線+指標分離
         live = fetch_live_quote(self.yahoo)
         if live.get("price"):
-            fr = live_quote_freshness(live)
+            fr = live_quote_freshness(live, is_tw=self.is_tw)
             chg_txt = "" if fr["chg_pct"] is None else f"  {fr['chg_pct']:+.2f}%"
             price_line = f"  現價          {_fmt_price(live['price'])}{chg_txt}   {fr['label']}"
         else:

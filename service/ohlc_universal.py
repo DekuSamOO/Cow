@@ -137,15 +137,41 @@ def fetch_live_quote(yahoo_symbol: str) -> dict:
         return {}
 
 
-def live_quote_freshness(q: dict) -> dict:
+def _is_tw_trading_hours(now=None) -> bool:
+    """粗略判斷此刻是否為台股交易時段（週一~五 09:00–13:30 台北時間）。
+    不含國定假日行事曆（本模組零外部依賴），僅供「盤中 vs 已收盤」顯示分流，非交易依據。
+    now 供測試注入（tz-naive/aware皆可，只取 weekday/time），預設 None 用當下台北時間。"""
+    import datetime
+    if now is None:
+        from zoneinfo import ZoneInfo
+        now = datetime.datetime.now(ZoneInfo("Asia/Taipei"))
+    if now.weekday() >= 5:   # 週六日
+        return False
+    return datetime.time(9, 0) <= now.time() <= datetime.time(13, 30)
+
+
+def live_quote_freshness(q: dict, is_tw: bool = False) -> dict:
     """
     解讀 fetch_live_quote 回傳的時效與漲跌（ts/prev_close 語義只有本模組知道，
     與 fetcher 同源避免 watcher / universal_watch_poc 兩邊重算）。
     回傳 {label, age_sec, chg_pct}；label 為盤中/已收盤狀態字串，chg_pct 缺 prev_close 時為 None。
+
+    ⚠️ TWSE 免費源（Yahoo/Google 皆同）法定延遲約 20 分鐘，`regularMarketTime` 盤中age
+    幾乎必然 >15 分鐘 → 若沿用「age<900s＝盤中」的美股門檻，台股盤中會被永遠誤判成「已收盤」
+    （age 15–60 分鐘時顯示「已收盤（0h前）」，看起來像顛倒，其實是判斷依據錯——用 timestamp
+    新舊猜是否收盤，對有法定延遲的市場不成立）。is_tw=True 時改用**當下是否為交易時段**
+    （`_is_tw_trading_hours`）判斷，如實標「盤中（資料延遲）」而非「已收盤」。
     """
     import time as _time
     age = _time.time() - q["ts"] if q.get("ts") else float("inf")
-    if age < 900:
+    if is_tw:
+        if _is_tw_trading_hours():
+            label = f"🟡 盤中（資料延遲 {int(age // 60)}分，TWSE免費源限制）"
+        elif age < 6 * 3600:
+            label = f"⚪ 已收盤（{int(age // 3600)}h 前）"
+        else:
+            label = "⚪ 已收盤"
+    elif age < 900:
         label = "🟢 盤中即時"
     elif age < 6 * 3600:
         label = f"⚪ 已收盤（{int(age // 3600)}h 前）"
