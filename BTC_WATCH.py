@@ -518,7 +518,7 @@ class BitcoinMonitor:
         if not self.is_btc:
             # 非 BTC 幣對：ETF(Farside BTC)/SOPR(bitcoin-data BTC)/BTC.D 皆 BTC 專屬 → 僅取本地總經事件
             try:
-                from service.macro_data import get_next_macro_event
+                from service.macro_events import get_next_macro_event
                 days = get_next_macro_event().get("days")
                 ext["macro"] = {"event_within_days": days} if days is not None else None
             except Exception as e:
@@ -542,7 +542,7 @@ class BitcoinMonitor:
         except Exception as e:
             print(f"BTC.D 趨勢取得失敗：{e}")
         try:
-            from service.macro_data import get_next_macro_event
+            from service.macro_events import get_next_macro_event
             days = get_next_macro_event().get("days")        # db/macro_events.json（本地，不碰 FRED）
             ext["macro"] = {"event_within_days": days} if days is not None else None
         except Exception as e:

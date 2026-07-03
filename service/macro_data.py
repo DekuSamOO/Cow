@@ -32,11 +32,8 @@ FRED 公開 CSV API 說明:
   - DEXJPUS : 美元兌日圓（日頻）
 """
 import io
-import os
-import json
 import math
 import logging
-from datetime import datetime, timezone
 import requests
 from core.http_client import safe_get, safe_post
 
@@ -528,41 +525,11 @@ def fetch_btc_dominance() -> dict:
 # 總經事件行事曆（FOMC/CPI/PCE/非農）— 本地鏡像，與 Notion「BTC 總經事件」DB 同源
 # ──────────────────────────────────────────────────────────────────────────────
 
-_MACRO_EVENTS_PATH = os.path.join(os.path.dirname(__file__), "..", "db", "macro_events.json")
-
-
-def get_next_macro_event(now=None) -> dict:
-    """
-    讀 db/macro_events.json，回傳最近的「未來（含當日）」重大總經事件：
-      {days, date, type, importance}；無資料/無未來事件時 days=None。
-    供 core/relative_high「總經逆風」維度的 event_within_days（事件臨近風險）。
-    app 無 Notion 權限，故讀本地鏡像（每年底人工補下一年度）。
-    """
-    if now is None:
-        now = datetime.now(timezone.utc).date()
-    elif isinstance(now, datetime):
-        now = now.date()
-    try:
-        with open(_MACRO_EVENTS_PATH, "r", encoding="utf-8") as f:
-            events = json.load(f).get("events", [])
-    except Exception as e:
-        logger.warning(f"[macro_events] 讀取失敗：{e}")
-        return {"days": None, "date": None, "type": None, "importance": None}
-
-    future = []
-    for ev in events:
-        try:
-            d = datetime.strptime(ev["date"], "%Y-%m-%d").date()
-        except Exception:
-            continue
-        if d >= now:
-            future.append((d, ev))
-    if not future:
-        return {"days": None, "date": None, "type": None, "importance": None}
-    future.sort(key=lambda x: x[0])
-    d, ev = future[0]
-    return {"days": (d - now).days, "date": ev["date"],
-            "type": ev.get("type"), "importance": ev.get("importance")}
+# 函式本體已搬到 service/macro_events.py（零重依賴，不 import streamlit/yfinance，
+# 見該檔頭說明——watcher.py／daily_line_notify.py 改直接吃那支輕量模組）。這裡 re-export
+# 只為了不改動 handler/tab_macro_compass.py 既有的 `from service.macro_data import
+# ...get_next_macro_event` 呼叫路徑（dashboard 本就需要 streamlit，不受影響）。
+from service.macro_events import get_next_macro_event, _MACRO_EVENTS_PATH  # noqa: F401
 
 
 # ──────────────────────────────────────────────────────────────────────────────
