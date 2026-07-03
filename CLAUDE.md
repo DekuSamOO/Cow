@@ -136,7 +136,9 @@ config.MINER_ELECTRICITY_RATE 單一來源；eff_jth anchors 因缺實際 CBECI 
 刷新一次抓 ETF（`get_etf_flow_summary` 讀 committed `etf_flow.json`，Farside 403 備援）、
 SOPR（`get_latest_bottom_metrics`，bitcoin-data 12h 快取）、BTC.D 趨勢（`get_btcd_trend`，
 本地 OI 快照）、總經事件（`get_next_macro_event`，本地 `macro_events.json`，**不打被擋的 FRED**）。
-可得天花板升至 **逃頂/抄底各 93**（唯缺 macro 通膨/就業 dovish/hawkish flags 需 FRED → 缺 7 分）。
+可得天花板升至 **逃頂/抄底各 99**（唯缺 macro 通膨/就業 dovish/hawkish flags 需 FRED；2026-07-03
+onchain 併入 MVRV-Z 後 WEIGHTS 原始總和變 106 會被 clamp(100) 蓋掉超編部分，「缺 FRED」實際只再
+少 1 分，不是舊版算的 7 分——`BTC_WATCH.TOP_CAP`/`LOW_CAP` 已同步更新為 99，勿再用「100-7」捷徑算）。
 
 **⚠️ 陷阱：Farside ETF 佔位 0.0（2026-07 修）**：Farside 對「最新未定案日」回 `0.0`，若當真實值
 存入 `db/etf_flow.json`，會被 streak 邏輯當成非流出 → `consecutive_outflow_days` 歸 0、latest 誤標

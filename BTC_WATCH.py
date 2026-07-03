@@ -344,12 +344,16 @@ class BitcoinMonitor:
     DAILY_REFRESH_SEC = 3600   # 日線/地板/外部維度刷新間隔（即時項仍每 60s）
 
     # 可得天花板（純幣安 + F&G + 本地快取 ETF/SOPR/BTC.D + 本地總經事件行事曆）。
-    # 唯一缺項：macro 的通膨/就業 dovish/hawkish flags（FRED 被公司網路封鎖）= 7 分 → 100-7=93。
-    TOP_CAP = 93               # derivatives30 + technical25 + onchain20 + sentiment15 + macro事件3
-    LOW_CAP = 93               # cycle25 + derivatives20 + technical20 + sentiment15 + onchain10 + macro事件3
+    # 唯一缺項：macro 的通膨/就業 dovish/hawkish flags（FRED 被公司網路封鎖，macro 僅拿得到
+    # 事件臨近 3 分，非滿分 10）。⚠️ 不能再用「100-7」這種捷徑算：2026-07 onchain 併入
+    # MVRV-Z 後單維已超編（20→26／10→16），WEIGHTS 原始總和變成 106，full-macro 情境會被
+    # compute_escape_top_score/compute_relative_low_score 的 clamp(100) 蓋掉多出的 6 分，
+    # 「缺 FRED」實際只再少那超編之外的 1 分，不是少 7 分——必須逐維直接加總才準：
+    TOP_CAP = 99               # derivatives30 + technical25 + onchain26(含MVRV-Z) + sentiment15 + macro事件3
+    LOW_CAP = 99               # cycle25 + derivatives20 + technical20 + sentiment15 + onchain16(含MVRV-Z) + macro事件3
 
     def __init__(self, symbol="BTCUSDT", coin_symbol="BTCUSD_PERP", is_btc=True,
-                 top_cap=93, low_cap=93, title=None, oi_unit="BTC", nav=False):
+                 top_cap=99, low_cap=99, title=None, oi_unit="BTC", nav=False):
         self.fapi_url = "https://fapi.binance.com/fapi/v1"
         self.fdata_url = "https://fapi.binance.com/futures/data"
         self.symbol = symbol
@@ -510,7 +514,7 @@ class BitcoinMonitor:
         ETF / SOPR / BTC.D / macro 外部維度（隨日線每小時刷新一次，避免 60s 迴圈與 bitcoin-data 限流）。
         全 best-effort：抓不到的維度回 None → 評分自動灰燈、不 crash。皆為本地快取或輕量單點，
         **不打被公司網路封鎖的 FRED**（macro 僅取本地事件行事曆 event_within_days；
-        通膨/就業 dovish/hawkish flags 需 FRED → 略，故 cap=93 而非 100）。
+        通膨/就業 dovish/hawkish flags 需 FRED → 略，故 cap=99 而非 100，見 TOP_CAP/LOW_CAP 註解）。
         dashboard `_gather_radar_externals` 的精簡鏡像（同 service 單一來源）。
         """
         ext = {"etf": None, "sopr": None, "btcd": None, "macro": None,

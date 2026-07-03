@@ -121,7 +121,7 @@ def main():
         backtest(s, df, dt.date.fromisoformat(d), fng_map)
     print(f"\n{'═' * 64}")
     print("  註：OI/onchain/BTC.D/macro 歷史不可重建 → 灰燈(0)；分數為「可重建子集」，"
-          "故與即時版（可得≤93）不可直接相比，看絕對高低與維度分佈即可。")
+          "故與即時版（可得≤99）不可直接相比，看絕對高低與維度分佈即可。")
 
 
 if __name__ == "__main__":
