@@ -48,7 +48,7 @@ def atr_risk_rows(df, price, support=None, lookback=60, k=2.0) -> list:
         return []
     rows = [
         f"  風控框架      ATR(14) ${r['atr']:,.0f} ({r['atr_pct']:.1f}%/日)"
-        f"｜{r['k']:g}×ATR 停損：多 ${r['stop_long']:,.0f} / 空 ${r['stop_short']:,.0f}",
+        f"｜{r['k']:g}×ATR 停損：多↓${r['stop_long']:,.0f} / 空↑${r['stop_short']:,.0f}",
         f"  風報參考      支撐 ${r['support']:,.0f} ({r['support_pct']:+.1f}%)"
         f"｜壓力(近{r['lookback']}日高) ${r['resistance']:,.0f} ({r['resistance_pct']:+.1f}%)",
     ]

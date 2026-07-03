@@ -316,8 +316,8 @@ def _build_risk_box(s):
     if not r:
         return None
     items = [
-        ("停損（做多）", f"${r['stop_long']:,.0f}", None),
-        ("停損（做空）", f"${r['stop_short']:,.0f}", None),
+        ("停損（做多）", f"↓${r['stop_long']:,.0f}", None),
+        ("停損（做空）", f"↑${r['stop_short']:,.0f}", None),
         ("支撐", f"${r['support']:,.0f}", f"{r['support_pct']:+.1f}%"),
         ("壓力", f"${r['resistance']:,.0f}", f"{r['resistance_pct']:+.1f}%"),
     ]

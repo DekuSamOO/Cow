@@ -13,4 +13,4 @@ def test_reexport_matches_core_risk():
     }, index=idx)
     rows = _atr_risk_rows(df, price=100.0, k=2.0)
     assert len(rows) == 2
-    assert "多 $90" in rows[0] and "空 $110" in rows[0]
+    assert "多↓$90" in rows[0] and "空↑$110" in rows[0]

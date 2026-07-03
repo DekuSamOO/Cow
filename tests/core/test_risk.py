@@ -42,7 +42,7 @@ def test_atr_risk_rows_formats_two_lines():
     assert len(rows) == 2
     joined = " ".join(rows)
     assert "ATR(14) $5" in joined
-    assert "多 $90" in joined and "空 $110" in joined
+    assert "多↓$90" in joined and "空↑$110" in joined
     assert "1:2.0" in joined
 
 
