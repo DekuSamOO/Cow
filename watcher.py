@@ -35,7 +35,8 @@ from core.relative_low_tw import compute_relative_low_tw, relative_low_tw_meta  
 from core.relative_high_us import compute_relative_high_us, relative_high_us_meta  # noqa: E402
 from core.relative_low_us import compute_relative_low_us, relative_low_us_meta     # noqa: E402
 from service.ohlc_universal import (classify_symbol, fetch_ohlc,            # noqa: E402
-                                    fetch_live_quote, live_quote_freshness, KIND_LABEL)
+                                    fetch_live_quote, live_quote_freshness, KIND_LABEL,
+                                    is_daily_bar_forming, resolve_live_volume)
 # 重用 BTC_WATCH 既有的畫框 / 面板 / 等待 helper（單一真實來源，不重造）
 from core.momentum import momentum_ref_rows                             # noqa: E402
 from BTC_WATCH import (BitcoinMonitor, _title, _row, _edge, _dw, _bar, _bar_signed,  # noqa: E402
@@ -79,6 +80,8 @@ class UniversalMonitor:
         self._daily_ts = 0.0
         self._chip = None           # 台股籌碼/估值（每小時隨日線刷新一次）
         self._shares_out = None     # 台股已發行股數（週轉率用；tw_chip 內部已日快取，這裡存最近一次結果）
+        self._last_live_vol = None       # 即時成交量快取（Yahoo 該欄位偶爾單次缺漏，見 render 說明）
+        self._last_live_vol_ts = 0.0
 
     def _fetch(self):
         """日線每小時重抓+重算一次（避免 60s 迴圈重抓 2y OHLC 與全套指標）；台股一併刷新籌碼。"""
@@ -122,17 +125,29 @@ class UniversalMonitor:
             price_line = f"  現價          {_fmt_price(live['price'])}{chg_txt}   {fr['label']}"
         else:
             price_line = f"  現價          {_fmt_price(close)}   （日線收盤）"
+        # 「最新日線」若恰逢今日進行式棒（Yahoo 盤中即時更新的今日 1d bar），數字會跟「現價」
+        # 完全重複（同日同價，看起來像多餘），改顯示前一個已結算交易日收盤，兩者才各有意義。
+        if len(df) >= 2 and is_daily_bar_forming(df.index[-1].date(), self.is_tw):
+            daily_date, daily_close = df.index[-2].date(), float(df.iloc[-2]["close"])
+            daily_line = f"  前一交易日    {daily_date} 收 {_fmt_price(daily_close)}（{len(df)} 根）"
+        else:
+            daily_line = f"  最新日線      {df.index[-1].date()} 收 {_fmt_price(close)}（{len(df)} 根）"
         quote = [
             price_line,
-            f"  最新日線      {df.index[-1].date()} 收 {_fmt_price(close)}（{len(df)} 根）",
+            daily_line,
             f"  52週高/低     {_fmt_price(hi)} / {_fmt_price(lo)}   （位置 {pos:.0f}%）",
             f"  短線動能      {mom}",
         ]
         # 即時成交量（同一次 fetch_live_quote 內含，零額外網路成本）＋量能分位（個股自身歷史，複用
         # 台股高側「量能見頂」既有邏輯）＋週轉率（台股才有，需已發行股數，來源 TWSE/TPEx OpenAPI）。
-        live_vol = live.get("volume")
+        # Yahoo 回應偶爾單次缺漏 regularMarketVolume（價格欄位正常、僅此欄漏），resolve_live_volume
+        # 退回快取避免每次刷新忽有忽無地閃爍（見該函式 docstring）。
+        live_vol, vol_note = resolve_live_volume(
+            live.get("volume"), self._last_live_vol, self._last_live_vol_ts, self.REFRESH_SEC)
+        if live.get("volume"):
+            self._last_live_vol, self._last_live_vol_ts = live["volume"], time.time()
         if live_vol:
-            vol_line = f"  即時成交量    {live_vol:,.0f} 股"
+            vol_line = f"  即時成交量    {live_vol:,.0f} 股{vol_note}"
             if self.is_tw and self._shares_out:
                 vol_line += f"（週轉率 {live_vol / self._shares_out * 100:.2f}%）"
             quote.append(vol_line)

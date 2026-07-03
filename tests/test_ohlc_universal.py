@@ -1,4 +1,5 @@
-"""service/ohlc_universal.live_quote_freshness / _is_tw_trading_hours 單元測試。
+"""service/ohlc_universal.live_quote_freshness / _is_tw_trading_hours / is_daily_bar_forming /
+resolve_live_volume 單元測試。
 
 背景：TWSE 免費源（Yahoo/Google 皆同）法定延遲約 20 分鐘，若沿用美股「age<15分＝盤中」
 門檻，台股盤中會被誤判成「已收盤」（見 2026-07-03 handoff：盤中查詢顯示「已收盤（0h前）」）。
@@ -8,7 +9,10 @@ import time
 
 import pytest
 
-from service.ohlc_universal import live_quote_freshness, _is_tw_trading_hours
+from service.ohlc_universal import (
+    live_quote_freshness, _is_tw_trading_hours, _is_us_trading_hours,
+    is_daily_bar_forming, resolve_live_volume,
+)
 
 
 def _q(age_sec, prev_close=200.0, price=206.5):
@@ -72,3 +76,87 @@ def test_is_tw_trading_hours_weekend_false_even_in_window():
     """2026-07-04 為週六，即使時間落在 09:00-13:30 仍非交易時段。"""
     now = datetime.datetime(2026, 7, 4, 10, 0)
     assert _is_tw_trading_hours(now) is False
+
+
+@pytest.mark.parametrize("hhmm,expected", [
+    ((9, 29), False), ((9, 30), True), ((11, 0), True),
+    ((16, 0), True), ((16, 1), False),
+])
+def test_is_us_trading_hours_boundary(hhmm, expected):
+    """2026-07-03 為週五，作固定基準日避開週末誤判。"""
+    now = datetime.datetime(2026, 7, 3, *hhmm)
+    assert _is_us_trading_hours(now) is expected
+
+
+def test_is_us_trading_hours_weekend_false_even_in_window():
+    now = datetime.datetime(2026, 7, 4, 11, 0)
+    assert _is_us_trading_hours(now) is False
+
+
+# ---------------------------------------------------------------------------
+# is_daily_bar_forming
+# ---------------------------------------------------------------------------
+
+def test_daily_bar_forming_tw_mid_session_last_bar_is_today():
+    """台股盤中、最後一根日期＝今天 → 進行式（尚未結算）。"""
+    now = datetime.datetime(2026, 7, 3, 10, 40)   # 週五 10:40，盤中
+    assert is_daily_bar_forming(datetime.date(2026, 7, 3), True, now=now) is True
+
+
+def test_daily_bar_forming_tw_mid_session_stale_cache_last_bar_is_yesterday():
+    """台股盤中，但日線快取尚未刷到今天（最後一根仍是昨天已結算收盤）→ 非進行式，
+    不可誤判為進行式而錯誤退回前兩天。"""
+    now = datetime.datetime(2026, 7, 3, 9, 5)     # 剛開盤，快取可能還沒刷新
+    assert is_daily_bar_forming(datetime.date(2026, 7, 2), True, now=now) is False
+
+
+def test_daily_bar_forming_tw_after_close_last_bar_is_today_settled():
+    """台股已收盤、最後一根日期＝今天（已結算）→ 非進行式，照常顯示今天收盤。"""
+    now = datetime.datetime(2026, 7, 3, 14, 0)
+    assert is_daily_bar_forming(datetime.date(2026, 7, 3), True, now=now) is False
+
+
+def test_daily_bar_forming_us_mid_session():
+    now = datetime.datetime(2026, 7, 2, 11, 0)    # 週四，美股盤中
+    assert is_daily_bar_forming(datetime.date(2026, 7, 2), False, now=now) is True
+
+
+def test_daily_bar_forming_us_weekend_false():
+    now = datetime.datetime(2026, 7, 4, 11, 0)    # 週六
+    assert is_daily_bar_forming(datetime.date(2026, 7, 4), False, now=now) is False
+
+
+# ---------------------------------------------------------------------------
+# resolve_live_volume
+# ---------------------------------------------------------------------------
+
+def test_resolve_live_volume_fresh_value_used_directly():
+    vol, note = resolve_live_volume(546342, None, 0, 60)
+    assert (vol, note) == (546342, "")
+
+
+def test_resolve_live_volume_missing_falls_back_to_cache_no_note_when_recent():
+    """單次缺漏、快取剛更新不久（<2 個刷新週期）→ 沿用快取，不加標註（避免單次 blip 打擾使用者）。"""
+    now = time.time()
+    vol, note = resolve_live_volume(None, 546342, now - 30, refresh_sec=60, now=now)
+    assert vol == 546342 and note == ""
+
+
+def test_resolve_live_volume_missing_long_stale_adds_note():
+    """缺漏且快取已超過 2 個刷新週期（>120s）→ 沿用快取但附註快取時間。"""
+    now = time.time()
+    vol, note = resolve_live_volume(None, 546342, now - 300, refresh_sec=60, now=now)
+    assert vol == 546342
+    assert "快取" in note and "300s" in note
+
+
+def test_resolve_live_volume_missing_and_no_cache_returns_none():
+    vol, note = resolve_live_volume(None, None, 0, 60)
+    assert (vol, note) == (None, "")
+
+
+def test_resolve_live_volume_fresh_zero_treated_as_missing():
+    """live_volume=0（罕見但理論可能）視同缺漏 → 走快取路徑，而非顯示 0 股。"""
+    now = time.time()
+    vol, note = resolve_live_volume(0, 546342, now - 30, refresh_sec=60, now=now)
+    assert vol == 546342

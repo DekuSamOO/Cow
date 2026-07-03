@@ -150,6 +150,43 @@ def _is_tw_trading_hours(now=None) -> bool:
     return datetime.time(9, 0) <= now.time() <= datetime.time(13, 30)
 
 
+def _is_us_trading_hours(now=None) -> bool:
+    """粗略判斷此刻是否為美股交易時段（週一~五 09:30–16:00 美東時間）。
+    不含國定假日/半日市（本模組零外部依賴），僅供顯示分流，非交易依據。
+    now 供測試注入，語意同 `_is_tw_trading_hours`。"""
+    import datetime
+    if now is None:
+        from zoneinfo import ZoneInfo
+        now = datetime.datetime.now(ZoneInfo("America/New_York"))
+    if now.weekday() >= 5:
+        return False
+    return datetime.time(9, 30) <= now.time() <= datetime.time(16, 0)
+
+
+def is_daily_bar_forming(last_bar_date, is_tw: bool, now=None) -> bool:
+    """
+    判斷日線最後一根 K 棒是否為「今日進行式」（尚未結算收盤）。
+
+    Yahoo v8 chart 的 1d bar 在交易時段中會即時更新今日這根（close＝當下成交價，非結算
+    收盤），watcher「最新日線」若照樣顯示會跟「現價」數字重複、日期同天（2026-07-03 使用者
+    回報：盤中看到「最新日線 今日 收 X」跟「現價 X」完全一樣，像多餘重複）。
+
+    需同時滿足才視為「進行式」：(a) 該市場此刻正在交易時段 (b) 最後一根日期＝當地「今天」。
+    只判斷 (a) 不夠：日線快取每小時才刷新一次（`UniversalMonitor.DAILY_REFRESH_SEC`），市場
+    剛開盤時快取可能還停在昨天已結算的收盤，此時最後一根其實不是今天，不該被誤判為進行式
+    而錯誤退回前兩天。
+
+    now 供測試注入（語意同 `_is_tw_trading_hours`/`_is_us_trading_hours`：代表該市場當地
+    此刻的 wall-clock datetime，呼叫端負責建構正確時區的值）。
+    """
+    import datetime
+    if now is None:
+        from zoneinfo import ZoneInfo
+        now = datetime.datetime.now(ZoneInfo("Asia/Taipei" if is_tw else "America/New_York"))
+    trading_now = _is_tw_trading_hours(now) if is_tw else _is_us_trading_hours(now)
+    return trading_now and last_bar_date == now.date()
+
+
 def live_quote_freshness(q: dict, is_tw: bool = False) -> dict:
     """
     解讀 fetch_live_quote 回傳的時效與漲跌（ts/prev_close 語義只有本模組知道，
@@ -179,3 +216,27 @@ def live_quote_freshness(q: dict, is_tw: bool = False) -> dict:
         label = "⚪ 已收盤"
     chg = ((q["price"] / q["prev_close"] - 1) * 100) if q.get("prev_close") else None
     return {"label": label, "age_sec": age, "chg_pct": chg}
+
+
+def resolve_live_volume(live_volume, cached_volume, cached_ts, refresh_sec, now=None):
+    """
+    即時成交量若本次 fetch 缺漏則退回快取值，避免每次刷新忽有忽無地閃爍。
+
+    根因：Yahoo `regularMarketVolume` 偶爾單次缺漏（`regularMarketPrice` 等其餘欄位正常，
+    僅此欄漏），watcher 每 60s 重新 fetch，若直接以「本次有無」判斷顯示，使用者會看到這行
+    忽然消失又出現（2026-07-03 使用者回報）。成交量單調累加，退回舊值不影響方向判讀。
+
+    回傳 (display_volume, stale_note)：
+      - display_volume：本次值優先，缺漏則用快取，兩者皆無則 None（呼叫端應整行不顯示）。
+      - stale_note：僅在「本次確實使用快取」且快取已超過 2 個刷新週期時給簡短標註
+        （如 `「（快取 130s 前）」`），提醒非本次刷新；否則為空字串（單次blip 不必打擾使用者）。
+    """
+    import time as _time
+    if live_volume:
+        return live_volume, ""
+    if not cached_volume:
+        return None, ""
+    now = now if now is not None else _time.time()
+    stale_sec = now - cached_ts
+    note = f"（快取 {int(stale_sec)}s 前）" if stale_sec > 2 * refresh_sec else ""
+    return cached_volume, note
