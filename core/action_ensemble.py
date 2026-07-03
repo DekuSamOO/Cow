@@ -19,6 +19,20 @@ core/action_ensemble.py
    現行階梯方向（強多倉位最高）與最佳報酬一致，故維持；待 OI/ETF/SOPR 歷史補齊（Phase 3）
    解除回放下界後重跑 position_calib 再校準。
 
+⚠️ 2026-07-03 用台股代表性樣本重測同一個問題（`scripts/tw_position_calib.py`，系統抽樣
+   200 檔、climber DB 2016 年起全歷史、每 5 個交易日取樣、out-of-sample≥2024），**結論同樣
+   是「證據不夠、維持未擬合」**，不是 BTC 特例：
+     用與本檔完全相同的呼叫方式（`compute_trend_score`→`compute_relative_high_tw`/
+     `relative_low_tw`→本函式，不傳 `cycle_score`）重建歷史逐日 `action_key`，依 `pos_mid`
+     排序分桶檢查後續 20/60 日報酬是否單調：
+       IN-SAMPLE（n=55,454）桶級 pos_mid vs fwd60_mean 等級相關 +0.42（中等）；
+       OUT-OF-SAMPLE（n=18,817）**+0.15（弱，大幅衰退，classic 樣本內過擬合警訊）**。
+   根因與 BTC 版本一致：測試期（2016-2023 台股／BTC）皆為大牛市，市場貝塔蓋過分數排序的
+   鑑別力，多數行動分類無論分數高低皆為正報酬，看不出真正排序訊號——**不是「台股資料不夠」
+   （台股歷史資料很夠），是「絕對報酬在牛市期間本來就不太能拿來檢驗排序好壞」**，要驗證
+   需改測「相對大盤超額報酬」排除貝塔，屬更大工程，尚未做。**勿再用同方法重測，除非改用
+   超額報酬版重新設計。**
+
 dashboard（tab_macro_compass）、LINE 推播（daily_line_notify/builders）共用本檔，
 杜絕兩邊行動建議漂移。
 """
