@@ -155,19 +155,19 @@ class UniversalMonitor:
             low = compute_relative_low_tw(row, df, chip=self._chip)
             _, top_rows = _panel(high, relative_high_tw_meta, 100, "逃頂訊號（台股籌碼）",
                                  ("technical", "valuation", "volume", "leverage", "institution",
-                                  "tdcc", "vol_price", "structure"))
+                                  "tdcc", "vol_price"))
             _, low_rows = _panel(low, relative_low_tw_meta, 100, "抄底訊號（台股籌碼）",
-                                 ("leverage", "technical", "institution", "tdcc", "valuation",
-                                  "vol_price", "structure"))
+                                 ("leverage", "technical", "institution", "valuation"))
             ct_top = f"逃頂  {high[0]}/100  {_bar(high[0], 100)}  {relative_high_tw_meta(high[0])[0]}"
             ct_low = f"抄底  {low[0]}/100  {_bar(low[0], 100)}  {relative_low_tw_meta(low[0])[0]}"
             # 三軸 composite：不傳 cycle_score（台股估值對底部是雜訊、且 max 僅 10 達不到 cycle 門檻）；
             # 由重配重後的 low_score≥60 驅動 value 分支（已含融資清洗權重30 這個校準最強底部維）。
             ct_comp, comp_rows = _composite_panel(trend[0], high[0], low[0])
             note = [f"  籌碼資料截至 {self._chip.get('as_of', '—')}（TWSE EOD；今日未收/連假自動取最近交易日）",
-                    "  ⚠ 台股逃頂/抄底 v0.4〔2026-06 swing 回測校準＋2026-07 疊加新維〕：逃頂靠估值",
-                    "     (PE/PB絕對 AUC~0.63)、抄底靠融資清洗(AUC 0.564)；法人/TDCC 為弱維(AUC<0.55)、",
-                    "     量價背離/結構轉折為未擬合新維（規則式，尚未回測），皆僅參考。"]
+                    "  ⚠ 台股逃頂/抄底 v0.5〔2026-07-02 全市場 swing 回測拍板〕：逃頂靠估值(PE/PB絕對",
+                    "     AUC~0.63)+量能見頂(0.648)+量價背離(0.566 已轉正式)；抄底靠融資清洗(0.564)。",
+                    "     已移除：抄底大戶(AUC 0.422 方向反)、抄底量價/結構(0.50/0.52 雜訊)、逃頂結構(0.483)。",
+                    "     法人為弱維(AUC<0.55) 僅參考。"]
         elif not self.is_tw:
             # 美股：無籌碼/估值免費源，但量價背離＋結構轉折＋技術背離皆純 OHLCV → 通用軸也能有逃頂/抄底
             high = compute_relative_high_us(row, df)
@@ -180,8 +180,8 @@ class UniversalMonitor:
             ct_low = f"抄底  {low[0]}/100  {_bar(low[0], 100)}  {relative_low_us_meta(low[0])[0]}"
             ct_comp, comp_rows = _composite_panel(trend[0], high[0], low[0])
             note = ["  ⚠ 美股逃頂/抄底 v0.1〔2026-07 新建〕：個股槓桿/法人/IV 無免費源，改用純 OHLCV",
-                    "     通用軸（技術背離+量價背離+結構轉折）。全數規則式，尚未在美股資料上跑過",
-                    "     回測，權重為專家經驗值，僅供參考。"]
+                    "     通用軸（技術背離+量價背離+結構轉折）。2026-07-02 家用網路已回測（50 檔）→ 三維",
+                    "     全近雜訊(AUC~0.5，權值股純技術面抓頂難)；權重 50/30/20 維持專家值、僅參考未獲實證。"]
         else:
             st = compute_trend_stance(trend[0], mom)
             _, comp_rows = _panel_stance(

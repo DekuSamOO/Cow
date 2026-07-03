@@ -1,27 +1,27 @@
 """
-core/relative_high_tw.py  ·  v0.4（2026-07-02 通用量價/結構維度）
+core/relative_high_tw.py  ·  v0.5（2026-07-02 疊加新維回測拍板）
 台股相對高點（逃頂雷達）— 純函數、零網路請求。把加密專屬維度（funding/OI/鏈上）
 替換為台股對應（融資融券/三大法人/TDCC/PE-PB/成交量）。
 
-八維（原六維已回測校準維度總分 100 不動；新增兩維為**疊加**、不佔既有維度配額，
-理論總分 108，`compute_relative_high_tw` 仍 clamp 到 100）：
+七維（六維已校準核心總分 100 不動；vol_price 為**已驗證疊加**、理論總分 108，
+`compute_relative_high_tw` 仍 clamp 到 100）：
   技術衰竭 30（頂背離 + RSI 超買）        ← 複用 core/divergence（與加密同源、已驗證）
   估值過高 30（PE/PB 絕對值高）          ← ✅ 最強維（swing 逃頂 AUC PE 0.626/PB 0.640）
   量能見頂 18（成交量處個股自身高分位）    ← ✅ v0.3 新增（swing 逃頂 AUC 0.648，跨 labeling 穩健、抄底側中性）
   槓桿過熱 10（融資增速高＝散戶追高）      ← 〔弱〕swing AUC 0.538
   法人派發  4（三大法人賣超）            ← 〔弱/雜訊〕swing AUC 0.519 → 降權
   籌碼鬆動  8（TDCC 散戶持股比高）       ← 〔弱・樣本薄 2023-09起〕swing AUC 0.538
-  量價背離  5（量增價縮＝出貨）          ← 🆕 v0.4 新增，`core.relative_universal`，規則式未回測
-  結構轉折  3（前高未過＝結構轉弱）       ← 🆕 v0.4 新增，`core.relative_universal`，規則式未回測
+  量價背離  8（量增價縮＝出貨）          ← ✅ v0.5 轉正式（swing 逃頂 AUC 0.566，2026-07-02 全市場回測>0.55）
 
 校準關鍵：
   v0.1→v0.2：估值 15→30（最強）、法人 25→10（雜訊）。
   v0.2→v0.3：新增量能見頂 18（自身成交量分位，自包含、不依賴 climber）；
             為配重把融資 15→10、法人 10→4、TDCC 15→8（皆弱維）。
-  v0.3→v0.4：新增量價背離/結構轉折（`core.relative_universal`，通用軸、美股台股共用）。
-            **刻意不動既有六維的內部分級**（無真實回測數據支撐前，不臆測精確配重數字，
-            違反本專案「誠實與驗證」原則）→ 疊加式新增，總分變 108、clamp 100。
-            待累積跨市場資料回測出 AUC 後，比照 v0.2/v0.3 的方法論用實測數字重新按比例分配。
+  v0.3→v0.4：新增量價背離/結構轉折（`core.relative_universal`，通用軸），先疊加、標未擬合。
+  v0.4→v0.5：**2026-07-02 全市場 swing 回測拍板**（`scripts/tw_universal_backtest.py`，
+            2080 檔、out-of-sample≥2024）：量價背離逃頂 **AUC 0.566>0.55** → 轉正式權重
+            5→8（與弱維 leverage/散戶 同級疊加）；結構轉折逃頂 **AUC 0.483（雜訊/微反）→ 移除**
+            （不再計分；純函數仍在 relative_universal 供美股框架用）。核心六維內部分級不動。
 PE/PB **用絕對值非分位**（swing 重測：絕對 PE 0.626 大勝個股分位 0.452/0.452，且分位多次反向 <0.5）。
 量能維用**個股自身分位**（爆量見頂）非絕對量（跨股不可比）；P4 驗證其逃頂 0.61–0.67、抄底 0.49–0.51 不對稱
 → 非「會大動」的移動幅度混淆（券資比/波動率分位即因雙向皆 >0.55 被否決）。
@@ -30,17 +30,18 @@ PE/PB **用絕對值非分位**（swing 重測：絕對 PE 0.626 大勝個股分
 from typing import Optional, Dict, Tuple
 
 from core.divergence import detect_top_divergence_combo
-from core.relative_universal import (score_volume_price_top, score_structure_top, rescale_dim,
+from core.relative_universal import (score_volume_price_top, rescale_dim,
                                      _nan, high_meta_ladder)
 
 WEIGHTS_HIGH_TW = {
     "technical": 30, "valuation": 30, "volume": 18, "leverage": 10, "institution": 4, "tdcc": 8,
-    "vol_price": 5, "structure": 3,
+    "vol_price": 8,
 }
 # AUC<0.55 的弱維（已回測、給低權、判讀僅參考）。volume/valuation/technical 非弱維。
 WEAK_DIMS_HIGH_TW = ("leverage", "institution", "tdcc")
-# 從未回測（規則式，非「回測後發現弱」）— 與 WEAK_DIMS 狀態不同，別搞混。
-UNFITTED_DIMS_HIGH_TW = ("vol_price", "structure")
+# 已無「未擬合」維：vol_price 逃頂 2026-07-02 回測 AUC 0.566（>0.55）轉正式權重（見 docstring）；
+# structure 逃頂 AUC 0.483（雜訊/微反）已移除，不再計分。
+UNFITTED_DIMS_HIGH_TW = ()
 
 
 def _avg_vol(df) -> Optional[float]:
@@ -166,7 +167,7 @@ def _score_tdcc_high(tdcc) -> dict:
 
 
 def compute_relative_high_tw(row, df=None, *, chip=None) -> Tuple[int, Dict[str, dict]]:
-    """台股相對高點八維評分（0–100，clamp）。chip = service.tw_chip.get_chip_bundle 結果（可缺）。"""
+    """台股相對高點七維評分（0–100，clamp）。chip = service.tw_chip.get_chip_bundle 結果（可缺）。"""
     chip = chip or {}
     signals = {
         "technical": _score_technical_high(row, df),
@@ -176,7 +177,6 @@ def compute_relative_high_tw(row, df=None, *, chip=None) -> Tuple[int, Dict[str,
         "institution": _score_institution_high(chip.get("institutional"), df),
         "tdcc": _score_tdcc_high(chip.get("tdcc")),
         "vol_price": rescale_dim(score_volume_price_top(df), WEIGHTS_HIGH_TW["vol_price"]),
-        "structure": rescale_dim(score_structure_top(df), WEIGHTS_HIGH_TW["structure"]),
     }
     score = max(0, min(100, int(sum(s["score"] for s in signals.values()))))
     return score, signals

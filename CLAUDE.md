@@ -178,9 +178,11 @@ mvrv_z）與 `reference_low_signals`（拿掉 mvrv_z 後只剩 Hash Ribbons、AU
 加密雷達的 funding/OI/鏈上維度股票無對應 → 台股改用**籌碼/估值**替代。**只做台股**（美股
 個股槓桿/法人/IV 無免費源，維持純通用軸）。三檔純函數 + 一資料層，watcher 台股分支共用：
 
-- **`core/relative_high_tw.py`／`relative_low_tw.py`**：v0.2 配重（逃頂＝技術30/估值30/槓桿15/
-  法人10/TDCC15；抄底＝槓桿30/技術25/法人20/TDCC15/估值10）。技術維度**複用 core/divergence**
-  （與加密同源）、法人買賣超以**近20日均量正規化**。`compute_relative_high_tw/low_tw + *_meta`。
+- **`core/relative_high_tw.py`（v0.5）／`relative_low_tw.py`（v0.4）**：現行配重（2026-07-02 回測拍板，
+  見下方「台股通用維 swing-only 回測結論」）＝**逃頂**：技術30/估值30/量能18/槓桿10/法人4/散戶(TDCC)8
+  ＋vol_price 8 疊加（核心 100＋疊加，clamp 100）；**抄底**：槓桿40/技術30/法人20/估值10（四維恰 100，
+  大戶TDCC/量價/結構因回測無效已移除）。技術維度**複用 core/divergence**（與加密同源）、法人買賣超以
+  **近20日均量正規化**。`compute_relative_high_tw/low_tw + *_meta`。
 - **`service/tw_chip.py`**：`get_chip_bundle(symbol, yyyymmdd, lookback=7)` → {margin,
   institutional, valuation, tdcc, **as_of**}，每源 best-effort（抓不到回 None → 評分灰燈不 crash）。
 - **三軸 composite 共用 `action_ensemble.compute_composite_action`**：台股**不傳 cycle_score**
@@ -244,16 +246,26 @@ S1 抽 panel（多檔×多日 + fwd_ret）→ S2 每日 ±18% 二分單維 AUC �
 
 **單一真實來源 `core/relative_universal.py`**（純 OHLCV，不依賴任何市場專屬籌碼資料）：
 - `score_volume_price_top/bottom`：量增價縮＝出貨（逃頂）／量縮價增＝賣壓竭盡（抄底）。
-  近 5 日／20 日均量比 + 近 5 日報酬率變化，純規則式門檻，**尚未回測校準**。
+  近 5 日／20 日均量比 + 近 5 日報酬率變化，純規則式門檻。
 - `score_structure_top/bottom`：前高未過／前低未破＝結構轉折警訊，複用
   `core.divergence.detect_swing_structure`（新公開函數，底層沿用既有 `_local_extrema` 樞紐
   偵測，判斷 HH_HL／LH_LL／mixed 結構）。
 - `rescale_dim(sig, new_max)`：把子維分數按比例縮放到新配額，供疊加進其他框架時用（見下）。
 
-**台股整合（`relative_high_tw.py` v0.4 / `relative_low_tw.py` v0.3）**：新維度**疊加**、
-**不動既有六/五維的內部分級**（無真實回測數據前不臆測精確配重，理論總分 108/110，
-`compute_relative_*_tw` 內部仍 clamp 到 100）。新維度權重：逃頂 vol_price 5 + structure 3、
-抄底 vol_price 6 + structure 4（抄底原本完全沒有量能維度，這維補上這個缺口）。
+**台股整合（`relative_high_tw.py` v0.5 / `relative_low_tw.py` v0.4，2026-07-02 全市場回測拍板）**：
+先前 v0.4/v0.3 是「疊加、標未擬合」（vol_price/structure 逃頂 5+3、抄底 6+4），2026-07-02 用
+`scripts/tw_universal_backtest.py`（2080 檔全市場、swing-only、out-of-sample≥2024，vp 向量化＋
+structure 只在 swing 點算，公司網路本地 climber DB 可跑）跑出實測 AUC 後拍板：
+
+### 台股通用維 swing-only 回測結論（2026-07-02，`scripts/tw_universal_backtest.py`）
+- **逃頂 vol_price 量價 AUC 0.566（>0.55 有效）→ 轉正式權重 5→8**（與弱維 leverage/散戶 同級疊加；
+  核心六維 100 不動，理論總分 108 clamp 100）。**逃頂 structure 0.483（雜訊/微反）→ 移除不計分。**
+- **抄底 vol_price 0.500（純雜訊）＋ structure 0.516（弱雜訊）→ 皆移除**（「量能維補抄底缺口」被資料否決）。
+- **抄底 tdcc 大戶 major_pct AUC 0.422（方向反、比亂猜差，確認 CLAUDE 舊記 0.423）→ 整維移除**，
+  釋出的 15 分重配給最強兩維：**槓桿清洗 30→40（唯一實測最強 0.564）、技術回穩 25→30**，
+  抄底重回四維總分 100（用 `rescale_dim` 提權、不動 `_score_*` 內部分級）。散戶 retail_pct 逃頂 0.537 弱、維持低權。
+- **頂底非對稱再證**：量價背離是**頂部**訊號（逃頂 0.566 有效、抄底 0.500 雜訊）；台股底部唯一實測強維是
+  融資清洗。移除同 Hash Ribbons 邏輯——**不留反指標/雜訊維計分**。純函數仍在 `relative_universal` 供美股框架用。
 
 **美股新框架（`core/relative_high_us.py`／`relative_low_us.py`，v0.1 新建）**：美股個股槓桿/
 法人/IV 無免費源，改用純 OHLCV 三維：技術背離 50（複用 `relative_high_tw._score_technical_high`，

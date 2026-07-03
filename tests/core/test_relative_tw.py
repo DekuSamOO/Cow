@@ -26,18 +26,19 @@ def test_low_empty_chip_all_grey():
 
 
 def test_low_deep_value_and_chips():
-    """v0.2 校準：融資暴減(最強30) + 技術回穩 + 法人大買 + 大戶集中 + 估值低(降權10) → 高抄底分。"""
+    """v0.4 校準：融資暴減(提權40) + 技術回穩(提權30) + 法人大買(20) + 估值低(降權10) → 高抄底分。
+    tdcc 大戶維已移除（AUC 0.422 方向反）；leverage/technical 用 rescale_dim 吸收其 15 分。"""
     row, df = _df(volume=1_000_000, rsi=18)
     chip = {
         "valuation": {"pe": 8, "pb": 0.9}, "margin": {"fin_chg_pct": -6.0},
         "institutional": {"total_net": 300_000}, "tdcc": {"major_pct": 72, "retail_pct": 10},
     }
     score, sig = compute_relative_low_tw(row, df, chip=chip)
-    assert sig["leverage"]["score"] == 30       # 融資 ≤-5%（校準最強維）
-    assert sig["institution"]["score"] == 20    # 30萬/100萬均量=30% 大買
-    assert sig["tdcc"]["score"] == 15           # 大戶 72%
-    assert sig["valuation"]["score"] == 10      # PE<10(5)+PB<1(5)（已降權）
-    assert sig["technical"]["score"] == 8       # RSI≤20(8)，無背離
+    assert "tdcc" not in sig                     # 大戶維已移除（方向反）
+    assert sig["leverage"]["score"] == 40        # 融資 ≤-5% 滿分，rescale 30→40（最強維）
+    assert sig["institution"]["score"] == 20     # 30萬/100萬均量=30% 大買（不變）
+    assert sig["valuation"]["score"] == 10       # PE<10(5)+PB<1(5)（已降權，不變）
+    assert sig["technical"]["score"] == 10       # RSI≤20(8) rescale 25→30 → 10
     assert score >= 80
     assert "低估" in relative_low_tw_meta(score)[0]
 
@@ -83,20 +84,23 @@ def test_high_volume_pctile_dim():
 
 
 def test_weights_sum():
-    """v0.4：已校準六/五維仍總分 100；vol_price/structure 為疊加、未回測前不佔既有配額
-    （理論總分 108/110，compute_relative_*_tw 內部 clamp 到 100，見模組 docstring）。"""
+    """v0.5/v0.4（2026-07-02 回測拍板）：
+    逃頂 核心六維 100 + vol_price 8（已驗證疊加，clamp 100）= 理論 108；抄底四維恰 100。
+    兩側皆無「未擬合」維（vol_price 逃頂轉正式、其餘雜訊/反指標維已移除）。"""
     from core.relative_high_tw import WEIGHTS_HIGH_TW, UNFITTED_DIMS_HIGH_TW
     from core.relative_low_tw import WEIGHTS_LOW_TW, UNFITTED_DIMS_LOW_TW
-    calibrated_high = {k: v for k, v in WEIGHTS_HIGH_TW.items() if k not in UNFITTED_DIMS_HIGH_TW}
-    calibrated_low = {k: v for k, v in WEIGHTS_LOW_TW.items() if k not in UNFITTED_DIMS_LOW_TW}
-    assert sum(calibrated_high.values()) == 100
-    assert sum(calibrated_low.values()) == 100
+    assert UNFITTED_DIMS_HIGH_TW == () and UNFITTED_DIMS_LOW_TW == ()
+    # 逃頂核心（排除疊加的 vol_price）恰 100；含疊加 108
+    high_core = {k: v for k, v in WEIGHTS_HIGH_TW.items() if k != "vol_price"}
+    assert sum(high_core.values()) == 100
     assert sum(WEIGHTS_HIGH_TW.values()) == 108
-    assert sum(WEIGHTS_LOW_TW.values()) == 110
+    # 抄底四維恰 100（無疊加、無反指標維）
+    assert sum(WEIGHTS_LOW_TW.values()) == 100
+    assert set(WEIGHTS_LOW_TW) == {"leverage", "technical", "institution", "valuation"}
 
 
 def test_score_clamped_at_100_with_overlay_dims():
-    """疊加維度（vol_price/structure）滿分時，總分仍 clamp 在 100 不會溢出。"""
+    """逃頂 vol_price 疊加（max 8）滿分時，總分仍 clamp 在 100 不會溢出；structure 已移除。"""
     row, df = _df_vol_spike(rsi=82)
     chip = {
         "valuation": {"pe": 45, "pb": 6}, "margin": {"fin_chg_pct": 6.0},
@@ -104,8 +108,8 @@ def test_score_clamped_at_100_with_overlay_dims():
     }
     score, sig = compute_relative_high_tw(row, df, chip=chip)
     assert score <= 100
-    assert sig["vol_price"]["max"] == 5
-    assert sig["structure"]["max"] == 3
+    assert sig["vol_price"]["max"] == 8
+    assert "structure" not in sig
 
 
 def test_valuation_absolute_levels():

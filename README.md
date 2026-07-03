@@ -1,4 +1,4 @@
-# Cow — 比特幣投資戰情室 v3.26
+# Cow — 比特幣投資戰情室 v3.27
 
 > 比特幣多週期量化分析工具，整合技術指標、鏈上數據、期權與波段策略。
 
@@ -26,7 +26,7 @@ app.py              入口點（組合各層，不含業務邏輯；今日大盤
 config.py           集中設定（均線週期、交易成本、倉位風控參數、WALK_FORWARD_EXIT_MODES、警報門檻/分級/遲滯常數、底部模型演算法參數：可靠度權重/礦工電價/效率 anchors 等單一可調來源）
 data_manager.py     根層級數據管理器（TVL/穩定幣/資金費率歷史 SQLite 快取、指數退避重試、增量模式）
 BTC_WATCH.py        BTC 雙向監控終端儀表板**正本**（2026-06-10 起由 Crypto repo 移入本 repo 維護）：純幣安 fapi/dapi + path import core 的逃頂五維/抄底六維/趨勢方向四維評分，60 秒刷新。頂部「操作訊號（三軸融合）」banner 由 core/action_ensemble.compute_composite_action 算出（傳 cycle 子分；三軸皆有才顯示，含建議倉位）。`BitcoinMonitor` 已參數化（symbol/coin_symbol/is_btc/top_cap/low_cap/title/oi_unit/nav，全部預設 BTC 向後相容）：非 BTC 時停用 ETF/SOPR/BTC.D/四季論/礦工/冪律等 BTC 專屬維度、地板改 Mayer 估值底；nav=True（由 watcher 進入）時 interruptible_wait 偵測鍵盤 b 回上層／q 結束（單獨執行 nav=False 純 sleep，行為不變）
-watcher.py          通用標的監控入口：`python watcher.py` 輸入代號 → classify_symbol 自動判市場路由 —— BTC→完整 BitcoinMonitor；其他幣對→參數化 BitcoinMonitor(is_btc=False, top_cap=68/low_cap=72) 跑逃頂/抄底；台股→UniversalMonitor 台股分支（趨勢方向±100＋台股逃頂/抄底**八維/七維面板**〔v0.4/v0.3，籌碼六/五維校準維度＋量價背離/結構轉折疊加新維〕＋三軸融合操作訊號 banner，籌碼/估值隨日線每小時隨 service.tw_chip.get_chip_bundle 刷新）；美股→UniversalMonitor 美股分支（趨勢方向±100＋純 OHLCV 三維逃頂/抄底 v0.1〔技術背離+量價背離+結構轉折，個股槓桿/法人/IV 無免費源改走通用軸〕＋三軸融合 banner）。即時成交量＋台股週轉率（成交量÷已發行股數，`service.tw_chip.get_shares_outstanding`）與量能分位隨現價同步顯示。main 為 while 迴圈（儀表板內 b 重選代號／q 結束）；畫框/面板/操作訊號 helper（_panel/_panel_stance/_composite_panel 等）重用 BTC_WATCH 單一來源
+watcher.py          通用標的監控入口：`python watcher.py` 輸入代號 → classify_symbol 自動判市場路由 —— BTC→完整 BitcoinMonitor；其他幣對→參數化 BitcoinMonitor(is_btc=False, top_cap=68/low_cap=72) 跑逃頂/抄底；台股→UniversalMonitor 台股分支（趨勢方向±100＋台股逃頂/抄底**七維/四維面板**〔v0.5/v0.4，2026-07-02 全市場 swing 回測拍板：逃頂核心六維＋量價背離疊加、抄底四維，反指標/雜訊維已移除〕＋三軸融合操作訊號 banner，籌碼/估值隨日線每小時隨 service.tw_chip.get_chip_bundle 刷新）；美股→UniversalMonitor 美股分支（趨勢方向±100＋純 OHLCV 三維逃頂/抄底 v0.1〔技術背離+量價背離+結構轉折，個股槓桿/法人/IV 無免費源改走通用軸〕＋三軸融合 banner）。即時成交量＋台股週轉率（成交量÷已發行股數，`service.tw_chip.get_shares_outstanding`）與量能分位隨現價同步顯示。main 為 while 迴圈（儀表板內 b 重選代號／q 結束）；畫框/面板/操作訊號 helper（_panel/_panel_stance/_composite_panel 等）重用 BTC_WATCH 單一來源
 
 collector/
   btc_price_collector.py  本地端 15m K 線收集器（Binance + Kraken 雙源，年度 SQLite 分割，支援 --push；每日市場快照末順手強制刷新 db/etf_flow.json，git_push 一併提交）
@@ -51,8 +51,8 @@ core/
   trend_direction.py  趨勢方向（波段雷達第三軸）單一真實來源：四維**有號**評分（均線結構±40/MACD±30/斜率±15/ADX±15）→ 淨分 [-100,+100]，ADX<20 方向三維打 0.6 折防盤整假突破；compute_trend_score/trend_meta/compute_trend_direction 供 dashboard/BTC_WATCH/LINE 共用，無 Streamlit 依賴
   radar_replay.py     三雷達歷史每日分數回放（逐日重放逃頂/抄底/趨勢分數，DIV_WINDOW 視窗切片避免 O(n²)）+ threshold_forward_stats（門檻向上跨越事件 → 其後 60 日報酬分布，±18% 命中定義與權重擬合一致、cooldown 防重複計數）；僅用歷史可得輸入（OI/ETF/SOPR/BTC.D/總經與線上灰燈一致給 0 → 分數為保守下界），無 Streamlit 依賴
   action_ensemble.py  三軸合成行動建議**單一真實來源**（dashboard tab_macro_compass／LINE 推播／BTC_WATCH／watcher 共用，杜絕漂移）：compute_composite_action（趨勢方向 × 逃頂 × 抄底 → 11 種行動 + 建議倉位區間【專家設定，未擬合】；選填第 4 參數 cycle_score≥22「跌破2年均×0.8 且 跌破200週均」視同明確低估，補強即時 low 被 OI/ETF/SOPR 缺項拉低時的底部辨識，2 年回測歸納見 scripts/backtest_composite.py）；compute_trend_stance（股票/無衍生品標的精簡版：趨勢×短線動能 → 順勢持有/回檔/反彈/減碼/觀望）。邊界與 trend_meta/escape_top_meta/relative_low_meta/ESCAPE_ALERT_THRESHOLD 對齊，無 Streamlit 依賴
-  relative_high_tw.py 台股相對高點（逃頂雷達）純函數 v0.4〔2026-06 swing 回測校準六維＋2026-07 疊加量價/結構兩維〕：八維（技術衰竭30/估值過高30/量能見頂18/槓桿過熱10/法人派發4/籌碼鬆動8＋疊加 量價背離5/結構轉折3，理論總分108 clamp 100），把加密專屬維度（funding/OI/鏈上）替換為台股對應（融資融券/三大法人/PE-PB絕對值/TDCC/成交量）+ `core.relative_universal` 通用量價/結構訊號；技術維度複用 core/divergence、法人以近20日均量正規化。校準關鍵：估值 15→30（逃頂最強維，swing AUC PE 0.627/PB 0.640，絕對值大勝個股分位 0.452）、法人 25→10（雜訊 AUC 0.519）；新增兩維**刻意疊加不動既有六維校準權重**（無回測數據前不臆測配重）。`WEAK_DIMS_HIGH_TW`=(leverage,institution,tdcc) 標 AUC<0.55 弱維、`UNFITTED_DIMS_HIGH_TW`=(vol_price,structure) 標從未回測（規則式）。compute_relative_high_tw + relative_high_tw_meta，供 watcher 台股分支 import
-  relative_low_tw.py  台股相對底部（抄底雷達）純函數 v0.3〔2026-06 S2b swing 回測校準五維＋2026-07 疊加量價/結構兩維〕：七維（槓桿清洗30/技術回穩25/法人吸籌20/大戶吸籌15/估值深跌10＋疊加 量價背離6/結構轉折4，理論總分110 clamp 100）；鏡像 relative_high_tw。校準關鍵：槓桿 20→30（抄底最強維，融資斷頭清洗 swing 真底vs假底 AUC 0.564）、估值 25→10（雜訊 AUC 0.45，台股便宜≠反彈＝價值陷阱，與加密「底部靠估值」相反）。**台股底部與加密非對稱：頂部靠估值貴、底部靠融資清洗。** PE/PB 用絕對值分級，`WEAK_DIMS_LOW_TW`=(institution,tdcc,valuation)、`UNFITTED_DIMS_LOW_TW`=(vol_price,structure)（低側原本無任何量能維度，這維補上缺口）。compute_relative_low_tw + relative_low_tw_meta
+  relative_high_tw.py 台股相對高點（逃頂雷達）純函數 v0.5〔2026-07-02 全市場 swing 回測拍板〕：七維（技術衰竭30/估值過高30/量能見頂18/槓桿過熱10/法人派發4/籌碼鬆動8＋疊加 量價背離8，核心六維 100＋已驗證疊加，理論總分108 clamp 100），把加密專屬維度（funding/OI/鏈上）替換為台股對應（融資融券/三大法人/PE-PB絕對值/TDCC/成交量）+ `core.relative_universal` 通用量價訊號；技術維度複用 core/divergence、法人以近20日均量正規化。校準關鍵：估值 15→30（逃頂最強維，swing AUC PE 0.627/PB 0.640，絕對值大勝個股分位 0.452）、法人 25→10（雜訊 AUC 0.519）；量價背離 2026-07-02 全市場回測 AUC 0.566（>0.55）5→8 轉正式、結構轉折 AUC 0.483（雜訊/微反）移除不計分（純函數仍在 relative_universal 供美股用）。`WEAK_DIMS_HIGH_TW`=(leverage,institution,tdcc) 標 AUC<0.55 弱維、`UNFITTED_DIMS_HIGH_TW`=()（已無未擬合維）。compute_relative_high_tw + relative_high_tw_meta，供 watcher 台股分支 import
+  relative_low_tw.py  台股相對底部（抄底雷達）純函數 v0.4〔2026-07-02 全市場 swing 回測拍板＋反指標維移除〕：四維（槓桿清洗40/技術回穩30/法人吸籌20/估值深跌10，總分恰 100）；鏡像 relative_high_tw。校準關鍵：槓桿 20→30→40（抄底最強維，融資斷頭清洗 swing 真底vs假底 AUC 0.564）、技術回穩 25→30、估值 25→10（雜訊 AUC 0.45，台股便宜≠反彈＝價值陷阱，與加密「底部靠估值」相反）。2026-07-02 三項處置：大戶吸籌（TDCC）AUC 0.422（方向反）整維移除、量價背離/結構轉折抄底 AUC 0.500/0.516（雜訊）移除，釋出的 15 分用 `rescale_dim` 重配給最強兩維（不動內部分級）。**台股底部與加密非對稱：頂部靠估值貴、底部靠融資清洗。** PE/PB 用絕對值分級，`WEAK_DIMS_LOW_TW`=(institution,valuation)、`UNFITTED_DIMS_LOW_TW`=()（已無未擬合維）。compute_relative_low_tw + relative_low_tw_meta
   relative_high_us.py／relative_low_us.py 美股相對高低點（逃頂/抄底雷達）純函數 v0.1〔2026-07 新建〕：美股個股槓桿/法人/IV 無免費源，改用純 OHLCV 三維（技術背離50＋量價背離30＋結構轉折20，理論/實際總分皆 100）——技術維度複用 `relative_high_tw._score_technical_high`／`relative_low_tw._score_technical_low`（跨市場外插）並以 `rescale_dim` 換算到本框架宣告的 max 50（原函式固定 max 30/25，須 rescale 才不會讓實際上限被鎖在 80/75）；量價/結構維度來自 `core.relative_universal`。全數規則式、尚未在美股資料上跑過回測。compute_relative_high_us/low_us + relative_high_us_meta/relative_low_us_meta
 
 service/
@@ -115,7 +115,7 @@ tests/
   test_flex_size.py           build_flex_message 40KB 大小防線、OI 快照過期/ETF 過舊警告與今日行動行測試（5 passed）
   core/test_radar_replay.py   三雷達歷史回放單元測試（合成資料：序列因果性/F&G 與資費注入/門檻事件統計，4 passed）
   core/test_action_ensemble.py 三軸合成行動決策矩陣測試（多空盤整分流/11 行動分支/邊界與警報門檻對齊/None 缺料處理，14 passed）
-  core/test_relative_tw.py    台股逃頂/抄底評分純函數測試（固定輸入零網路：缺料全灰燈/v0.4 校準高分/估值絕對值分級/meta 分級/已校準六五維 sum=100＋疊加後理論總分 108/110/score clamp 100）
+  core/test_relative_tw.py    台股逃頂/抄底評分純函數測試（固定輸入零網路：缺料全灰燈/v0.4 抄底四維校準高分＋tdcc 已移除斷言/估值絕對值分級/meta 分級/逃頂核心六維 sum=100＋vol_price 疊加理論 108、抄底四維恰 100/score clamp 100）
   core/test_relative_universal.py 通用量價背離/結構轉折純函數測試（rescale_dim 換算/資料不足灰燈/量增價縮出貨判讀/量縮價增賣壓竭盡判讀）
   core/test_relative_us.py    美股相對高低點三維評分測試（technical rescale 到宣告 max/vol_price+structure 換算/score clamp 0-100/meta 分級單調）
   test_tw_chip_shares.py      get_shares_outstanding 單元測試（TWSE/TPEx OpenAPI 全 mock 零網路：命中/上櫃 fallback/日快取/抓取失敗退回舊快取）
@@ -381,6 +381,14 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 ---
 
 ## 版本紀錄
+
+### v3.27 (2026-07-03)
+台股逃頂/抄底雷達依 2026-07-02 全市場 swing 回測結果（`scripts/tw_universal_backtest.py`，2080 檔 out-of-sample≥2024）重配已校準權重，並移除回測證明為雜訊/反指標的維度。**美股權重（50/30/20）刻意不動——回測三維全近雜訊，維持專家值。**
+- **feat(core)**: 逃頂 `relative_high_tw.py`（v0.4→v0.5）：量價背離 swing 逃頂 AUC 0.566（>0.55）轉正式權重 5→8、移出 `UNFITTED_DIMS`；結構轉折 AUC 0.483（雜訊/微反）移除不計分（純函數仍在 `relative_universal` 供美股框架用）。核心六維內部分級不動，`UNFITTED_DIMS_HIGH_TW=()`。
+- **feat(core)**: 抄底 `relative_low_tw.py`（v0.3→v0.4）三項處置：大戶吸籌（TDCC）AUC 0.422（方向反、比亂猜差）整維移除（同 Hash Ribbons 邏輯，不留反指標計分，刪 `_score_tdcc_low`）；量價背離/結構轉折抄底 AUC 0.500/0.516（雜訊）移除。釋出的 15 分用 `rescale_dim` 重配給最強兩維：槓桿清洗 30→40、技術回穩 25→30（不動 `_score_*` 內部分級）。四維重回總分 100，`WEAK_DIMS_LOW_TW=(institution,valuation)`、`UNFITTED_DIMS_LOW_TW=()`。
+- **feat(watch)**: `watcher.py` 兩個 `_panel` 的 dims tuple 同步（逃頂去 structure、抄底只剩 leverage/technical/institution/valuation）；台股 note 改 v0.5 誠實化、美股 note 改「已回測（50 檔）三維全近雜訊、專家權重僅參考未獲實證」。
+- **test**: `tests/core/test_relative_tw.py` 三案更新（抄底 leverage 40/technical 10/移除 tdcc 斷言、`test_weights_sum` 改逃頂 108・抄底 100、疊加 clamp 測 vol_price max 8/移除 structure）。`pytest tests/core/ tests/test_momentum.py` **129 passed**。
+- **refactor(simplify)**: 補修兩處漏改的函式 docstring（`compute_relative_high_tw` 八維→七維、`compute_relative_low_tw` 七維→四維）；**本次不含任何評分權重數字變更以外的行為改動**。
 
 ### v3.26 (2026-07-02)
 watcher 面板誠實化：移除已回測無效的 Hash Ribbons 參考訊號、過去報酬列拿掉誤導性燈號，並統一台股/美股逃頂抄底面板為「名稱 燈號 描述」讓燈號對齊生效。**本次不含任何評分權重變更。**
