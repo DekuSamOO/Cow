@@ -87,8 +87,9 @@ config.MINER_ELECTRICITY_RATE 單一來源；eff_jth anchors 因缺實際 CBECI 
 `core/trend_direction.py`（趨勢方向四維，第三軸），dashboard、BTC_WATCH.py（**正本在本 repo
 根目錄**，2026-06-10 起不再維護 Crypto repo 那份）、LINE 推播共用，杜絕兩邊閾值漂移。
 
-- **逃頂五維（30/25/20/15/10）**：合約過熱 / 技術衰竭 / 鏈上派發 / 情緒過熱 / 總經逆風。
-  `compute_escape_top_score` + `escape_top_meta`。
+- **逃頂五維（30/25/26/15/10，理論總和 106 clamp 100；onchain 因 2026-07 併入 MVRV-Z 由 20→26）**：
+  合約過熱 / 技術衰竭 / 鏈上派發 / 情緒過熱 / 總經逆風。`compute_escape_top_score` + `escape_top_meta`。
+  詳細權重以 `core/relative_high.py::WEIGHTS` 為單一真實來源，此處僅摘要、勿手動精算複寫。
 - **⚠️ 仍 NOT VERIFIED（資料不足，非網路）— OI×Funding 假頂折減**：`relative_high._score_derivatives`
   2026-07 新增「funding 過熱(年化≥30% → f_s≥14)但 OI 分位<70(去槓桿/未confirm)」時 funding
   貢獻 ×0.75 的假頂折減（**從不灌分、OI 無資料不折減**，只下修假頂、保守可逆）。
@@ -97,8 +98,9 @@ config.MINER_ELECTRICITY_RATE 單一來源；eff_jth anchors 因缺實際 CBECI 
   所有 AUC 退化（train nan、test 0.5/1.0，無統計意義），OI 亦因歷史不足未納入擬合。**「交互優於相加」
   無法驗證，瓶頸是 OI/funding 樣本太少、家用網路也翻不了。** 決策：**維持折減段現狀（保守可逆、不灌分）
   ＋保留待驗證標記，不移除**；等 funding/OI 累積更多相對高點樣本再重跑，屆時 AUC 未退步才把 synergy 轉正。
-- **抄底六維（25/20/20/15/10/10）**：長週期深跌 / 合約超冷 / 技術回穩 / 情緒恐慌 / 鏈上吸籌 / 總經順風。
-  `compute_relative_low_score` + `relative_low_meta`。
+- **抄底六維（25/20/20/15/16/10，理論總和 106 clamp 100；onchain 因 2026-07 併入 MVRV-Z 由 10→16）**：
+  長週期深跌 / 合約超冷 / 技術回穩 / 情緒恐慌 / 鏈上吸籌 / 總經順風。
+  `compute_relative_low_score` + `relative_low_meta`。同上，權重以 `WEIGHTS_LOW` 為準。
 - **權重由敏感度測試決定**（`tests/relative_high_backtest.py` / `relative_low_backtest.py`，
   鏡像方法：swing 高/低點 + 其後 60 日反向 18% 為正樣本、時序 train/test、Mann-Whitney U AUC、
   grid search）。**樣本少 → grid 必過擬合 → 採專家配重 + 單維 AUC 排序微調**。
@@ -113,10 +115,9 @@ config.MINER_ELECTRICITY_RATE 單一來源；eff_jth anchors 因缺實際 CBECI 
   - onchain：2026-06 敏感度驗證通過，已不在任一清單（SOPR 單維 AUC 0.585、加入合成無害且隨權重
     單調有益，見 `tests/relative_low_backtest.py::validate_unfitted_dims`）。ETF 子項 2024+ 資料薄沿用專家權重。
   - macro **拆兩子維**：event-window（事件臨近）＝規則式、永久不可擬合 → `RULE_BASED_DIMS_LOW`；
-    dovish flags（通膨/就業）原為 `PENDING_FIT_SUBDIMS_LOW`（FRED 被擋無歷史源）。
-    **2026-07 已在家用網路（FRED 可達）回測完成**（`tests/relative_low_macro_backtest.py`，
-    point-in-time 含發布延遲、無前視）：`PENDING_FIT_SUBDIMS_LOW` 清空、改為 `WEAK_SUBDIMS_LOW`。
-    UI 以〔規則式〕（藍）/〔未擬合〕（橘）兩種 tag 區分。
+    dovish flags（通膨/就業）2026-07 已用 FRED 回測完成，`PENDING_FIT_SUBDIMS_LOW` 清空、改為
+    `WEAK_SUBDIMS_LOW`（結論見下方「macro dovish/hawkish flags FRED 回測結論」節，單一真實來源，
+    不在此重複）。UI 以〔規則式〕（藍）/〔未擬合〕（橘）兩種 tag 區分。
   - 逃頂側 `UNFITTED_DIMS=("onchain",)` 不變。
 
 ### macro dovish/hawkish flags FRED 回測結論（2026-07，`tests/relative_low_macro_backtest.py`）
@@ -145,8 +146,6 @@ onchain 併入 MVRV-Z 後 WEIGHTS 原始總和變 106 會被 clamp(100) 蓋掉�
 中性；實測曾把「連續 8 天機構流出」顯示成「🟢 淨流入」（完全反向、遮蔽逃頂派發訊號）。修法：
 `service/etf_flow._parse_html_to_daily` 不寫入 `val==0.0`、純函數 `_summarize` 過濾所有 0.0（見
 `tests/test_etf_flow.py`）。**交易日淨流量恰為 0.0 極罕見，一律視為當日無資料。**
-> 註：dovish/hawkish flags 已於 2026-07 用 FRED 回測（見上節）——逃頂 hawkish 有效(AUC 0.61/0.66)、
-> 抄底 dovish 弱（落後確認）。watcher 純幣安環境不打 FRED，故仍缺此 7 分；雲端 dashboard 可得 FRED。
 
 詳見 PLAN：`Obsidian/Github/Cow/20260608plan_相對高點判斷.md`、`20260609plan_相對底部判斷.md`。
 
@@ -164,48 +163,55 @@ onchain 併入 MVRV-Z 後 WEIGHTS 原始總和變 106 會被 clamp(100) 蓋掉�
   訊號（無中性事實價值、易誤讀成偏多），故連同 `core/relative_low._hash_ribbon_read`/
   `reference_low_signals` 與 `BTC_WATCH._ref_rows` 一併刪除。**勿再加回**（否決理由見 relative_low.py 檔頭）。
 
-**結論已落地**：MVRV-Z 從「參考顯示」轉正式計分——`core/relative_high.py::_score_onchain`
-onchain 維度 20→26（+MVRV-Z 6，AUC 較弱給保守配重）；`core/relative_low.py::_score_onchain_low`
-onchain 維度 10→16（+MVRV-Z 6，配重與 ETF 同級因 AUC 是全維度最強）。兩側 `compute_escape_top_score`/
-`compute_relative_low_score` 新增 `mvrv_z` 參數，三個消費端（`BTC_WATCH.py`、
-`handler/tab_macro_compass.py::_gather_radar_externals`、`scripts/daily_line_notify.py::_compute_radars`）
-皆已補上 `mvrv_z=ext.get("mvrv_z")`／`bm.get("mvrv_zscore")` 餵入。`reference_top_signals`（原本只含
-mvrv_z）與 `reference_low_signals`（拿掉 mvrv_z 後只剩 Hash Ribbons、AUC 0.359 方向反）皆已整支移除，
-雷達不再有任何「參考顯示不計分」的社群訊號。
+**落地細節**：MVRV-Z 從「參考顯示」轉正式計分後（權重見上方逃頂/抄底維度摘要，onchain
+20→26／10→16），`compute_escape_top_score`/`compute_relative_low_score` 新增 `mvrv_z` 參數，
+三個消費端（`BTC_WATCH.py`、`handler/tab_macro_compass.py::_gather_radar_externals`、
+`scripts/daily_line_notify.py::_compute_radars`）皆已補上 `mvrv_z=ext.get("mvrv_z")`／
+`bm.get("mvrv_zscore")` 餵入。`reference_top_signals`（原本只含 mvrv_z）與 `reference_low_signals`
+（拿掉 mvrv_z 後只剩 Hash Ribbons）皆已整支移除，雷達不再有任何「參考顯示不計分」的社群訊號。
 
 ---
 
-## 台股版逃頂/抄底（watcher 台股分支，2026-06-21 v0.1 → 2026-06-23 v0.2 回測校準）
+## 台股/美股版逃頂/抄底（watcher 股票分支，2026-06-21 起）
 
-加密雷達的 funding/OI/鏈上維度股票無對應 → 台股改用**籌碼/估值**替代。**只做台股**（美股
-個股槓桿/法人/IV 無免費源，維持純通用軸）。三檔純函數 + 一資料層，watcher 台股分支共用：
+加密雷達的 funding/OI/鏈上維度股票無對應 → 台股改用**籌碼/估值**替代；美股缺免費籌碼源，
+改用**純 OHLCV 通用軸**（量價背離+結構轉折，複用 `core/divergence`）。
 
-- **`core/relative_high_tw.py`（v0.5）／`relative_low_tw.py`（v0.4）**：現行配重（2026-07-02 回測拍板，
-  見下方「台股通用維 swing-only 回測結論」）＝**逃頂**：技術30/估值30/量能18/槓桿10/法人4/散戶(TDCC)8
-  ＋vol_price 8 疊加（核心 100＋疊加，clamp 100）；**抄底**：槓桿40/技術30/法人20/估值10（四維恰 100，
-  大戶TDCC/量價/結構因回測無效已移除）。技術維度**複用 core/divergence**（與加密同源）、法人買賣超以
-  **近20日均量正規化**。`compute_relative_high_tw/low_tw + *_meta`。
+- **`core/relative_high_tw.py`（v0.5）／`relative_low_tw.py`（v0.4）**：現行配重（2026-07-02 拍板）
+  ＝**逃頂**：技術30/估值30/量能18/槓桿10/法人4/散戶(TDCC)8＋vol_price 8 疊加（核心 100＋疊加，
+  clamp 100）；**抄底**：槓桿40/技術30/法人20/估值10（四維恰 100）。技術維度**複用 core/divergence**
+  （與加密同源）、法人買賣超以**近20日均量正規化**。`compute_relative_high_tw/low_tw + *_meta`。
+- **`core/relative_high_us.py`／`relative_low_us.py`（v0.1）**：技術背離50（複用
+  `relative_high_tw._score_technical_high`，市場無關）+ 量價背離30 + 結構轉折20，權重為專家經驗值
+  ——**2026-07-02 家用網路 50 檔 10 年回測：三維全近雜訊（AUC 0.47-0.51），無實證背書，維持現狀
+  但標「僅參考、未獲實證」**（權值股長多、真頂樣本僅占 9%，純技術面在 mega-cap 上抓頂近乎不可能，
+  跟台股/加密「頂靠估值貴」一致，缺籌碼/估值維時雷達本質偏弱）。踩坑：`us_universal_backtest._fill`
+  原用 `reindex` 對齊分數，跨 50 檔 concat 後 DatetimeIndex 重複日期會崩，已改逐檔 positional 賦值。
 - **`service/tw_chip.py`**：`get_chip_bundle(symbol, yyyymmdd, lookback=7)` → {margin,
   institutional, valuation, tdcc, **as_of**}，每源 best-effort（抓不到回 None → 評分灰燈不 crash）。
+- **`core/relative_universal.py`**（純 OHLCV，台股/美股共用）：`score_volume_price_top/bottom`
+  （量增價縮＝出貨／量縮價增＝賣壓竭盡，近5/20日均量比+近5日報酬變化）、`score_structure_top/bottom`
+  （前高未過／前低未破，複用 `core.divergence.detect_swing_structure`）、`rescale_dim(sig, new_max)`
+  （子維分數按比例縮放到新配額，供疊加進其他框架用）。
 - **三軸 composite 共用 `action_ensemble.compute_composite_action`**：台股**不傳 cycle_score**
   （估值對底部是雜訊、max 僅 10 達不到 `CYCLE_DEEP_VALUE=22` 門檻），改由重配重後的 low_score≥60
-  驅動（已含「融資清洗」權重30 這個校準最強底部維）。
+  驅動（已含「融資清洗」權重40 這個校準最強底部維）。
 
-### v0.2 校準結論（2026-06-23，`scripts/tw_{calib_extract,dim_backtest,swing_backtest}.py`）
-S1 抽 panel（多檔×多日 + fwd_ret）→ S2 每日 ±18% 二分單維 AUC → **S2b swing-only**（±10日 centered
-窗轉折點，更貼近實戰「在轉折點判真底/假底」）。依 swing AUC 重配重：
-- **逃頂靠估值貴**：PE 絕對值 AUC 0.627、PB 0.640 → 估值 15→30（最強維）；法人 25→10（雜訊 0.519）。
-  **PE/PB 用絕對值勝個股分位**（分位 0.452，會把「本質就貴」洗掉）。
-- **抄底靠融資清洗**：融資斷頭 swing 真底vs假底 AUC 0.564 → 槓桿 20→30（最強維）；估值 25→10
-  （雜訊 0.45，**台股「便宜≠反彈」是價值陷阱**，與加密「底部靠長週期估值」相反）。
-- **台股頂底與加密非對稱**：頂部靠估值貴、底部靠融資清洗（加密底部反而靠估值便宜）。
-- `UNFITTED_DIMS_*_TW` → **`WEAK_DIMS_*_TW`**（標 AUC<0.55 弱維、給低權僅參考）；TDCC 樣本最薄
-  （2023-09 起）。校準腳本為離線手動跑（非 pytest），panel parquet 在 `scripts/data/`（gitignore）。
-- **TDCC delta 重測＝負面結果（2026-06-23，不改評分）**：`scripts/tw_tdcc_retest.py`（複用
-  `tw_dim_backtest.auc`）測「大戶 major_pct 週變化 delta／連增週數」是否優於靜態 level。結論——
-  swing out-of-sample AUC：抄底 level 0.423/delta 0.488/連增 0.501、逃頂 0.539/0.513/0.511，
-  **delta/連增皆未優於 level、全雜訊或弱** → 「大戶連增更準」假設被資料否決，TDCC **維持低權、
-  不動 `core/relative_*_tw.py`**。
+### 校準沿革（結論導向；逐輪 AUC 明細見下方 Obsidian PLAN）
+- **v0.2（2026-06-23）拍板**：逃頂靠估值貴（PE/PB 絕對值 AUC 0.627/0.640 → 估值最強維，絕對值
+  勝個股分位 0.452——分位會把「本質就貴/便宜」洗成中性）；抄底靠融資清洗（斷頭 AUC 0.564 → 槓桿
+  最強維，估值反是雜訊/價值陷阱，AUC 0.45）——**台股頂底與加密非對稱**（頂部估值貴、底部融資
+  清洗；加密底部反而靠估值便宜）。TDCC major_pct 週變化 delta／連增週數重測皆未優於靜態 level
+  （`scripts/tw_tdcc_retest.py`），當時維持低權、不動評分。
+- **v0.3/v0.4/v0.5（2026-07-02）全市場 2080 檔 swing 回測拍板**（`scripts/tw_universal_backtest.py`，
+  out-of-sample≥2024，公司網路本地 climber DB 可跑）：逃頂 vol_price AUC 0.566 轉正式（5→8）、
+  structure 0.483 雜訊移除；抄底 vol_price/structure 皆雜訊移除、**TDCC 大戶 major_pct AUC 0.422
+  （方向反、比亂猜差，確認舊測的弱維懷疑）→ 整維移除**（原逃頂/抄底皆保留低權，此輪抄底側改為
+  完全移除），釋出的 15 分重配給抄底最強兩維：槓桿清洗 30→40、技術回穩 25→30。移除反指標/雜訊維
+  同 Hash Ribbons 邏輯——不留計分。**頂底非對稱再證**：量價背離是頂部訊號（逃頂有效、抄底雜訊）。
+- 詳見 PLAN：`Obsidian/Github/Cow/20260621plan_股票版逃頂抄底維度.md`、
+  `20260622plan_台股維度回測校準.md`、`20260626plan_台股維度v0.3弱維強化.md`、
+  `20260702plan_通用量價結構訊號與美股框架.md`。
 
 ### 台股資料源踩坑
 - **TWSE 端點都是「市場全量單日檔」非個股查詢**：抓整檔每小時快取再 filter symbol。融資融券
@@ -217,7 +223,9 @@ S1 抽 panel（多檔×多日 + fwd_ret）→ S2 每日 ±18% 二分單維 AUC �
 - **TDCC 集保大戶分布要 GET→POST CSRF**（鏡像 tw_stock_climber）：先 GET `qryStock` 抓
   `SYNCHRONIZER_TOKEN`/`SYNCHRONIZER_URI`，再 POST 帶 token + firDate/scaDate（最近已公布週五，
   扣 7 天公布延遲）。`pd.read_html` 解析持股分級表，大戶≥1000張/中實戶≥400張/散戶≤50張。
-  **同週同檔記憶體快取不重抓；勿密集打**（每檔間需 sleep）。
+  **同週同檔記憶體快取不重抓；勿密集打**（每檔間需 sleep）。**現況**：逃頂側散戶 retail_pct
+  仍低權保留（AUC 0.537，樣本 2023-09 起 2.7 年薄）；**抄底側大戶 major_pct 已於 2026-07-02
+  因 AUC=0.422 方向反整維移除**（見上方校準沿革），非「維持低權」。
 - **上櫃籌碼四維 TPEx fallback（2026-06-23）**：三個日檔（估值/融資/法人）皆「上市 TWSE → 上市查無
   （上櫃股）轉打對應 TPEx 端點」，`_fetch_market_file` 加 `base` 參數（預設 _TWSE、上櫃傳
   _TPEX="https://www.tpex.org.tw"；**cache key 改 (base, endpoint, date)** 避同端點撞檔；TPEx 日期皆
@@ -228,64 +236,28 @@ S1 抽 panel（多檔×多日 + fwd_ret）→ S2 每日 ±18% 二分單維 AUC �
     （單位張同 TWSE）；TWSE/TPEx 共用 `_margin_dict` 把前日/今日餘額轉 dict。
   - 法人 `_get_institutional_tpex`：TPEx `www/zh-tw/insti/dailyTrade`(type=Daily)，欄序 4外資(不含自營)/
     13投信/22自營合計/23三大法人合計（與 TWSE T86 的 4/10/11/18 不同 → 兩函式分開），評分只用 total_net。
-  OHLC 端：`fetch_ohlc` 台股 `.TW` 查無自動改試 **`.TWO`**（上櫃 Yahoo 後綴，classify 無法離線分
-  上市/上櫃；上市查到即 break 不浪費第二請求、全失敗 `raise ... from last_err`）。
   → 上櫃股（6488/8069）OHLC + 籌碼四維（融資/法人/估值/大戶）全部可用，逃頂/抄底不再因上櫃灰燈
-  （6488 抄底 15→38）；上市路徑不變。**唯 TDCC 仍 2.7 年薄（2023-09 起）維持低權。**
+  （6488 抄底 15→38）；上市路徑不變。
+- **台股 `.TW`→`.TWO` 上櫃備援（日線與即時報價需各自套用，勿漏放一邊）**：`fetch_ohlc`（日線）
+  台股 `.TW` 查無自動改試 `.TWO`（上櫃 Yahoo 後綴，classify 無法離線分上市/上櫃；上市查到即
+  break 不浪費第二請求、全失敗 `raise ... from last_err`）。`fetch_live_quote`（即時報價/成交量）
+  **原本漏了同一段備援**，導致所有上櫃股的現價/成交量永遠 404（非網路波動，同一 symbol 連續多次
+  皆 404，`.TWO` 立即成功）；2026-07-03 已抽出共用 `_tw_candidates()` 補上，日後新增/修改台股
+  相關 fetch 函式務必套用同一份候選清單，不要各自複製判斷。
 - **TWSE 日檔是 EOD（盤後）公布 → 必須 walk-back**：`get_chip_bundle` 呼叫端常傳「今日」（watcher
   用 Yahoo 最後日線日期，盤中可能是未收的今天），但今日 EOD 檔尚未出、連假（如 2026-06-19 端午）
   整週無檔 → 三日檔會**整片 None**。修法：先用**單一探針**（BWIBBU 市場檔非空判斷）從 date 往前找
   「最近已公布交易日」（最多 lookback=7 天、跳過週末/未公布日），三源對齊同一 `as_of` 再抓
   （BWIBBU 已快取）。**用單一探針而非多源×多日盲掃**，避免撞 TWSE 限流。watcher note 顯示
   「籌碼資料截至 {as_of}」。
-- **PE/PB 用絕對值非分位**（v0.2 回測拍板）：絕對 PE AUC 0.627 大勝個股 expanding 分位 0.452，
-  分位會把「本質就貴/便宜」洗成中性。Cow **不 import tw_stock_climber**（保持自包含、雲端可跑），
-  僅鏡像爬法/分級概念。
-
----
-
-## 通用量價/結構訊號 + 美股相對高低點框架（2026-07-02，swarm 3 輪迭代）
-
-**單一真實來源 `core/relative_universal.py`**（純 OHLCV，不依賴任何市場專屬籌碼資料）：
-- `score_volume_price_top/bottom`：量增價縮＝出貨（逃頂）／量縮價增＝賣壓竭盡（抄底）。
-  近 5 日／20 日均量比 + 近 5 日報酬率變化，純規則式門檻。
-- `score_structure_top/bottom`：前高未過／前低未破＝結構轉折警訊，複用
-  `core.divergence.detect_swing_structure`（新公開函數，底層沿用既有 `_local_extrema` 樞紐
-  偵測，判斷 HH_HL／LH_LL／mixed 結構）。
-- `rescale_dim(sig, new_max)`：把子維分數按比例縮放到新配額，供疊加進其他框架時用（見下）。
-
-**台股整合（`relative_high_tw.py` v0.5 / `relative_low_tw.py` v0.4，2026-07-02 全市場回測拍板）**：
-先前 v0.4/v0.3 是「疊加、標未擬合」（vol_price/structure 逃頂 5+3、抄底 6+4），2026-07-02 用
-`scripts/tw_universal_backtest.py`（2080 檔全市場、swing-only、out-of-sample≥2024，vp 向量化＋
-structure 只在 swing 點算，公司網路本地 climber DB 可跑）跑出實測 AUC 後拍板：
-
-### 台股通用維 swing-only 回測結論（2026-07-02，`scripts/tw_universal_backtest.py`）
-- **逃頂 vol_price 量價 AUC 0.566（>0.55 有效）→ 轉正式權重 5→8**（與弱維 leverage/散戶 同級疊加；
-  核心六維 100 不動，理論總分 108 clamp 100）。**逃頂 structure 0.483（雜訊/微反）→ 移除不計分。**
-- **抄底 vol_price 0.500（純雜訊）＋ structure 0.516（弱雜訊）→ 皆移除**（「量能維補抄底缺口」被資料否決）。
-- **抄底 tdcc 大戶 major_pct AUC 0.422（方向反、比亂猜差，確認 CLAUDE 舊記 0.423）→ 整維移除**，
-  釋出的 15 分重配給最強兩維：**槓桿清洗 30→40（唯一實測最強 0.564）、技術回穩 25→30**，
-  抄底重回四維總分 100（用 `rescale_dim` 提權、不動 `_score_*` 內部分級）。散戶 retail_pct 逃頂 0.537 弱、維持低權。
-- **頂底非對稱再證**：量價背離是**頂部**訊號（逃頂 0.566 有效、抄底 0.500 雜訊）；台股底部唯一實測強維是
-  融資清洗。移除同 Hash Ribbons 邏輯——**不留反指標/雜訊維計分**。純函數仍在 `relative_universal` 供美股框架用。
-
-**美股新框架（`core/relative_high_us.py`／`relative_low_us.py`，v0.1 新建）**：美股個股槓桿/
-法人/IV 無免費源，改用純 OHLCV 三維：技術背離 50（複用 `relative_high_tw._score_technical_high`，
-市場無關）+ 量價背離 30 + 結構轉折 20。watcher.py 美股分支從此有逃頂/抄底面板（原本只有趨勢軸）。
-權重為專家經驗值。
-
-### 美股三維 swing-only 回測結論（2026-07-02，家用網路，`scripts/us_universal_backtest.py`）
-50 檔大型美股 10 年日線（Yahoo v8，全抓零 429）、swing-only out-of-sample（≥2024）單維 AUC：
-- **三維全部近雜訊，無一達 0.55**：抄底 swing low technical 0.497／vol_price 0.500／structure 0.511；
-  逃頂 swing high technical 0.467／vol_price 0.499／structure 0.488（樣本 919 low / 933 high，
-  真底 251、真頂僅 87）。
-- **現行專家權重 50/30/20 無實證背書，不宜據此重配**（沒有任一維賺到更高權重）。結構性原因：
-  權值股 10 年長多、真頂只有 87/933≈9%，純 OHLCV 抓頂在 mega-cap 上近乎不可能——與台股/加密
-  「頂靠估值貴、底靠槓桿清洗」一致，**純技術面缺籌碼/估值維度時美股雷達本質偏弱**。維持專家權重
-  但視為「僅參考、未獲實證」。
-- 踩坑：`us_universal_backtest._fill` 原用 `pd.concat(...).reindex(rows.index)` 對齊分數，但 alldf
-  跨 50 檔 concat → DatetimeIndex 重複日期 → `ValueError: cannot reindex on an axis with duplicate
-  labels`（任何網路都會崩）。已改逐檔 positional 賦值（commit 41e88fc）。
+- **台股/TPEx 盤中即時報價法定延遲 ~20 分鐘，勿用 timestamp 新舊判斷盤中/已收盤**：
+  `service/ohlc_universal.live_quote_freshness` 原本用「Yahoo `regularMarketTime` 距今 <15 分鐘」
+  猜是否盤中，這對美股成立、對台股不成立——台股盤中 age 幾乎必然 >15 分鐘（法定延遲），會被
+  永遠誤判成「已收盤」。改用當下是否為交易時段（`_is_tw_trading_hours()`，週一~五 09:00-13:30
+  台北時間）判斷，如實顯示「盤中（資料延遲）」而非「已收盤」。同理新增 `is_daily_bar_forming()`
+  判斷日線最後一根是否為「今日進行式」（避免「最新日線」跟「現價」顯示重複）；`resolve_live_volume()`
+  處理即時成交量偶發缺漏的閃爍問題（退回快取值，逾 2 個刷新週期才附註快取時間）。
+- Cow **不 import tw_stock_climber**（保持自包含、雲端可跑），僅鏡像爬法/分級概念。
 
 **即時成交量 + 台股週轉率**：`service/ohlc_universal.fetch_live_quote` 新增 `volume`
 （Yahoo v8 chart `meta.regularMarketVolume`，同一次請求內、零額外網路成本，台股/美股皆有）。
@@ -300,19 +272,20 @@ structure 只在 swing 點算，公司網路本地 climber DB 可跑）跑出實
   籌碼檔每小時重抓，股本變動極不頻繁）；抓取失敗退回舊快取而非清空。
 - **✅ 已驗證（2026-07-02 家用網路實打正式 API）**：`watcher.py` 進 2330，`get_shares_outstanding`
   本體實連 TWSE OpenAPI 回 **25,932,370,067 股（≈259.3 億股，量級正確）**，週轉率
-  29,457,313÷股本×100 = **0.11%**（<0.5% 合理）。先前僅 `tests/test_tw_chip_shares.py` mock 測試，
-  本次為首次真實網路呼叫驗證通過。
+  29,457,313÷股本×100 = **0.11%**（<0.5% 合理）。
 
-**已知陷阱（本次新增，避免重蹈）**：
-- watcher.py 的 `_panel(result, meta_fn, cap, name, dims)` 呼叫端 **`dims` tuple 必須與
-  `compute_relative_*` 回傳 signals dict 的 key 完全一致**（新增維度時容易忘記同步更新
-  呼叫端的 dims tuple——本次 swarm 第 2 輪就抓到台股逃頂/抄底面板漏了 `vol_price`/`structure`，
-  分數已算進總分但完全不會顯示在面板列表，使用者無從判讀分數從哪來）。改 `compute_relative_*`
-  的 signals keys 後，**務必 grep 所有 `_panel(...)` 呼叫端**確認 dims tuple 同步更新。
+**已知陷阱**：watcher.py 的 `_panel(result, meta_fn, cap, name, dims)` 呼叫端 **`dims` tuple 必須
+與 `compute_relative_*` 回傳 signals dict 的 key 完全一致**（新增維度時容易忘記同步更新呼叫端的
+dims tuple——曾抓到台股逃頂/抄底面板漏了 `vol_price`/`structure`，分數已算進總分但完全不會顯示
+在面板列表，使用者無從判讀分數從哪來）。改 `compute_relative_*` 的 signals keys 後，**務必 grep
+所有 `_panel(...)` 呼叫端**確認 dims tuple 同步更新。
 
 ---
 
 ## 已知陷阱
+
+> 功能專屬踩坑記錄在對應章節內（見「最低價綜合評估」「台股/美股版逃頂/抄底」），此處為
+> 跨功能通用陷阱，不重複列。
 
 ### 1. `@st.fragment` 靜默失效（現價停止自動更新）
 
@@ -337,10 +310,11 @@ render(
 根因：fragment 60 秒重跑，TTL 也 60 秒 → 永遠命中快取 → 數據不刷新。
 修法：`fetch_realtime_data()` 不掛 `@st.cache_data`。
 
-### 3. pandas Series `.get()` 不可靠
+### 3. `.get(key, default)` 對顯式 `None` 值不觸發預設（dict 與 pandas Series 皆同）
 
-`curr.get('RSI_14', 50)` 在 Series 上有時不回傳預設值。
-修法：`float(curr['RSI_14']) if 'RSI_14' in curr.index else 50.0`
+`data = {'source': None}`；`data.get('source', '模擬值')` → 回傳 `None`，不是 `'模擬值'`。
+`curr.get('RSI_14', 50)` 在 Series 上同樣不可靠。
+修法：`data.get('source') or '模擬值'`；`float(curr['RSI_14']) if 'RSI_14' in curr.index else 50.0`
 
 ### 4. NaN 判斷
 
@@ -367,12 +341,7 @@ Kraken：GET https://api.kraken.com/0/public/Ticker?pair=XBTUSD
 - `get_latest_local_price()`：不帶 `@st.cache_data`，供即時備援
 - `read_btc_15m()`：有 `ttl=86400` 快取，**不可**用於即時價格
 
-### 7. `dict.get(key, default)` 對 `None` 值不觸發預設
-
-`data = {'source': None}`；`data.get('source', '模擬值')` → 回傳 `None`。
-修法：`data.get('source') or '模擬值'`
-
-### 8. `reindex(method='nearest')` 早於資料起點填充定值
+### 7. `reindex(method='nearest')` 早於資料起點填充定值
 
 ```python
 # fund_hist 從 2021 年起，chart_df 從 2015 年起
@@ -381,7 +350,7 @@ fund_sub = fund_hist.reindex(chart_df.index, method='nearest')
 fund_sub.loc[fund_sub.index < fund_hist.index[0]] = np.nan
 ```
 
-### 9. 資金費率即時備援鏈
+### 8. 資金費率即時備援鏈
 
 | 來源 | URL | 欄位 |
 |------|-----|------|
@@ -389,13 +358,13 @@ fund_sub.loc[fund_sub.index < fund_hist.index[0]] = np.nan
 | Bybit | `api.bybit.com/v5/market/tickers?category=linear&symbol=BTCUSDT` | `result.list[0].fundingRate` × 100 |
 | OKX | `www.okx.com/api/v5/public/funding-rate?instId=BTC-USDT-SWAP` | `data[0].fundingRate` × 100 |
 
-### 10. 圖表欄位名稱與顯示標籤混淆
+### 9. 圖表欄位名稱與顯示標籤混淆
 
 欄位名 `EMA_20`（含底線）直接用在圖例易被誤讀為 `SMA 20`。
 修法：`_ma_label(col)` helper → `col.replace("_", " ")` → `EMA 20` / `SMA 50`。
 當 `exit_ma_key == 'EMA_20'` 時，進場線與防守線同一條，合併標籤：`"EMA 20 (進場 ＆ 防守線)"`。
 
-### 11. AHR999 冪律公式錯誤（舊版膨脹至 $177 萬）
+### 10. AHR999 冪律公式錯誤（舊版膨脹至 $177 萬）
 
 根因：舊版用線性指數模型 `10^(2.68 + 0.00057×days)`，2026 年後估值嚴重膨脹。
 修法：改用 Giovanni Santostasi 冪律模型：
@@ -407,7 +376,7 @@ estimated_price = 10 ** (-17.01467 + 5.84 * np.log10(days_since_genesis))
 estimated_price = 10 ** (2.68 + 0.00057 * days_since_genesis)
 ```
 
-### 12. Walk-Forward 雙重移位 Bug
+### 11. Walk-Forward 雙重移位 Bug
 
 根因：`bull_trend = close > sma200` 用了 `close_shifted`（前一日收盤），整體再 `shift(1)` → 實際用到 2 天前的資料。
 修法：所有條件統一使用**當日值**，最後**一次性** `shift(1)`。
@@ -424,12 +393,12 @@ is_entry   = bull_trend & ...
 entry_mask = is_entry.shift(1)              # 已是 2 天前資料
 ```
 
-### 13. Walk-Forward 進場乖離硬編碼 1.5% 上限
+### 12. Walk-Forward 進場乖離硬編碼 1.5% 上限
 
 根因：`dist_pct <= 1.5` 硬編碼造成極少進場（ROI -22% vs swing +1654%），與 swing.py 行為不一致。
 修法：改為可選參數 `entry_dist_max_pct`（預設 `None` = 無上限）；UI 提供滑桿，設為 0 = 不限。
 
-### 14. 派網 Bot API 不支援幣本位網格與馬丁格爾
+### 13. 派網 Bot API 不支援幣本位網格與馬丁格爾
 
 派網官方 Bot Open API（`/api/v1/bot/orders`）的 `buOrderTypes` 只有三種：
 `futures_grid`（U本位期貨網格）、`spot_grid`（現貨網格）、`smart_copy`（智能跟單）。
@@ -438,33 +407,33 @@ entry_mask = is_entry.shift(1)              # 已是 2 天前資料
 
 → 派網 API Key 對本專案目前無用，勿再嘗試讀取機器人狀態。
 
-### 15. GitHub Actions 用量：Cow 為公開 repo，不計入免費額度
+### 14. GitHub Actions 用量：Cow 為公開 repo，不計入免費額度
 
 GitHub Actions 免費方案：私有 repo 2,000 分鐘/月，**公開 repo 無限制**。
 
 Cow 是公開 repo，`price_alert.yml`（每小時）與 `daily_line_notify.yml`（每天 3 次：台灣 08:23 / 13:39 / 18:27）均不消耗配額。
 目前唯一消耗私有配額的是 `Notion_auto`（約 150 分鐘/月），距上限 2,000 分鐘仍有大量餘裕。
 
-### 16. Gemini 2.5 系列為 reasoning 模型，預設 thinking 吃光 output token
+### 15. Gemini 2.5 系列為 reasoning 模型，預設 thinking 吃光 output token
 
 根因：`gemini-2.5-flash` 預設開啟「思考」，會把 `maxOutputTokens` 消耗在 thinking 上，
 導致 `candidates` 無實際文字輸出（症狀：呼叫耗時很久 + 回傳空）。翻譯/摘要不需思考。
 修法：`generationConfig.thinkingConfig.thinkingBudget = 0` 關閉思考（見 `core/gemini_client.py`）。
 
-### 17. Gemini ListModels 會列出已下架模型
+### 16. Gemini ListModels 會列出已下架模型
 
 `v1beta/models` 清單含 `gemini-2.0-flash`，但實際 `generateContent` 回 404
 「This model is no longer available」。**不要以 ListModels 有列出就當可用**，需實打驗證。
 目前可用：`gemini-2.5-flash`。
 
-### 18. 新聞來源：Reddit 免認證被 IP 封鎖、X 免費 API 已關閉
+### 17. 新聞來源：Reddit 免認證被 IP 封鎖、X 免費 API 已關閉
 
 - Reddit `hot.json` 對公司網路 IP 與雲端共享 IP 均回 403（IP 層級，換 User-Agent 無效），
   需 OAuth 才穩定 → 改用 **CoinGecko `/search/trending`** 當社群熱度指標（免金鑰）。
 - X/Twitter 免費 API 已關閉，無穩定免費抓法 → 不納入。
 - 新聞媒體源：CryptoCompare News + Cointelegraph/CoinDesk/Decrypt RSS，聚合去重（`service/news.py`）。
 
-### 19. 新聞中文化的省 token 三層機制（`service/news_i18n.py`）
+### 18. 新聞中文化的省 token 三層機制（`service/news_i18n.py`）
 
 Gemini 翻譯成本與「Streamlit Cloud 休眠/喚醒」脫鉤的關鍵：
 1. 批次：一次 prompt 處理整批（最多 8 則）回 JSON，避免逐則往返。
@@ -473,7 +442,7 @@ Gemini 翻譯成本與「Streamlit Cloud 休眠/喚醒」脫鉤的關鍵：
 3. 總開關 `NEWS_I18N_ENABLED=false` 可完全停用翻譯（0 API 呼叫）。
    - 休眠時不執行 script → 0 token；真正成本 = 「新出現且沒翻過的新聞則數」。
 
-### 20. requirements 鎖版本：勿替 numpy/pandas 加上限（pandas-ta 0.4.x 需 pandas>=2.3.2）
+### 19. requirements 鎖版本：勿替 numpy/pandas 加上限（pandas-ta 0.4.x 需 pandas>=2.3.2）
 
 pandas-ta 在 PyPI 只有 pre-release 版（0.4.67b0 / 0.4.71b0），且**依賴 `pandas>=2.3.2`**；
 新版早已無舊 0.3.x「`from numpy import NaN`」的 numpy<2 限制。
@@ -488,3 +457,13 @@ pandas-ta 在 PyPI 只有 pre-release 版（0.4.67b0 / 0.4.71b0），且**依賴
 - `pandas>=2.3.2`、`numpy>=1.26`，**一律不加上限**
 - 雲端 build 走 uv（Python 3.13），uv 預設擋 pre-release，唯「明確 == 該 pre-release 版本」放行
 - 鎖版本前先看一次雲端 build log 確認現役版本，不可憑記憶臆測周邊套件需求
+
+### 20. 同檔案裡有 `@st.cache_data` 裝飾器，import 整個檔案就會拖 streamlit 進來
+
+`service/macro_data.py` 頂層 `import streamlit`（給其他函式的快取裝飾器用）+ `import yfinance`，
+但 `get_next_macro_event()` 本身只讀本地 JSON，完全不需要這兩個重依賴。**只要 import 那個
+檔案（即使只是為了呼叫一個不相關的函式）就會連帶 import streamlit**，公司網路環境下這個
+import 動作本身會卡住逾時（實測 >10 秒無回應，且無 timeout 保護，try/except 攔不到「卡住」，
+不是拋例外）。已抽出零重依賴的 `service/macro_events.py` 解決。**教訓**：一個檔案裡若混了
+「給 dashboard 用、需要 streamlit/yfinance」與「給 CLI/排程用、零依賴」的函式，被 CLI 端
+lazy import 拖累整包重依賴——新增純邏輯函式前，先看它要放的檔案頂層 import 了什麼。
