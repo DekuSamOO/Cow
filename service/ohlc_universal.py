@@ -79,6 +79,16 @@ def _session() -> requests.Session:
     return s
 
 
+def _tw_candidates(yahoo_symbol: str) -> list:
+    """台股 `.TW`（上市）查無資料時的備援候選（`.TWO` 上櫃）。classify_symbol 無法預知
+    上市/上櫃，fetch_ohlc / fetch_live_quote 都需要同一套候選清單，抽出避免重複維護
+    （曾因 fetch_live_quote 漏了這段，上櫃股「現價/即時成交量」永遠 404，見該函式說明）。"""
+    candidates = [yahoo_symbol]
+    if yahoo_symbol.endswith(".TW"):
+        candidates.append(yahoo_symbol[:-3] + ".TWO")   # 上市查無 → 試上櫃
+    return candidates
+
+
 def fetch_ohlc(yahoo_symbol: str, rng: str = "2y") -> pd.DataFrame:
     """
     Yahoo v8 chart JSON → 日線 OHLCV，欄位用 core 期望的 lowercase、index 去時區。
@@ -86,11 +96,8 @@ def fetch_ohlc(yahoo_symbol: str, rng: str = "2y") -> pd.DataFrame:
     台股 `.TW`（上市）查無資料時自動改試 `.TWO`（上櫃）——classify 無法預知上市/上櫃。
     """
     s = _session()
-    candidates = [yahoo_symbol]
-    if yahoo_symbol.endswith(".TW"):
-        candidates.append(yahoo_symbol[:-3] + ".TWO")   # 上市查無 → 試上櫃
     res, last_err = None, None
-    for sym in candidates:
+    for sym in _tw_candidates(yahoo_symbol):
         try:
             r = s.get(_YF_CHART + sym, params={"range": rng, "interval": "1d"}, timeout=20)
             r.raise_for_status()
@@ -121,20 +128,28 @@ def fetch_live_quote(yahoo_symbol: str) -> dict:
     回傳 {price, ts, prev_close, volume}；失敗回 {}（呼叫端退回日線收盤）。
 
     volume 取 meta.regularMarketVolume（實測台股/美股皆有此欄，同一次請求內、不加額外網路成本）。
+
+    ⚠️ 上櫃股（.TWO）：`classify_symbol` 一律先猜 `.TW`（上市），但 Yahoo 對上櫃股的 `.TW`
+    直接 404（非暫時性、每次都一樣）。`fetch_ohlc` 已有 `_tw_candidates` 備援改試 `.TWO`，
+    本函式原本沒有 → 上櫃股「現價/即時成交量」永遠失敗、每次 60s 刷新都退回日線收盤
+    （2026-07-03 使用者回報：切到 6509.TW 上櫃股後現價消失，查證是 .TW 端點 404 非網路波動）。
+    同樣套用 `_tw_candidates`，不多花網路成本——上市股第一個候選就成功，上櫃股才會多打一次。
     """
-    try:
-        r = _session().get(_YF_CHART + yahoo_symbol,
-                           params={"range": "1d", "interval": "1d"}, timeout=10)
-        r.raise_for_status()
-        m = r.json()["chart"]["result"][0]["meta"]
+    for sym in _tw_candidates(yahoo_symbol):
+        try:
+            r = _session().get(_YF_CHART + sym,
+                               params={"range": "1d", "interval": "1d"}, timeout=10)
+            r.raise_for_status()
+            m = r.json()["chart"]["result"][0]["meta"]
+        except Exception:
+            continue
         p = m.get("regularMarketPrice")
         if p is None:
-            return {}
+            continue
         return {"price": float(p), "ts": m.get("regularMarketTime"),
                 "prev_close": m.get("previousClose") or m.get("chartPreviousClose"),
                 "volume": m.get("regularMarketVolume")}
-    except Exception:
-        return {}
+    return {}
 
 
 def _is_tw_trading_hours(now=None) -> bool:

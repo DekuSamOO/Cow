@@ -11,7 +11,7 @@ import pytest
 
 from service.ohlc_universal import (
     live_quote_freshness, _is_tw_trading_hours, _is_us_trading_hours,
-    is_daily_bar_forming, resolve_live_volume,
+    is_daily_bar_forming, resolve_live_volume, _tw_candidates, fetch_live_quote,
 )
 
 
@@ -160,3 +160,91 @@ def test_resolve_live_volume_fresh_zero_treated_as_missing():
     now = time.time()
     vol, note = resolve_live_volume(0, 546342, now - 30, refresh_sec=60, now=now)
     assert vol == 546342
+
+
+# ---------------------------------------------------------------------------
+# _tw_candidates / fetch_live_quote 上櫃 .TWO 備援
+# ---------------------------------------------------------------------------
+
+def test_tw_candidates_appends_two_suffix_for_tw():
+    assert _tw_candidates("6509.TW") == ["6509.TW", "6509.TWO"]
+
+
+def test_tw_candidates_unchanged_for_non_tw_symbol():
+    assert _tw_candidates("AAPL") == ["AAPL"]
+    assert _tw_candidates("BTC-USD") == ["BTC-USD"]
+
+
+class _FakeResp:
+    def __init__(self, payload=None, status=200):
+        self._payload = payload
+        self.status_code = status
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+    def json(self):
+        return self._payload
+
+
+def _meta_payload(price=55.3, ts=1700000000, prev_close=52.3, volume=5_000_000):
+    return {"chart": {"result": [{"meta": {
+        "regularMarketPrice": price, "regularMarketTime": ts,
+        "previousClose": prev_close, "regularMarketVolume": volume,
+    }}]}}
+
+
+def test_fetch_live_quote_tpex_falls_back_to_two_when_tw_404(monkeypatch):
+    """上市 .TW 404（如 6509 實為上櫃股）→ 應自動改試 .TWO 並成功，而非整體回傳空 dict
+    （2026-07-03 使用者回報：切到上櫃股 6509 後現價/即時成交量消失，查證是 .TW 端點 404，
+    非網路波動；fetch_ohlc 早有此備援，fetch_live_quote 原本沒有）。"""
+    calls = []
+
+    def fake_get(self, url, **kw):
+        calls.append(url)
+        if url.endswith("/6509.TW"):
+            return _FakeResp(status=404)
+        if url.endswith("/6509.TWO"):
+            return _FakeResp(_meta_payload(price=55.3, volume=5_814_250))
+        raise AssertionError(f"unexpected url {url}")
+
+    monkeypatch.setattr("requests.Session.get", fake_get)
+    q = fetch_live_quote("6509.TW")
+    assert q == {"price": 55.3, "ts": 1700000000, "prev_close": 52.3, "volume": 5_814_250}
+    assert len(calls) == 2   # 先試 .TW 失敗、才試 .TWO
+
+
+def test_fetch_live_quote_twse_succeeds_on_first_candidate(monkeypatch):
+    """上市股 .TW 第一candidate 就成功，不應多打 .TWO（避免上市股白白多一次網路請求）。"""
+    calls = []
+
+    def fake_get(self, url, **kw):
+        calls.append(url)
+        return _FakeResp(_meta_payload(price=211.5))
+
+    monkeypatch.setattr("requests.Session.get", fake_get)
+    q = fetch_live_quote("6782.TW")
+    assert q["price"] == 211.5
+    assert len(calls) == 1
+
+
+def test_fetch_live_quote_both_candidates_fail_returns_empty_dict(monkeypatch):
+    def fake_get(self, url, **kw):
+        return _FakeResp(status=404)
+
+    monkeypatch.setattr("requests.Session.get", fake_get)
+    assert fetch_live_quote("99999999.TW") == {}
+
+
+def test_fetch_live_quote_non_tw_symbol_no_fallback_attempted(monkeypatch):
+    """非台股代號（無 .TW 後綴）：_tw_candidates 只有一個候選，失敗直接回空 dict。"""
+    calls = []
+
+    def fake_get(self, url, **kw):
+        calls.append(url)
+        return _FakeResp(status=404)
+
+    monkeypatch.setattr("requests.Session.get", fake_get)
+    assert fetch_live_quote("AAPL") == {}
+    assert len(calls) == 1
