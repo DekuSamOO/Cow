@@ -39,6 +39,9 @@ from service.ohlc_universal import (classify_symbol, fetch_ohlc,            # no
                                     is_daily_bar_forming, resolve_live_volume)
 # 重用 BTC_WATCH 既有的畫框 / 面板 / 等待 helper（單一真實來源，不重造）
 from core.momentum import momentum_ref_rows                             # noqa: E402
+from core.watch_plan import get_plan, load_plans_cached, plan_panel_rows  # noqa: E402
+from core.watch_alerts import (check_price_events, check_signal_change,   # noqa: E402
+                               banner_rows, notify_beep, journal_append, journal_record)
 from BTC_WATCH import (BitcoinMonitor, _title, _row, _edge, _dw, _bar, _bar_signed,  # noqa: E402
                        _panel, _short_momentum, _panel_trend, _panel_stance,
                        interruptible_wait, _atr_risk_rows, _print_pair, _wrap_display,
@@ -55,13 +58,14 @@ def _fmt_price(v: float) -> str:
 
 
 def _composite_panel(trend0: int, high0: int, low0: int):
-    """三軸 composite 操作面板（趨勢方向＋逃頂＋抄底）→ (ct_comp, comp_rows)。
-    台股／美股分支邏輯完全相同（皆不傳 cycle_score，見呼叫端註解），抽共用避免複製貼上。"""
+    """三軸 composite 操作面板（趨勢方向＋逃頂＋抄底）→ (ct_comp, comp_rows, act)。
+    台股／美股分支邏輯完全相同（皆不傳 cycle_score，見呼叫端註解），抽共用避免複製貼上。
+    act 一併回傳供警戒引擎偵測 action_key 變化（E2）。"""
     act = compute_composite_action(trend0, high0, low0)
     _, comp_rows = _panel_stance("操作", f"{act['emoji']} {act['action']}", act["detail"])
     comp_rows.append(f"     {act['pos_label']}")
     ct_comp = f"操作  {act['emoji']} {act['action']}"
-    return ct_comp, comp_rows
+    return ct_comp, comp_rows, act
 
 
 class UniversalMonitor:
@@ -69,6 +73,8 @@ class UniversalMonitor:
 
     REFRESH_SEC = 60            # 畫面刷新（時鐘）
     DAILY_REFRESH_SEC = 3600    # 日線重抓+重算間隔（日 K 不會分鐘級變動，比照 BitcoinMonitor）
+    RETRY_REFRESH_SEC = 300     # 日線刷新失敗（有快取沿用時）下次重試間隔
+    MAX_TRANSIENT_FAILS = 3     # 連續暫時性失敗達此次數 → 自動回代號選單（不無限重試）
 
     def __init__(self, info: dict):
         self.info = info            # {kind, display, yahoo, is_btc}
@@ -82,12 +88,27 @@ class UniversalMonitor:
         self._shares_out = None     # 台股已發行股數（週轉率用；tw_chip 內部已日快取，這裡存最近一次結果）
         self._last_live_vol = None       # 即時成交量快取（Yahoo 該欄位偶爾單次缺漏，見 render 說明）
         self._last_live_vol_ts = 0.0
+        self._stale_note = None          # 日線刷新失敗沿用舊快取時的畫面標註（成功刷新即清除）
+        self._alert_state = {}           # E2 警戒武裝旗標（per symbol，session 記憶體）
+        self._alert_banner = []          # 最近一批警戒事件顯示列（保留到下批事件覆蓋）
 
     def _fetch(self):
-        """日線每小時重抓+重算一次（避免 60s 迴圈重抓 2y OHLC 與全套指標）；台股一併刷新籌碼。"""
+        """日線每小時重抓+重算一次（避免 60s 迴圈重抓 2y OHLC 與全套指標）；台股一併刷新籌碼。
+        每小時刷新失敗但手上有快取 → 退回舊快取＋畫面標註（現價線本就獨立每 60s 抓，
+        不因日線源短暫故障讓整頁被錯誤訊息取代），RETRY_REFRESH_SEC 後再試；
+        無快取（首抓失敗）才拋給 run() 走重試/回上層。"""
         if self._daily_cache is None or (time.time() - self._daily_ts) >= self.DAILY_REFRESH_SEC:
-            df = calculate_technical_indicators(fetch_ohlc(self.yahoo))
+            try:
+                df = calculate_technical_indicators(fetch_ohlc(self.yahoo))
+            except Exception as e:  # noqa: BLE001
+                if self._daily_cache is None:
+                    raise
+                age_min = int((time.time() - self._daily_ts) // 60)
+                self._stale_note = f"  ⚠ 日線刷新失敗（{str(e)[:60]}），沿用 {age_min} 分鐘前快取"
+                self._daily_ts = time.time() - self.DAILY_REFRESH_SEC + self.RETRY_REFRESH_SEC
+                return self._daily_cache
             if df is not None and not df.empty and len(df) >= 50:
+                self._stale_note = None
                 self._daily_cache = df
                 self._daily_ts = time.time()
                 if self.is_tw:
@@ -138,6 +159,8 @@ class UniversalMonitor:
             f"  52週高/低     {_fmt_price(hi)} / {_fmt_price(lo)}   （位置 {pos:.0f}%）",
             f"  短線動能      {mom}",
         ]
+        if self._stale_note:
+            quote.append(self._stale_note)
         # 即時成交量（同一次 fetch_live_quote 內含，零額外網路成本）＋量能分位（個股自身歷史，複用
         # 台股高側「量能見頂」既有邏輯）＋週轉率（台股才有，需已發行股數，來源 TWSE/TPEx OpenAPI）。
         # Yahoo 回應偶爾單次缺漏 regularMarketVolume（價格欄位正常、僅此欄漏），resolve_live_volume
@@ -158,12 +181,21 @@ class UniversalMonitor:
         quote += momentum_ref_rows(df)
         # 風控框架（ATR 停損 + 近 60 日支撐壓力風報比）— 支撐用近期低（股票無動態地板）
         quote += _atr_risk_rows(df, close, support=None)
+
+        # 交易計畫（E1）：watch_plan.json 有本代號計畫才顯示（無計畫＝畫面與從前完全相同）。
+        # 距離以當下有效價計（有即時報價用即時、否則日線收盤）；檔案壞掉只出警示行不中斷監控。
+        eff_price = live["price"] if live.get("price") else close
+        plan = get_plan(self.display)
+        _, plan_errs = load_plans_cached()
+        plan_rows = plan_panel_rows(plan, eff_price, fmt=_fmt_price) if plan else []
+        plan_rows += [f"  ⚠ {e}" for e in plan_errs]
         _, trend_rows = _panel_trend(trend, "趨勢方向（順勢）",
                                      ("ma_structure", "macd", "slope", "adx"))
         ct_trend = f"趨勢  {trend[0]:+d}/±100  {_bar_signed(trend[0])}  {trend_meta(trend[0])[0]}"
 
         # 台股：完整逃頂/抄底（籌碼面）+ 三軸 composite；美股：僅趨勢×短線 stance
         top_rows = low_rows = None
+        high = low = None               # E3 日誌快照用（fallback 分支無逃頂/抄底分數）
         ct_top = ct_low = ""
         if self.is_tw and self._chip is not None:
             high = compute_relative_high_tw(row, df, chip=self._chip)
@@ -177,7 +209,7 @@ class UniversalMonitor:
             ct_low = f"抄底  {low[0]}/100  {_bar(low[0], 100)}  {relative_low_tw_meta(low[0])[0]}"
             # 三軸 composite：不傳 cycle_score（台股估值對底部是雜訊、且 max 僅 10 達不到 cycle 門檻）；
             # 由重配重後的 low_score≥60 驅動 value 分支（已含融資清洗權重30 這個校準最強底部維）。
-            ct_comp, comp_rows = _composite_panel(trend[0], high[0], low[0])
+            ct_comp, comp_rows, act = _composite_panel(trend[0], high[0], low[0])
             note = [f"  籌碼資料截至 {self._chip.get('as_of', '—')}（TWSE EOD；今日未收/連假自動取最近交易日）",
                     "  ⚠ 台股逃頂/抄底 v0.5〔2026-07-02 全市場 swing 回測拍板〕：逃頂靠估值(PE/PB絕對",
                     "     AUC~0.63)+量能見頂(0.648)+量價背離(0.566 已轉正式)；抄底靠融資清洗(0.564)。",
@@ -193,22 +225,59 @@ class UniversalMonitor:
                                  ("technical", "vol_price", "structure"))
             ct_top = f"逃頂  {high[0]}/100  {_bar(high[0], 100)}  {relative_high_us_meta(high[0])[0]}"
             ct_low = f"抄底  {low[0]}/100  {_bar(low[0], 100)}  {relative_low_us_meta(low[0])[0]}"
-            ct_comp, comp_rows = _composite_panel(trend[0], high[0], low[0])
+            ct_comp, comp_rows, act = _composite_panel(trend[0], high[0], low[0])
             note = ["  ⚠ 美股逃頂/抄底 v0.1〔2026-07 新建〕：個股槓桿/法人/IV 無免費源，改用純 OHLCV",
                     "     通用軸（技術背離+量價背離+結構轉折）。2026-07-02 家用網路已回測（50 檔）→ 三維",
                     "     全近雜訊(AUC~0.5，權值股純技術面抓頂難)；權重 50/30/20 維持專家值、僅參考未獲實證。"]
         else:
-            st = compute_trend_stance(trend[0], mom)
+            act = compute_trend_stance(trend[0], mom)
             _, comp_rows = _panel_stance(
-                "操作", f"{st['emoji']} {st['action']}", st["detail"])
-            ct_comp = f"操作  {st['emoji']} {st['action']}"
+                "操作", f"{act['emoji']} {act['action']}", act["detail"])
+            ct_comp = f"操作  {act['emoji']} {act['action']}"
             note = ["  ⚠ 台股籌碼資料尚未就緒 → 暫僅通用軸（趨勢方向＋技術＋短線動能）。"]
+
+        # ── E2 警戒引擎：本標的觸價/訊號變化＋watch_plan 其餘標的背景觸價（盯一檔不漏他檔）──
+        events = []
+        sym_key = self.display.upper()
+        st_sym = self._alert_state.get(sym_key, {})
+        if plan is not None:
+            evs, st_sym = check_price_events(plan, eff_price, st_sym)
+            events += evs
+        evs, st_sym = check_signal_change(sym_key, (act or {}).get("action_key"),
+                                          (act or {}).get("action"), st_sym)
+        events += evs
+        self._alert_state[sym_key] = st_sym
+        # 背景標的：每輪各打一發輕量報價（60s 一輪、上限 8 檔，勿撞 Yahoo 限流）
+        plans_all, _ = load_plans_cached()
+        for sym, p in list(plans_all.items())[:9]:
+            if sym == sym_key:
+                continue
+            try:
+                q = fetch_live_quote(classify_symbol(sym)["yahoo"])
+            except ValueError:
+                continue
+            if not q.get("price"):
+                continue
+            st_bg = self._alert_state.get(sym, {})
+            evs, st_bg = check_price_events(p, q["price"], st_bg)
+            self._alert_state[sym] = st_bg
+            events += [dict(e, msg=e["msg"] + "〔背景標的〕") for e in evs]
+        if events:
+            self._alert_banner = banner_rows(events)   # 保留顯示直到下批事件覆蓋
+            # E3：事件＋觸發當下訊號快照落日誌（背景標的無本畫面分數 → 快照僅本標的事件附）
+            snap = {"trend": trend[0], "high": high[0] if high else None,
+                    "low": low[0] if low else None, "action_key": (act or {}).get("action_key")}
+            for e in events:
+                journal_append(journal_record(e, snap if e["symbol"] == sym_key else None))
+            notify_beep()
+        self._last_eff_price = eff_price               # e 鍵執行標記（E3）記價用
 
         # 兩欄並排：操作｜趨勢、逃頂｜抄底（台股才有後者）— 與 BTC_WATCH 同一套版面（省垂直高度、一頁看完）
         panels = [(t, r) for t, r in ((ct_comp, comp_rows), (ct_trend, trend_rows),
                                       (ct_top, top_rows), (ct_low, low_rows)) if r]
 
-        w_full = max((_dw(c) for c in (header + quote + note)), default=40)
+        w_full = max((_dw(c) for c in (header + quote + note + plan_rows + self._alert_banner)),
+                     default=40)
         col_need = max((_dw(t) for t, _ in panels), default=40) + 4   # +4：┌─ … ─┐ 邊距
         col_need = max(col_need, _MIN_COL_W)   # 每欄至少 _MIN_COL_W（拉寬 + 容對齊後子項）
         W = max(w_full, 2 * col_need + 2, _dw("即時行情") + 4)
@@ -222,11 +291,25 @@ class UniversalMonitor:
             print(_row(h, W, "║"))
         print(_edge("╚", "═", "╝", W))
 
+        if self._alert_banner:
+            print()
+            print(_title("⚠ 警戒", W))
+            for r in self._alert_banner:
+                print(_row(r, W))
+            print(_edge("└", "─", "┘", W))
+
         print()
         print(_title("即時行情", W))
         for r in quote:
             print(_row(r, W))
         print(_edge("└", "─", "┘", W))
+
+        if plan_rows:
+            print()
+            print(_title("交易計畫", W))
+            for r in plan_rows:
+                print(_row(r, W))
+            print(_edge("└", "─", "┘", W))
 
         for i in range(0, len(panels), 2):
             print()
@@ -243,22 +326,45 @@ class UniversalMonitor:
                 print(_row(seg, W))
         print(_edge("└", "─", "┘", W))
 
-        print(f"\n  下次刷新 {nxt}    （b 重選代號｜q 結束）")
+        print(f"\n  下次刷新 {nxt}    （b 重選代號｜e 記錄已執行｜q 結束）")
 
     def run(self):
+        fails = 0                   # 連續暫時性失敗計數（成功一輪即歸零）
         while True:
+            err = None
             try:
                 df = self._fetch()
-                if df is None or df.empty or len(df) < 50:
-                    print(f"資料不足（{self.yahoo}），10 秒後重試…")
-                    time.sleep(10)
-                    continue
-                self.render(df)
+                insufficient = df is None or df.empty or len(df) < 50
+            except RuntimeError as e:
+                # fetch_ohlc「無資料」屬永久性失敗（代號打錯/已下市），重試只會無限撞 Yahoo
+                print(f"[錯誤] {e}（代號可能有誤或已下市），回代號選單。")
+                return "back"
             except Exception as e:  # noqa: BLE001
-                print(f"擷取失敗（{self.yahoo}）：{e}\n10 秒後重試…")
-                time.sleep(10)
+                insufficient, err = True, e
+            if insufficient:
+                fails += 1
+                msg = f"擷取失敗（{self.yahoo}）：{err}" if err else f"資料不足（{self.yahoo}）"
+                if fails >= self.MAX_TRANSIENT_FAILS:
+                    print(f"{msg}，連續 {fails} 次，回代號選單。")
+                    return "back"
+                print(f"{msg}，10 秒後重試…（b 回選單｜q 結束）")
+                cmd = interruptible_wait(10, nav=True)
+                if cmd:
+                    return cmd
                 continue
+            fails = 0
+            try:
+                self.render(df)
+            except Exception as e:  # noqa: BLE001 — 渲染例外不終結監控（多為即時報價/終端邊角）
+                print(f"畫面更新失敗：{e}，{self.REFRESH_SEC}s 後重試…")
             cmd = interruptible_wait(self.REFRESH_SEC, nav=True)
+            if cmd == "exec":       # e 鍵：記「已依計畫執行」後繼續監控，不中斷（E3）
+                sym = self.display.upper()
+                journal_append(journal_record(
+                    {"symbol": sym, "event": "executed", "price": getattr(self, "_last_eff_price", None),
+                     "msg": "使用者標記：已依計畫執行"}))
+                self._alert_banner = [f"  {datetime.datetime.now():%H:%M}  {sym}  📝 已記錄執行標記"]
+                continue
             if cmd:
                 return cmd          # 'back'（回上層重選）/ 'quit'（結束）
 
@@ -290,7 +396,11 @@ def main():
     """輸入代號 → 進儀表板；儀表板內按 b 回此處重選、q 結束（Ctrl+C 亦可強制結束）。"""
     argv_raw = sys.argv[1] if len(sys.argv) > 1 else None
     while True:
-        raw = argv_raw or _prompt_symbol()
+        try:
+            raw = argv_raw or _prompt_symbol()
+        except (KeyboardInterrupt, EOFError):       # 提示符按 Ctrl+C / Ctrl+Z → 乾淨結束不吐 traceback
+            print("\n結束。")
+            return
         argv_raw = None                             # 命令列代號只用第一次；回上層後一律重新提示
         try:
             info = classify_symbol(raw)
@@ -305,9 +415,9 @@ def main():
         else:
             label = f"{kind_label} 通用軸（趨勢方向）"
         print(f"\n→ 判定：{info['display']}（{kind_label}）→ {label}\n")
-        time.sleep(0.8)
 
         try:
+            time.sleep(0.8)
             cmd = _build_monitor(info).run()
         except KeyboardInterrupt:
             print("\n結束。")

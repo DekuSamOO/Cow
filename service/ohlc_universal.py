@@ -71,18 +71,32 @@ def _crypto_info(base: str, is_btc: bool) -> dict:
     }
 
 
+_SESSION = None      # 模組級單例（W-6）：60s 輪詢重用連線，不每次重做 TCP+TLS 握手
+_RESOLVED: dict = {}  # raw yahoo symbol → 實際有資料的候選（W-3）：上櫃股解析一次後不再打 .TW 404
+
+
 def _session() -> requests.Session:
-    """配好公司 SSL 攔截環境與 UA 的 Yahoo 用 Session（fetch_ohlc / fetch_live_quote 共用）。"""
-    s = requests.Session()
-    s.verify = False  # 公司 SSL 攔截環境（見全域 CLAUDE.md）
-    s.headers.update({"User-Agent": _UA})
-    return s
+    """配好公司 SSL 攔截環境與 UA 的 Yahoo 用 Session（fetch_ohlc / fetch_live_quote 共用）。
+    模組級 lazy 單例：watcher 每 60s 輪詢即時報價，逐次新建 Session 會重做 TLS 握手
+    （公司 SSL 攔截環境握手更貴），重用即省。"""
+    global _SESSION
+    if _SESSION is None:
+        s = requests.Session()
+        s.verify = False  # 公司 SSL 攔截環境（見全域 CLAUDE.md）
+        s.headers.update({"User-Agent": _UA})
+        _SESSION = s
+    return _SESSION
 
 
 def _tw_candidates(yahoo_symbol: str) -> list:
     """台股 `.TW`（上市）查無資料時的備援候選（`.TWO` 上櫃）。classify_symbol 無法預知
     上市/上櫃，fetch_ohlc / fetch_live_quote 都需要同一套候選清單，抽出避免重複維護
-    （曾因 fetch_live_quote 漏了這段，上櫃股「現價/即時成交量」永遠 404，見該函式說明）。"""
+    （曾因 fetch_live_quote 漏了這段，上櫃股「現價/即時成交量」永遠 404，見該函式說明）。
+    已解析過的代號直接回單一候選（`_RESOLVED`）：上櫃股否則每次 60s 刷新都先吃一發
+    注定 404 的 .TW 才試 .TWO。暫時性失敗不清快取（fetch 端自然重試）。"""
+    resolved = _RESOLVED.get(yahoo_symbol)
+    if resolved:
+        return [resolved]
     candidates = [yahoo_symbol]
     if yahoo_symbol.endswith(".TW"):
         candidates.append(yahoo_symbol[:-3] + ".TWO")   # 上市查無 → 試上櫃
@@ -106,6 +120,7 @@ def fetch_ohlc(yahoo_symbol: str, rng: str = "2y") -> pd.DataFrame:
             result, last_err = None, e
         if result:
             res = result[0]
+            _RESOLVED[yahoo_symbol] = sym   # 記住有資料的候選，之後直打（W-3）
             break
     if res is None:
         raise RuntimeError(f"無資料：{yahoo_symbol}") from last_err
@@ -146,6 +161,7 @@ def fetch_live_quote(yahoo_symbol: str) -> dict:
         p = m.get("regularMarketPrice")
         if p is None:
             continue
+        _RESOLVED[yahoo_symbol] = sym       # 記住有資料的候選，之後直打（W-3）
         return {"price": float(p), "ts": m.get("regularMarketTime"),
                 "prev_close": m.get("previousClose") or m.get("chartPreviousClose"),
                 "volume": m.get("regularMarketVolume")}

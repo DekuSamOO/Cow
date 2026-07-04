@@ -425,7 +425,9 @@ def _kline_panel_lines(df, n_days, height):
 def interruptible_wait(seconds, nav=False):
     """
     等待 seconds 秒。nav=True（由 watcher 進入）時偵測鍵盤指令並提早返回：
-      b / Enter → 'back'（回上層重選代號）；q → 'quit'（結束）。回傳指令字串或 None。
+      b / Enter → 'back'（回上層重選代號）；q → 'quit'（結束）；
+      e → 'exec'（E3 執行標記：UniversalMonitor 記日誌後繼續；本檔 run 忽略）。
+    回傳指令字串或 None。
     nav=False（BTC_WATCH 單獨執行）或非 Windows 無 msvcrt → 純 sleep、不收指令（行為不變）。
     """
     if not nav:
@@ -444,6 +446,8 @@ def interruptible_wait(seconds, nav=False):
                 return "back"
             if ch in (b"q", b"Q"):
                 return "quit"
+            if ch in (b"e", b"E"):
+                return "exec"
         time.sleep(0.1)
     return None
 
@@ -870,6 +874,8 @@ class BitcoinMonitor:
                 self.render_simple(md, funding, oi_stats)
 
             cmd = interruptible_wait(60, nav=self.nav)
+            if cmd == "exec":
+                continue            # e 鍵日誌行為僅 UniversalMonitor 有（E3）；BTC 版忽略
             if cmd:
                 return cmd          # 'back'（回上層重選）/ 'quit'（結束）→ 交給 watcher 處理
 

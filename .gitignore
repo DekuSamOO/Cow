@@ -34,3 +34,7 @@ db/hashrate_history.json
 collector/oi_snapshot.log
 collector/run_oi_snapshot.bat
 
+
+# watcher 個人交易計畫與觸發日誌（公開 repo，個人部位計畫/交易紀錄不得入庫）
+watch_plan.json
+logs/watch_journal.jsonl

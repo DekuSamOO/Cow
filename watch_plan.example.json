@@ -1,0 +1,5 @@
+{
+  "QQQ": {"direction": "long", "entry": [680, 700], "stop": 650,
+          "targets": [760, 800], "size_pct": 20,
+          "valid_until": "2026-08-31", "note": "回踩 EMA20 佈局（測試示例）"}
+}
