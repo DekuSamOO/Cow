@@ -1,5 +1,5 @@
 from datetime import datetime
-from config import ALERT_PRICE_LOW
+from config import ALERT_PRICE_LOW, DEFENSE_LADDER
 from service.notification.core import (
     _send_line_message,
     _send_telegram_message,
@@ -159,34 +159,50 @@ def send_test_message(platform: str = "all") -> dict:
     return result
 
 
+def build_defense_message(price: float, now_str: str = None) -> str:
+    """
+    防守推播文案 — 由 config.DEFENSE_LADDER 動態組裝（單一真實來源，數字勿在本檔寫死）。
+    抽成純函數供測試對拍（2026-07-04 C-1 修正：舊版寫死「關 2 台馬丁→強平 $37,000」
+    為過時計畫且數字錯置，詳見 _governance/AUDIT-SUMMARY C-1 與 vault 馬丁數學稽核）。
+    依現價標示各階狀態：🔴=已觸發應執行、⚪=尚未觸發（完整推移表一次推送——
+    price_alert 每日最多推一次，後續下探不會逐階再推）。
+    """
+    now_str = now_str or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    lines = [
+        f"🛡️ BTC 跌破 ${ALERT_PRICE_LOW:,.0f}（1 BTC ROAD 防守事件）",
+        "━━━━━━━━━━━━━━━━",
+        f"💰 現價: ${price:,.0f}",
+        "━━━━━━━━━━━━━━━━",
+        "📋 防守推移表（🔴=已觸發）:",
+    ]
+    for i, (trig, action, add_btc, liq_after, note) in enumerate(DEFENSE_LADDER, 1):
+        mark = "🔴" if price <= trig else "⚪"
+        lines.append(f"{mark} 第{i}階 ${trig:,.0f}：{action}")
+        lines.append(f"　　+{add_btc} BTC → 強平價 ~${liq_after:,.0f}")
+        if note:
+            lines.append(f"　　⚠ {note}")
+    lines += [
+        "━━━━━━━━━━━━━━━━",
+        "🧭 執行前先看戰情室 final_low / ensemble_low（防守為條件式）",
+        "🔁 馬丁若已止盈重啟，本表作廢——依 config.DEFENSE_LADDER 註解公式重算",
+        f"🕐 時間: {now_str}",
+    ]
+    return "\n".join(lines)
+
+
 def notify_defense_line(price: float) -> dict:
     """
-    BTC 跌至防守線（config.ALERT_PRICE_LOW）推播 — 1 BTC ROAD 防守事件。
-    門檻只存 config 一份，訊息文字動態帶入。
+    BTC 跌至防守線（config.ALERT_PRICE_LOW = 防守第 1 階觸發價）推播 —
+    1 BTC ROAD 防守事件。文案見 build_defense_message（config.DEFENSE_LADDER 單一來源）。
     """
     result = {'line': False, 'telegram': False}
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    text = build_defense_message(price)
 
-    text = (
-        f"🛡️ BTC 跌破 ${ALERT_PRICE_LOW:,.0f}！\n"
-        f"━━━━━━━━━━━━━━━━\n"
-        f"💰 現價:  ${price:,.0f}\n"
-        f"━━━━━━━━━━━━━━━━\n"
-        f"📋 待執行（防守事件）:\n"
-        f"1. 關閉 2 台馬丁格爾機器人\n"
-        f"2. 將 USDT 全數換成 BTC\n"
-        f"3. 注入幣本位機器人作為額外保證金\n"
-        f"4. 強平價從 ~$47,000 拉低至 ~$37,000\n"
-        f"━━━━━━━━━━━━━━━━\n"
-        f"🕐 時間: {now_str}\n"
-        f"⚠️ 完成操作後請至 GitHub Actions 停用 price_alert workflow"
-    )
-    
     if _is_line_configured():
         result['line'] = _send_line_message([{"type": "text", "text": text}])
     if _is_telegram_configured():
         result['telegram'] = _send_telegram_message(text)
-        
+
     return result
 
 

@@ -1,7 +1,7 @@
 # CLAUDE.md — Cow（BTC 投資戰情室）
 
 **路徑：** `D:\Users\63191\Documents\GitHub\Cow`
-**目前版本：** v3.24
+**目前版本：** v3.28
 **Live App：** https://mfyyo9qf5mymsrouxkfdgj.streamlit.app
 **Streamlit 版本：** 1.37.1
 
@@ -467,3 +467,15 @@ import 動作本身會卡住逾時（實測 >10 秒無回應，且無 timeout �
 不是拋例外）。已抽出零重依賴的 `service/macro_events.py` 解決。**教訓**：一個檔案裡若混了
 「給 dashboard 用、需要 streamlit/yfinance」與「給 CLI/排程用、零依賴」的函式，被 CLI 端
 lazy import 拖累整包重依賴——新增純邏輯函式前，先看它要放的檔案頂層 import 了什麼。
+
+### 21. 防守通知文案曾寫死過時計畫數字（2026-07-04 修，C-1）
+
+舊 `notify_defense_line` 寫死「跌破 54k 關 2 台馬丁→強平 $37,000」——為舊版防守計畫殘留：
+正確為 $54,223 只關**馬1**（馬2 最後加倉價 $44,070）；「關兩台」驗算強平 ≈$34,410 非 $37,000。
+修法：推移表進 `config.DEFENSE_LADDER`（單一真實來源，含各階觸發價/釋出 BTC/強平價/條件式
+附註），文案由 `facade.build_defense_message` 動態組裝並依現價標 🔴/⚪；`ALERT_PRICE_LOW`
+54,000→**54,223**（C4 拍板，警報即行動訊號）。守門：`tests/test_defense_ladder.py`（5 項：
+公式自洽/門檻=第1階/單調/文案完整/標記跟價）。**規則**：(a) 數字正本 = vault
+「1b 1 BTC ROAD.md」，計畫更新必同步 config；(b) **馬丁止盈重啟即本表作廢**（馬1 ~$61,815／
+馬2 ~$49,993 重啟後，新最後加倉價 = 新起始價 × 0.659，整表重算）；(c) 防守為**條件式**
+（2026-07-04 拍板）：每階執行前看 `final_low`/`ensemble_low`，第 3 階僅當模型熊底 > $33k 才執行。

@@ -84,7 +84,7 @@ strategy/
 
 scripts/
   daily_line_notify.py     GitHub Actions 雲端自動推播腳本（Kraken 備援，台灣 08:23 / 13:39 / 18:27 三時段，含新聞輿情、逃頂警報分級/分數Δ/遲滯狀態機、OI 快照過期警告、週日傍晚場次加推文字週報，時段閘門 hour<17 早退使本地/手動執行也僅傍晚才發）
-  price_alert.py           GitHub Actions 每小時價格警報（防守線 $54k＝config.ALERT_PRICE_LOW 單一來源，含同日去重 + armed 遲滯：跌破推一次、回升門檻+$500 才重新武裝）
+  price_alert.py           GitHub Actions 每小時價格警報（防守線 $54,223＝config.ALERT_PRICE_LOW＝防守第 1 階觸發價；文案由 config.DEFENSE_LADDER 三階推移表動態組裝，含同日去重 + armed 遲滯：跌破推一次、回升門檻+$500 才重新武裝）
   test_flex_message.py     本地端測試 LINE Flex Message 排版的除錯腳本
   test_compare_backtest.py 驗證腳本：對相同參數同時執行 swing.py 與 Walk-Forward，確認結果量級一致
 
@@ -381,6 +381,13 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 ---
 
 ## 版本紀錄
+
+### v3.28 (2026-07-04)
+修正防守通知文案錯置（治理稽核 C-1【高】）：舊文案寫死過時計畫「跌破 54k 關 2 台馬丁→強平 $37,000」——正確為 $54,223 只關馬1（→$43,379）；「關兩台」驗算強平 ≈$34,410，$37,060 實為「關馬1＋台股 200k」的結果。
+- **feat(config)**: 新增 `DEFENSE_LADDER` 三階防守推移表（單一真實來源；數字正本＝vault「1b 1 BTC ROAD.md」，驗算＝「1b 馬丁格爾數學稽核」）。含 2026-07-04 拍板的三規則：防守為**條件式**（每階執行前看 `final_low`/`ensemble_low`）、第 3 階（關馬2）僅當模型熊底 > $33k 才執行、**馬丁止盈重啟即本表作廢**（新最後加倉價＝新起始價×0.659，整表重算）。
+- **feat(alerts)**: `ALERT_PRICE_LOW` $54,000 → **$54,223**（對齊馬1最後加倉價——警報即行動訊號，急跌時第 1 階須觸價即做）。
+- **refactor(notify)**: `notify_defense_line` 文案改由純函數 `build_defense_message` 從 `DEFENSE_LADDER` 動態組裝，依現價標各階 🔴已觸發/⚪未觸發，並帶條件式與重啟作廢提醒；數字不再寫死於通知層。
+- **test**: 新增 `tests/test_defense_ladder.py` 5 項守門（逆合約公式逐階自洽 <0.5%、門檻＝第 1 階、階梯單調、文案完整性＋舊錯誤數字不得復發、標記跟價），**5 passed**；dry-run 文案與 vault 防守表逐格吻合。
 
 ### v3.27 (2026-07-03)
 台股逃頂/抄底雷達依 2026-07-02 全市場 swing 回測結果（`scripts/tw_universal_backtest.py`，2080 檔 out-of-sample≥2024）重配已校準權重，並移除回測證明為雜訊/反指標的維度。**美股權重（50/30/20）刻意不動——回測三維全近雜訊，維持專家值。**
