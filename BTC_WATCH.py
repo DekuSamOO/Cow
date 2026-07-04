@@ -297,18 +297,129 @@ def _panel_block(title, rows, inner_w):
     return block
 
 
-def _print_pair(pa, pb, wl, wr):
-    """兩面板 (title, rows) 左右並排列印。**各欄獨立、由上往下緊貼**（不做跨欄逐列同步，
-    否則一欄某列換多行、另一欄就得插空行對齊 → 面板中間出現空行，且會撐高、與「一頁看完」衝突）。
-    只把較矮那欄用空列補在**最底部**（└──┘ 之前），讓兩欄底框對齊即可。"""
+def _pair_lines(pa, pb, wl, wr):
+    """兩面板 (title, rows) 左右並排 → 回傳合併後的字串陣列（不印）。對齊邏輯同 _print_pair：
+    只把較矮那欄用空列補在**最底部**（└──┘ 之前）。供 render() 需要再往右接 K 線欄時取用。"""
     a = _panel_block(pa[0], pa[1], wl)
     b = _panel_block(pb[0], pb[1], wr)
     h = max(len(a), len(b))
     # 空列插在各自 └──┘（最後一列）之前 → 內容緊貼、空白落在面板底部
     a = a[:-1] + [_row("", wl)] * (h - len(a)) + [a[-1]]
     b = b[:-1] + [_row("", wr)] * (h - len(b)) + [b[-1]]
-    for la, lb in zip(a, b):
-        print(la + lb)
+    return [la + lb for la, lb in zip(a, b)]
+
+
+def _print_pair(pa, pb, wl, wr):
+    """兩面板 (title, rows) 左右並排列印。**各欄獨立、由上往下緊貼**（不做跨欄逐列同步，
+    否則一欄某列換多行、另一欄就得插空行對齊 → 面板中間出現空行，且會撐高、與「一頁看完」衝突）。
+    只把較矮那欄用空列補在**最底部**（└──┘ 之前），讓兩欄底框對齊即可。"""
+    for line in _pair_lines(pa, pb, wl, wr):
+        print(line)
+
+
+# ── K 線圖（右側全高側欄，2026-07 新增）───────────────────────────────────────
+# 只用 _daily_cache 既有的日線 OHLC（零額外網路請求），畫成每日 1 字元寬欄位的蠟燭。
+# ANSI 顏色碼刻意不進 _dw()/_row() 的版寬計算（那條路是給全形/emoji 走的，escape
+# char 會被當成一般窄字元誤加寬度、撐壞對齊）→ 顏色只在「已量好純文字寬度」之後
+# 包住字元，畫面可見寬度不受影響；含色碼的列改用手動 "│" + content + "│" 组框，
+# 不走 _row()。標題/日期軸/底框仍是純文字，照舊用 _title/_row/_edge。
+_ANSI_GREEN = "\x1b[92m"
+_ANSI_RED = "\x1b[91m"
+_ANSI_RESET = "\x1b[0m"
+
+
+def _enable_windows_ansi():
+    """Windows 主控台預設不解讀 ANSI escape，需開 ENABLE_VIRTUAL_TERMINAL_PROCESSING。
+    僅 Windows 需要；抓不到 handle／舊主控台等任何失敗一律靜默忽略——K 線退化為
+    無色但仍可讀（body/wick 字元本身已分得出來），不影響其餘畫面。"""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        k = ctypes.windll.kernel32
+        h = k.GetStdHandle(-11)
+        mode = ctypes.c_uint32()
+        if k.GetConsoleMode(h, ctypes.byref(mode)):
+            k.SetConsoleMode(h, mode.value | 0x0004)
+    except Exception:
+        pass
+
+
+_enable_windows_ansi()
+
+
+def _fmt_axis_price(v):
+    """K 線圖 y 軸標籤：BitcoinMonitor 也被非 BTC 幣對複用（is_btc=False），價格量級
+    可能差很多（ETH 數千 vs 小市值幣 <1），依量級決定小數位數，避免小額幣種顯示成 0。"""
+    if v >= 1000:
+        return f"{v:,.0f}"
+    if v >= 1:
+        return f"{v:,.2f}"
+    return f"{v:.4f}"
+
+
+def _kline_column(o, h, l, c, height, pmin, pmax):
+    """單日 OHLC → 該日欄位每一列 (char, color)，row 0 在最上方（對應 pmax）。"""
+    span = (pmax - pmin) or 1.0
+
+    def to_row(price):
+        frac = (price - pmin) / span
+        return min(max(int(round((1 - frac) * (height - 1))), 0), height - 1)
+
+    r_hi, r_lo = to_row(h), to_row(l)
+    body_top, body_bot = sorted((to_row(o), to_row(c)))
+    color = _ANSI_GREEN if c >= o else _ANSI_RED
+    col = [None] * height
+    for r in range(r_hi, r_lo + 1):
+        col[r] = ("█" if body_top <= r <= body_bot else "│", color)
+    return col
+
+
+def _kline_panel_lines(df, n_days, height):
+    """近 n_days 日 K 線 → 完整框線 block（┌─┐/│…│/└─┘，與其他面板同款式），
+    高度＝呼叫端指定的 height（供逐列跟左欄整頁並排），每日固定佔 1 字元寬欄位。
+    資料不足 / 可畫列數太少（<5）時回 []，呼叫端據此退回舊版單欄（不並排）畫面。"""
+    if df is None or len(df) < n_days or height < 8:
+        return []
+    sub = df.iloc[-n_days:]
+    pmax = float(sub["high"].max())
+    pmin = float(sub["low"].min())
+    if not (pmax > pmin):
+        return []
+    n_rows = height - 3   # 扣：標題列 + 日期軸列 + 底框
+    if n_rows < 5:
+        return []
+
+    tick_prices = [pmin + i * (pmax - pmin) / 3 for i in range(4)]
+    label_w = max(len(_fmt_axis_price(p)) for p in tick_prices) + 1   # +1：軸刻度符
+
+    def _row_of(price):
+        frac = (price - pmin) / (pmax - pmin)
+        return min(max(int(round((1 - frac) * (n_rows - 1))), 0), n_rows - 1)
+
+    tick_rows = {_row_of(p): p for p in tick_prices}
+    cols = [_kline_column(float(r.open), float(r.high), float(r.low), float(r.close),
+                          n_rows, pmin, pmax) for r in sub.itertuples()]
+
+    inner_w = label_w + n_days
+    lines = [_title(f"K 線圖  近{n_days}日（綠漲／紅跌）", inner_w)]
+    for r in range(n_rows):
+        if r in tick_rows:
+            label = f"{_fmt_axis_price(tick_rows[r]):>{label_w - 1}}┤"
+        else:
+            label = " " * (label_w - 1) + "│"
+        day_chars = []
+        for col in cols:
+            cell = col[r]
+            day_chars.append(" " if cell is None else f"{cell[1]}{cell[0]}{_ANSI_RESET}")
+        lines.append("│" + label + "".join(day_chars) + "│")
+    d0 = sub.index[0].strftime("%m/%d")
+    d1 = sub.index[-1].strftime("%m/%d")
+    gap = max(1, n_days - len(d0) - len(d1))
+    xaxis = (" " * label_w + d0 + " " * gap + d1)[:inner_w].ljust(inner_w)
+    lines.append(_row(xaxis, inner_w))
+    lines.append(_edge("└", "─", "┘", inner_w))
+    return lines
 
 
 def interruptible_wait(seconds, nav=False):
@@ -342,6 +453,7 @@ class BitcoinMonitor:
 
     FALLBACK_SUPPORT = 54000   # 動態地板算不出時的靜態防線（2026/5 的 0.618 值）
     DAILY_REFRESH_SEC = 3600   # 日線/地板/外部維度刷新間隔（即時項仍每 60s）
+    KLINE_DAYS = 30            # 右側 K 線側欄天數（每日固定佔 1 字元寬欄位）
 
     # 可得天花板（純幣安 + F&G + 本地快取 ETF/SOPR/BTC.D + 本地總經事件行事曆）。
     # 唯一缺項：macro 的通膨/就業 dovish/hawkish flags（FRED 被公司網路封鎖，macro 僅拿得到
@@ -665,29 +777,51 @@ class BitcoinMonitor:
         wl = (W - 2) // 2
         wr = (W - 2) - wl
 
-        print(_edge("╔", "═", "╗", W))
-        print(_row(header[0], W, "║"))
-        print(_edge("╠", "═", "╣", W))
-        print(_row(header[1], W, "║"))
-        print(_row(header[2], W, "║"))
-        print(_edge("╚", "═", "╝", W))
-
-        print()
-        print(_title("即時行情", W))
-        for r in quote:
-            print(_row(r, W))
-        print(_edge("└", "─", "┘", W))
+        left = [
+            _edge("╔", "═", "╗", W),
+            _row(header[0], W, "║"),
+            _edge("╠", "═", "╣", W),
+            _row(header[1], W, "║"),
+            _row(header[2], W, "║"),
+            _edge("╚", "═", "╝", W),
+            "",
+            _title("即時行情", W),
+        ]
+        left += [_row(r, W) for r in quote]
+        left.append(_edge("└", "─", "┘", W))
 
         for i in range(0, len(panels), 2):
-            print()
+            left.append("")
             if i + 1 < len(panels):
-                _print_pair(panels[i], panels[i + 1], wl, wr)
+                left.extend(_pair_lines(panels[i], panels[i + 1], wl, wr))
             else:                                    # 奇數面板 → 最後一個佔全寬（同用 _panel_block 對齊）
-                for ln in _panel_block(panels[i][0], panels[i][1], W):
-                    print(ln)
+                left.extend(_panel_block(panels[i][0], panels[i][1], W))
 
         hint = "b 重選代號｜q 結束" if self.nav else "Ctrl+C 結束"
-        print(f"\n  下次刷新 {nxt}    （{hint}）")
+        left.append("")
+        left.append(f"  下次刷新 {nxt}    （{hint}）")
+
+        # 右側 K 線側欄：跟左欄整頁等高並排。資料不足／終端機太窄（放不下側欄寬度）
+        # 時 _kline_panel_lines 回 []，優雅退回舊版單欄畫面，不影響既有行為。
+        try:
+            term_cols = os.get_terminal_size().columns
+        except OSError:
+            term_cols = None
+        show_chart = _COW_OK and (term_cols is None or term_cols >= W + 45)
+        chart = _kline_panel_lines(self._daily_cache, self.KLINE_DAYS, len(left)) if show_chart else []
+
+        if chart:
+            h = max(len(left), len(chart))
+            left += [""] * (h - len(left))
+            chart += [""] * (h - len(chart))
+            # 左欄定寬＝框線列實寬（_row/_edge 為「│+內容W+│」= W+2）；空白分隔列/尾列
+            # 不足此寬 → 補滿，否則右側 K 線在那幾列會縮到最左
+            lw = max(_dw(l) for l in left)
+            for l, r in zip(left, chart):
+                print(l + " " * max(0, lw - _dw(l)) + "  " + r)
+        else:
+            for l in left:
+                print(l)
 
     def render_simple(self, md, funding, oi_stats):
         """Cow 不可用時的極簡畫面。"""

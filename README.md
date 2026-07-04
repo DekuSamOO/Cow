@@ -25,7 +25,7 @@
 app.py              入口點（組合各層，不含業務邏輯；今日大盤速覽 6 大 Metric 以 @st.fragment(run_every=60) 每 60 秒自動更新）
 config.py           集中設定（均線週期、交易成本、倉位風控參數、WALK_FORWARD_EXIT_MODES、警報門檻/分級/遲滯常數、底部模型演算法參數：可靠度權重/礦工電價/效率 anchors 等單一可調來源）
 data_manager.py     根層級數據管理器（TVL/穩定幣/資金費率歷史 SQLite 快取、指數退避重試、增量模式）
-BTC_WATCH.py        BTC 雙向監控終端儀表板**正本**（2026-06-10 起由 Crypto repo 移入本 repo 維護）：純幣安 fapi/dapi + path import core 的逃頂五維/抄底六維/趨勢方向四維評分，60 秒刷新。頂部「操作訊號（三軸融合）」banner 由 core/action_ensemble.compute_composite_action 算出（傳 cycle 子分；三軸皆有才顯示，含建議倉位）。`BitcoinMonitor` 已參數化（symbol/coin_symbol/is_btc/top_cap/low_cap/title/oi_unit/nav，全部預設 BTC 向後相容）：非 BTC 時停用 ETF/SOPR/BTC.D/四季論/礦工/冪律等 BTC 專屬維度、地板改 Mayer 估值底；nav=True（由 watcher 進入）時 interruptible_wait 偵測鍵盤 b 回上層／q 結束（單獨執行 nav=False 純 sleep，行為不變）
+BTC_WATCH.py        BTC 雙向監控終端儀表板**正本**（2026-06-10 起由 Crypto repo 移入本 repo 維護）：純幣安 fapi/dapi + path import core 的逃頂五維/抄底六維/趨勢方向四維評分，60 秒刷新。頂部「操作訊號（三軸融合）」banner 由 core/action_ensemble.compute_composite_action 算出（傳 cycle 子分；三軸皆有才顯示，含建議倉位）。`BitcoinMonitor` 已參數化（symbol/coin_symbol/is_btc/top_cap/low_cap/title/oi_unit/nav，全部預設 BTC 向後相容）：非 BTC 時停用 ETF/SOPR/BTC.D/四季論/礦工/冪律等 BTC 專屬維度、地板改 Mayer 估值底；nav=True（由 watcher 進入）時 interruptible_wait 偵測鍵盤 b 回上層／q 結束（單獨執行 nav=False 純 sleep，行為不變）。右側全高 **K 線側欄**（近 30 日日線，取自既有 _daily_cache 零額外請求；ANSI 綠漲紅跌、實體█/影線│，色碼不進 _dw 版寬計算；終端機過窄或資料不足時自動退回單欄畫面，非 BTC 幣對亦適用）
 watcher.py          通用標的監控入口：`python watcher.py` 輸入代號 → classify_symbol 自動判市場路由 —— BTC→完整 BitcoinMonitor；其他幣對→參數化 BitcoinMonitor(is_btc=False, top_cap=68/low_cap=72) 跑逃頂/抄底；台股→UniversalMonitor 台股分支（趨勢方向±100＋台股逃頂/抄底**七維/四維面板**〔v0.5/v0.4，2026-07-02 全市場 swing 回測拍板：逃頂核心六維＋量價背離疊加、抄底四維，反指標/雜訊維已移除〕＋三軸融合操作訊號 banner，籌碼/估值隨日線每小時隨 service.tw_chip.get_chip_bundle 刷新）；美股→UniversalMonitor 美股分支（趨勢方向±100＋純 OHLCV 三維逃頂/抄底 v0.1〔技術背離+量價背離+結構轉折，個股槓桿/法人/IV 無免費源改走通用軸〕＋三軸融合 banner）。即時成交量＋台股週轉率（成交量÷已發行股數，`service.tw_chip.get_shares_outstanding`）與量能分位隨現價同步顯示。main 為 while 迴圈（儀表板內 b 重選代號／q 結束）；畫框/面板/操作訊號 helper（_panel/_panel_stance/_composite_panel 等）重用 BTC_WATCH 單一來源
 
 collector/
@@ -381,6 +381,13 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 ---
 
 ## 版本紀錄
+
+### v3.29 (2026-07-04)
+BTC_WATCH 儀表板右側新增全高 K 線側欄（近 30 日日線、綠漲紅跌），一眼對照評分與價格走勢。
+- **feat(watch)**: `_kline_panel_lines`（K 線框線面板：每日 1 字元欄位、實體█/影線│、y 軸 4 刻度、x 軸起訖日期）＋ `_kline_column`／`_fmt_axis_price`（軸標籤依價格量級調小數位，非 BTC 小額幣種不會顯示成 0）。資料直接用既有 `_daily_cache` 切最後 `KLINE_DAYS=30` 筆，零額外網路請求。
+- **feat(watch)**: ANSI 顏色（Windows 主控台以 ctypes 開 `ENABLE_VIRTUAL_TERMINAL_PROCESSING`，失敗靜默退化為無色）。色碼刻意不進 `_dw`/`_row` 版寬計算——在量好純文字寬度後才包住字元，避免 escape 字元撐壞框線對齊。
+- **refactor(watch)**: `render()` 由逐行 print 改為先收集 `left` 陣列再與 K 線逐列拼接；左欄空白分隔列/尾列補滿至框線實寬（`_row`/`_edge` 為 W+2）再接側欄，否則該幾列 K 線會縮到最左。抽 `_pair_lines`（回傳陣列版），`_print_pair` 簽名不變、`watcher.py` 零改動。
+- **兼容**: 終端機寬度 < W+45、日線不足 30 筆、或極簡模式時側欄自動消失，退回原單欄畫面；已實跑真實資料驗證整幀 48 列可見寬度一致，`tests/test_wrap_display.py`＋`test_atr_risk.py` 6 passed。
 
 ### v3.28 (2026-07-04)
 修正防守通知文案錯置（治理稽核 C-1【高】）：舊文案寫死過時計畫「跌破 54k 關 2 台馬丁→強平 $37,000」——正確為 $54,223 只關馬1（→$43,379）；「關兩台」驗算強平 ≈$34,410，$37,060 實為「關馬1＋台股 200k」的結果。
