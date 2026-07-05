@@ -298,8 +298,10 @@ def _panel_block(title, rows, inner_w):
 
 
 def _pair_lines(pa, pb, wl, wr):
-    """兩面板 (title, rows) 左右並排 → 回傳合併後的字串陣列（不印）。對齊邏輯同 _print_pair：
-    只把較矮那欄用空列補在**最底部**（└──┘ 之前）。供 render() 需要再往右接 K 線欄時取用。"""
+    """兩面板 (title, rows) 左右並排 → 回傳合併後的字串陣列（不印）。**各欄獨立、由上往下
+    緊貼**（不做跨欄逐列同步，否則一欄某列換多行、另一欄就得插空行對齊 → 面板中間出現空行，
+    且會撐高、與「一頁看完」衝突）。只把較矮那欄用空列補在**最底部**（└──┘ 之前），讓兩欄
+    底框對齊即可。供 render() 需要再往右接 K 線欄時取用。"""
     a = _panel_block(pa[0], pa[1], wl)
     b = _panel_block(pb[0], pb[1], wr)
     h = max(len(a), len(b))
@@ -307,14 +309,6 @@ def _pair_lines(pa, pb, wl, wr):
     a = a[:-1] + [_row("", wl)] * (h - len(a)) + [a[-1]]
     b = b[:-1] + [_row("", wr)] * (h - len(b)) + [b[-1]]
     return [la + lb for la, lb in zip(a, b)]
-
-
-def _print_pair(pa, pb, wl, wr):
-    """兩面板 (title, rows) 左右並排列印。**各欄獨立、由上往下緊貼**（不做跨欄逐列同步，
-    否則一欄某列換多行、另一欄就得插空行對齊 → 面板中間出現空行，且會撐高、與「一頁看完」衝突）。
-    只把較矮那欄用空列補在**最底部**（└──┘ 之前），讓兩欄底框對齊即可。"""
-    for line in _pair_lines(pa, pb, wl, wr):
-        print(line)
 
 
 # ── K 線圖（右側全高側欄，2026-07 新增）───────────────────────────────────────
@@ -420,6 +414,30 @@ def _kline_panel_lines(df, n_days, height):
     lines.append(_row(xaxis, inner_w))
     lines.append(_edge("└", "─", "┘", inner_w))
     return lines
+
+
+def _print_with_kline(left, W, df, n_days, enabled=True):
+    """左欄整頁字串陣列 + 日線 df → 右接全高 K 線側欄後印出（BitcoinMonitor 與
+    watcher.UniversalMonitor 共用單一來源）。側欄畫不出（資料不足/終端機太窄/enabled=False）
+    → 原樣逐行印，行為與無側欄版完全相同。"""
+    try:
+        term_cols = os.get_terminal_size().columns
+    except OSError:
+        term_cols = None
+    show = enabled and (term_cols is None or term_cols >= W + 45)
+    chart = _kline_panel_lines(df, n_days, len(left)) if show else []
+    if not chart:
+        for l in left:
+            print(l)
+        return
+    h = max(len(left), len(chart))
+    left = left + [""] * (h - len(left))
+    chart = chart + [""] * (h - len(chart))
+    # 左欄定寬＝框線列實寬（_row/_edge 為「│+內容W+│」= W+2）；空白分隔列/尾列
+    # 不足此寬 → 補滿，否則右側 K 線在那幾列會縮到最左
+    lw = max(_dw(l) for l in left)
+    for l, r in zip(left, chart):
+        print(l + " " * max(0, lw - _dw(l)) + "  " + r)
 
 
 def interruptible_wait(seconds, nav=False):
@@ -805,27 +823,7 @@ class BitcoinMonitor:
         left.append("")
         left.append(f"  下次刷新 {nxt}    （{hint}）")
 
-        # 右側 K 線側欄：跟左欄整頁等高並排。資料不足／終端機太窄（放不下側欄寬度）
-        # 時 _kline_panel_lines 回 []，優雅退回舊版單欄畫面，不影響既有行為。
-        try:
-            term_cols = os.get_terminal_size().columns
-        except OSError:
-            term_cols = None
-        show_chart = _COW_OK and (term_cols is None or term_cols >= W + 45)
-        chart = _kline_panel_lines(self._daily_cache, self.KLINE_DAYS, len(left)) if show_chart else []
-
-        if chart:
-            h = max(len(left), len(chart))
-            left += [""] * (h - len(left))
-            chart += [""] * (h - len(chart))
-            # 左欄定寬＝框線列實寬（_row/_edge 為「│+內容W+│」= W+2）；空白分隔列/尾列
-            # 不足此寬 → 補滿，否則右側 K 線在那幾列會縮到最左
-            lw = max(_dw(l) for l in left)
-            for l, r in zip(left, chart):
-                print(l + " " * max(0, lw - _dw(l)) + "  " + r)
-        else:
-            for l in left:
-                print(l)
+        _print_with_kline(left, W, self._daily_cache, self.KLINE_DAYS, enabled=_COW_OK)
 
     def render_simple(self, md, funding, oi_stats):
         """Cow 不可用時的極簡畫面。"""

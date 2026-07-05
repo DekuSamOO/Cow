@@ -44,8 +44,8 @@ from core.watch_alerts import (check_price_events, check_signal_change,   # noqa
                                banner_rows, notify_beep, journal_append, journal_record)
 from BTC_WATCH import (BitcoinMonitor, _title, _row, _edge, _dw, _bar, _bar_signed,  # noqa: E402
                        _panel, _short_momentum, _panel_trend, _panel_stance,
-                       interruptible_wait, _atr_risk_rows, _print_pair, _wrap_display,
-                       _panel_block, _MIN_COL_W)
+                       interruptible_wait, _atr_risk_rows, _pair_lines, _wrap_display,
+                       _panel_block, _MIN_COL_W, _print_with_kline)
 
 
 def _fmt_price(v: float) -> str:
@@ -284,49 +284,41 @@ class UniversalMonitor:
         wl = (W - 2) // 2
         wr = (W - 2) - wl
 
-        print(_edge("╔", "═", "╗", W))
-        print(_row(header[0], W, "║"))
-        print(_edge("╠", "═", "╣", W))
-        for h in header[1:]:
-            print(_row(h, W, "║"))
-        print(_edge("╚", "═", "╝", W))
+        left = [_edge("╔", "═", "╗", W), _row(header[0], W, "║"), _edge("╠", "═", "╣", W)]
+        left += [_row(h, W, "║") for h in header[1:]]
+        left.append(_edge("╚", "═", "╝", W))
 
         if self._alert_banner:
-            print()
-            print(_title("⚠ 警戒", W))
-            for r in self._alert_banner:
-                print(_row(r, W))
-            print(_edge("└", "─", "┘", W))
+            left += ["", _title("⚠ 警戒", W)]
+            left += [_row(r, W) for r in self._alert_banner]
+            left.append(_edge("└", "─", "┘", W))
 
-        print()
-        print(_title("即時行情", W))
-        for r in quote:
-            print(_row(r, W))
-        print(_edge("└", "─", "┘", W))
+        left += ["", _title("即時行情", W)]
+        left += [_row(r, W) for r in quote]
+        left.append(_edge("└", "─", "┘", W))
 
         if plan_rows:
-            print()
-            print(_title("交易計畫", W))
-            for r in plan_rows:
-                print(_row(r, W))
-            print(_edge("└", "─", "┘", W))
+            left += ["", _title("交易計畫", W)]
+            left += [_row(r, W) for r in plan_rows]
+            left.append(_edge("└", "─", "┘", W))
 
         for i in range(0, len(panels), 2):
-            print()
+            left.append("")
             if i + 1 < len(panels):
-                _print_pair(panels[i], panels[i + 1], wl, wr)
+                left.extend(_pair_lines(panels[i], panels[i + 1], wl, wr))
             else:                                    # 奇數面板（美股僅操作+趨勢時不會發生）→ 佔全寬
-                for ln in _panel_block(panels[i][0], panels[i][1], W):
-                    print(ln)
+                left.extend(_panel_block(panels[i][0], panels[i][1], W))
 
-        print()
-        print(_title("說明", W))
+        left += ["", _title("說明", W)]
         for r in note:
-            for seg in _wrap_display(r, W):
-                print(_row(seg, W))
-        print(_edge("└", "─", "┘", W))
+            left += [_row(seg, W) for seg in _wrap_display(r, W)]
+        left.append(_edge("└", "─", "┘", W))
 
-        print(f"\n  下次刷新 {nxt}    （b 重選代號｜e 記錄已執行｜q 結束）")
+        left += ["", f"  下次刷新 {nxt}    （b 重選代號｜e 記錄已執行｜q 結束）"]
+
+        # 右側全高 K 線側欄（近 30 日日線，與 BitcoinMonitor 同一份 helper；
+        # 終端機過窄/資料不足自動退回單欄）
+        _print_with_kline(left, W, df, BitcoinMonitor.KLINE_DAYS)
 
     def run(self):
         fails = 0                   # 連續暫時性失敗計數（成功一輪即歸零）
