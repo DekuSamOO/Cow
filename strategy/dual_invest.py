@@ -126,7 +126,7 @@ def get_dynamic_risk_free_rate() -> float:
     return _RISK_FREE_FALLBACK
 
 
-def calculate_bs_apy(S, K, T_days, sigma_annual, option_type='call'):
+def calculate_bs_apy(S, K, T_days, sigma_annual, option_type='call', apy_floor=0.05):
     """
     Black-Scholes 期權定價 → 年化 APY
 
@@ -157,7 +157,9 @@ def calculate_bs_apy(S, K, T_days, sigma_annual, option_type='call'):
         principal = K
 
     apy = (price / principal) * (365 / T_days)
-    return max(apy, 0.05)
+    # C-9（2026-07-06）：地板改參數——live 顯示維持 0.05（模擬交易所報價下限，
+    # 權利金懸崖 calib 已記錄）；回測端傳 0.0，避免「每單保底 5% APY」與 C-7 疊加樂觀。
+    return max(apy, apy_floor)
 
 
 def calculate_ladder_strategy(row, product_type, t_days=3):
@@ -292,7 +294,7 @@ def run_dual_investment_backtest(
     lock_end_time = None
     strike_price = 0.0
     product_type = ""
-    prev_start_time = None
+    locked_yield = 0.0   # C-7：權利金收益率於開單時鎖定，結算段只讀不算
 
     # [Backtest Realism] 追蹤空窗期結束時間（結算後 cooldown_days 天內禁止開單）
     # 初始化為 None，代表回測開始時無空窗限制
@@ -309,15 +311,14 @@ def run_dual_investment_backtest(
             if curr_time < lock_end_time:
                 continue
 
-            # 到達結算日，計算收益與行權結果
+            # 到達結算日：行權判定用結算日 fixing，**收益率用開單時鎖定值**。
+            # C-7 修正（2026-07-06）：舊版在此以結算日 S（≈fixing）重新定價權利金，
+            # 造成權利金與行權結果同向相關——SELL_HIGH 被行權時 call 深入價內、
+            # price≈內在價值，period_yield ≈ (fixing−K)/fixing 恰好把被行權的機會損失
+            # 加回來 →「被行權幾乎零成本」，BUY_LOW 鏡像同病，Equity 曲線系統性向上偏。
+            # 真實產品收益率在開單時鎖定（開單日 S、當時波動率），見開單段 locked_yield。
             fixing = curr_row['close']
-            vol = (curr_row['ATR'] / curr_row['close']) * np.sqrt(365 * 24) * 0.5
-            duration = (lock_end_time - prev_start_time).days
-
-            period_yield = calculate_bs_apy(
-                curr_row['close'], strike_price, duration, vol,
-                'call' if product_type == "SELL_HIGH" else 'put'
-            ) * (duration / 365)
+            period_yield = locked_yield
 
             if product_type == "SELL_HIGH":
                 total_btc = balance * (1 + period_yield)
@@ -392,9 +393,20 @@ def run_dual_investment_backtest(
                 strike_price = min(base - buf, curr_row['close'] * 0.99)
                 product_type = "BUY_LOW"
 
+            # C-7/C-8 修正（2026-07-06）：權利金於**開單時**定價並鎖定——
+            # S=開單日 close、σ=開單日 ATR proxy 年化 √365（C-8：本 df 為日線，
+            # 舊版 √(365×24)×0.5≈46.8 是小時線因子誤用，σ 膨脹 ~2.45×；
+            # 與 live 建議端 calculate_ladder_strategy 的 √365 統一）。
+            # 回測端 apy_floor=0.0（C-9）：不保底 5% APY。
+            vol_open = (curr_row['ATR'] / curr_row['close']) * np.sqrt(365)
+            locked_yield = calculate_bs_apy(
+                curr_row['close'], strike_price, duration, vol_open,
+                'call' if product_type == "SELL_HIGH" else 'put',
+                apy_floor=0.0,
+            ) * (duration / 365)
+
             state = "LOCKED"
             lock_end_time = next_settlement
-            prev_start_time = curr_time
             equity_btc = balance if current_asset == "BTC" else balance / curr_row['close']
             trade_log.append({
                 "Action": "Open", "Time": curr_time, "Fixing": curr_row['close'],
