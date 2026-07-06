@@ -11,6 +11,9 @@ BTC_HISTORY.csv
 .env
 *.env
 
+# S-1 覆蓋層（2026-07-06）：敏感防守數字私有覆蓋層，範本見 config_private.py.example
+config_private.py
+
 # OS
 .DS_Store
 

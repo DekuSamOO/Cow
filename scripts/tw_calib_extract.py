@@ -20,7 +20,11 @@ import sqlite3
 
 import pandas as pd
 
-_CLIMBER_DB = r"D:\Users\63191\Documents\GitHub\tw_stock_climber\db\twse_official_data.db"
+# S-3（2026-07-06）：改相對路徑，假設 tw_stock_climber 與 Cow 為同層 sibling repo；
+# 可用環境變數 TW_CLIMBER_DB 覆蓋（非 sibling 佈局時）。
+_CLIMBER_DB = os.getenv("TW_CLIMBER_DB") or os.path.normpath(os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "..", "tw_stock_climber", "db", "twse_official_data.db"))
 _DEFAULT_OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "tw_calib_panel.parquet")
 _FWD_DAYS = 60
 

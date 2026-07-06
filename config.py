@@ -101,40 +101,59 @@ DUAL_INVEST_COOLDOWN_DAYS: int = 1
 # 雙幣 APY 推播門檻：年化報酬率超過此值才觸發 LINE/Telegram 通知（%）
 DEFAULT_APY_THRESHOLD: float = 20.0  # 20%
 
-# 1 BTC ROAD 價格警報門檻（= 防守第 1 階觸發價，馬丁1號最後加倉價；C4 拍板 2026-07-04
-# 由 54,000 對齊 54,223——警報即行動訊號，急跌時第 1 階必須觸價即做）
-ALERT_PRICE_LOW: float = 54_223.0
+# ── S-1 覆蓋層（2026-07-06）：敏感防守數字（觸發價/釋出量/強平價/資金計畫）改私有來源載入 ──
+# 公開版本檔只留結構與載入邏輯，真實數字不進版控。
+# 本地：複製 config_private.py.example → config_private.py（已 .gitignore）填入真值。
+# GitHub Actions：Repository Secret `DEFENSE_CONFIG_JSON`（JSON blob，schema 見 .example 檔）。
+# fail-loud（憲法第 3 條）：兩者皆缺，於「首次實際使用」時 raise，絕不 fallback 假數字/空表。
+# 用 module __getattr__（PEP 562）延遲載入，故 `import config` 存取其他常數（如 SSL_VERIFY）
+# 不受影響——只有真正讀取 ALERT_PRICE_LOW/DEFENSE_LADDER/DEFENSE_DECISION_CARD 才觸發載入
+# （等同「用到防守數字才要求私有來源存在」，未設定時該功能停止，其餘功能不受拖累）。
+# 數字正本：vault「1b 1 BTC ROAD.md」§4.2 防守推移表；驗算：vault「1b 馬丁格爾數學稽核.md」。
+# ⚠️ 馬丁重啟即作廢／防守為條件式／決策卡設計說明見 config_private.py.example 與 vault 正本，
+#   本檔不再重複列出（數字已不在此處，說明留在私有檔與 vault）。
+_DEFENSE_ATTRS = frozenset(("ALERT_PRICE_LOW", "DEFENSE_LADDER", "DEFENSE_DECISION_CARD"))
+_defense_cache = None
 
-# ── 1 BTC ROAD 防守推移表（單一真實來源；文案由 facade 動態組，數字勿在他處寫死）──
-# 數字正本：vault「1b 1 BTC ROAD.md」防守表；驗算：vault「1b 馬丁格爾數學稽核.md」
-# （強平價公式 1/Liq' = 1/Liq + ΔM/Position_USD，Position_USD≈32,324、基準強平 46,895）。
-# ⚠️ 馬丁重啟即作廢：任一馬丁止盈重啟（馬1 需 ~$61,815、馬2 需 ~$49,993）後，
-#   新一輪最後加倉價 = 新起始價 × 0.92^5 ≈ ×0.659 → 本表觸發價/釋出量全部重算並同步 vault。
-# ⚠️ 防守為條件式（2026-07-04 拍板；2026-07-06 F2-3 壓力測試後升級為決策卡）：
-#   每階的「加入後強平價」就是該階的隱含押注門檻——模型熊底若低於它，該階是輸注。
-#   三階不是三個獨立決定（T+2 台股逼得第 2 階資金須在第 1 階觸發時啟動），
-#   真正的決策點只有第 1 階警報那一刻 → 依 DEFENSE_DECISION_CARD 一次選定政策。
-#   壓力測試依據：_governance/STRESS-btc-three-tracks.md（半防守在點估熊底情境是最差政策）。
-DEFENSE_LADDER: tuple = (
-    # (觸發價 USD, 動作, 加入 BTC, 加入後強平價 USD, 執行附註)
-    (54_223.0, "關閉馬丁1號，釋出 BTC 補入幣本位網格保證金", 0.056, 43_379.0,
-     "觸價即做（54,223→46,895 僅 -13.5%，歷史單日可達）；同時啟動台股換 BTC 評估（T+2 需 2-4 工作日）"
-     "；本階隱含押注：熊底不破 $43,379"),
-    (50_000.0, "台股 200k 換 BTC 補入（約 0.127 BTC @ $50k）", 0.127, 37_060.0,
-     "T+2 時差：賣股流程須在觸價前已啟動，勿等到此價才動；本階隱含押注：熊底不破 $37,060"),
-    (44_070.0, "關閉馬丁2號，釋出 BTC 補入", 0.165, 31_180.0,
-     "條件式：僅當當下模型熊底（final_low/ensemble_low）> $33,000 才執行，否則留現貨"
-     "；本階隱含押注：熊底不破 $31,180"),
-)
 
-# ── 防守決策卡（2026-07-06，F2-3 三軌壓力測試產物；第 1 階警報時做一次性政策選擇）──
-# 對照值 = 當下戰情室 final_low / ensemble_low（區間三值都看，點估 vs 悲觀由人判斷）。
-DEFENSE_DECISION_CARD: tuple = (
-    "熊底讀值 > $37,060 → 防守至第 2 階即可，第 3 階資金留現貨",
-    "熊底讀值 $31,180~$37,060 → 全有或全無：三階全做（緩衝僅 4~7%），或整梯放棄",
-    "熊底讀值 < $31,180 → 不防守（全防守也死，只是多賠 ~0.34 BTC）；彈藥轉熊底區現貨分批",
-    "急跌（週跌 >20%）→ 凍結階梯，等企穩再依上列判斷（V 轉情境下任何防守都是放大器）",
-)
+def _load_defense_config():
+    global _defense_cache
+    if _defense_cache is not None:
+        return _defense_cache
+    json_blob = os.getenv("DEFENSE_CONFIG_JSON")
+    if json_blob:
+        import json as _json
+        data = _json.loads(json_blob)
+        _defense_cache = (
+            float(data["alert_price_low"]),
+            tuple(tuple(row) for row in data["defense_ladder"]),
+            tuple(data["defense_decision_card"]),
+        )
+        return _defense_cache
+    try:
+        from config_private import (
+            ALERT_PRICE_LOW as _alp,
+            DEFENSE_LADDER as _dl,
+            DEFENSE_DECISION_CARD as _ddc,
+        )
+    except ImportError as e:
+        raise RuntimeError(
+            "敏感防守數字缺失（S-1 覆蓋層，憲法第 3 條 fail-loud，拒絕假數字/空表）：\n"
+            "  本地：複製 config_private.py.example 為 config_private.py 並填入真值\n"
+            "  GitHub Actions：設定 Repository Secret DEFENSE_CONFIG_JSON\n"
+            "防守推播已停止，直到私有來源就緒。"
+        ) from e
+    _defense_cache = (_alp, _dl, _ddc)
+    return _defense_cache
+
+
+def __getattr__(name):
+    if name in _DEFENSE_ATTRS:
+        alp, dl, ddc = _load_defense_config()
+        return {"ALERT_PRICE_LOW": alp, "DEFENSE_LADDER": dl, "DEFENSE_DECISION_CARD": ddc}[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 # 遲滯（hysteresis）：警報觸發後解除武裝，回升超過門檻＋此值才重新武裝，
 # 防止價格在門檻附近震盪時隔日反覆推播（單次跌破只提醒一次）。
 ALERT_PRICE_REARM_GAP: float = 500.0

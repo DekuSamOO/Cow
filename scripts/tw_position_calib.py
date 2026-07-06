@@ -39,7 +39,10 @@ from core.relative_high_tw import compute_relative_high_tw           # noqa: E40
 from core.relative_low_tw import compute_relative_low_tw             # noqa: E402
 from core.action_ensemble import compute_composite_action            # noqa: E402
 
-_CLIMBER_DB = r"D:\Users\63191\Documents\GitHub\tw_stock_climber\db\twse_official_data.db"
+# S-3（2026-07-06）：改相對路徑，假設 tw_stock_climber 與 Cow 為同層 sibling repo；
+# 可用環境變數 TW_CLIMBER_DB 覆蓋（非 sibling 佈局時）。
+_CLIMBER_DB = os.getenv("TW_CLIMBER_DB") or os.path.normpath(
+    os.path.join(_ROOT, "..", "tw_stock_climber", "db", "twse_official_data.db"))
 _SPLIT = "2024-01-01"
 _WARMUP = 260     # SMA_200(200) + 緩衝，足夠 divergence lookback=120 / vol_pctile>=60
 _FWD = (20, 60)   # 前瞻報酬窗（交易日）

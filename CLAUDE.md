@@ -468,17 +468,20 @@ import 動作本身會卡住逾時（實測 >10 秒無回應，且無 timeout �
 「給 dashboard 用、需要 streamlit/yfinance」與「給 CLI/排程用、零依賴」的函式，被 CLI 端
 lazy import 拖累整包重依賴——新增純邏輯函式前，先看它要放的檔案頂層 import 了什麼。
 
-### 21. 防守通知文案曾寫死過時計畫數字（2026-07-04 修，C-1）
+### 21. 防守通知文案曾寫死過時計畫數字（2026-07-04 修，C-1；2026-07-06 S-1 數字私有化）
 
-舊 `notify_defense_line` 寫死「跌破 54k 關 2 台馬丁→強平 $37,000」——為舊版防守計畫殘留：
-正確為 $54,223 只關**馬1**（馬2 最後加倉價 $44,070）；「關兩台」驗算強平 ≈$34,410 非 $37,000。
-修法：推移表進 `config.DEFENSE_LADDER`（單一真實來源，含各階觸發價/釋出 BTC/強平價/條件式
-附註），文案由 `facade.build_defense_message` 動態組裝並依現價標 🔴/⚪；`ALERT_PRICE_LOW`
-54,000→**54,223**（C4 拍板，警報即行動訊號）。守門：`tests/test_defense_ladder.py`（5 項：
+舊 `notify_defense_line` 寫死一組過時的防守計畫敘述（哪一階關哪台機器人、對應強平價），
+與正確推移表不符（詳見 vault「1b 馬丁格爾數學稽核」的驗算過程）。
+修法：推移表進 `config.DEFENSE_LADDER`（含各階觸發價/釋出 BTC/強平價/條件式附註），
+文案由 `facade.build_defense_message` 動態組裝並依現價標 🔴/⚪；`ALERT_PRICE_LOW`
+對齊第 1 階觸發價（C4 拍板，警報即行動訊號）。守門：`tests/test_defense_ladder.py`（5 項：
 公式自洽/門檻=第1階/單調/文案完整/標記跟價）。**規則**：(a) 數字正本 = vault
-「1b 1 BTC ROAD.md」，計畫更新必同步 config；(b) **馬丁止盈重啟即本表作廢**（馬1 ~$61,815／
-馬2 ~$49,993 重啟後，新最後加倉價 = 新起始價 × 0.659，整表重算）；(c) 防守為**條件式**
-（2026-07-04 拍板）：每階執行前看 `final_low`/`ensemble_low`，第 3 階僅當模型熊底 > $33k 才執行。
+「1b 1 BTC ROAD.md」；**2026-07-06 起真實數字改存 `config_private.py`（gitignored）
+或 GitHub Actions Secret `DEFENSE_CONFIG_JSON`**，公開 `config.py` 只留載入邏輯
+（fail-loud，缺失即 raise，見 `config_private.py.example`）——**計畫更新須同步
+`config_private.py`，不再是公開 config**；(b) **馬丁止盈重啟即本表作廢**（新最後加倉價
+= 新起始價 × 0.659，整表重算）；(c) 防守為**條件式**（2026-07-04 拍板）：每階執行前看
+`final_low`/`ensemble_low`，第 3 階僅當模型熊底超過門檻才執行。
 （2026-07-06 升級：`config.DEFENSE_DECISION_CARD` 四分區決策卡——第 1 階警報時做**一次性**
 政策選擇，每階附註帶隱含押注門檻；依據 `_governance/STRESS-btc-three-tracks.md`。）
 

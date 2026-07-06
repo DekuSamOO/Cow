@@ -1,0 +1,46 @@
+# -*- coding: utf-8 -*-
+"""
+config_private.py.example — S-1 覆蓋層範本（2026-07-06）
+
+用法：
+  1. 本地開發：複製本檔為 `config_private.py`（同目錄，已在 .gitignore），
+     填入真實部位數字。正本：vault「1b 1 BTC ROAD.md」§4.2 防守推移表。
+  2. GitHub Actions：不使用本檔案，改設定 Repository Secret `DEFENSE_CONFIG_JSON`，
+     內容為以下 JSON schema 的 minified 字串：
+
+     {
+       "alert_price_low": 54223.0,
+       "defense_ladder": [
+         [54223.0, "關閉馬丁1號...", 0.056, 43379.0, "附註..."],
+         [50000.0, "台股換 BTC...", 0.127, 37060.0, "附註..."],
+         [44070.0, "關閉馬丁2號...", 0.165, 31180.0, "附註..."]
+       ],
+       "defense_decision_card": ["文案1", "文案2", "文案3", "文案4"]
+     }
+
+  兩個來源缺一即可（config.py 優先讀 DEFENSE_CONFIG_JSON 環境變數，
+  找不到才 import 本模組）；兩者都缺時 config.py 會 raise（fail-loud，
+  憲法第 3 條），不會 fallback 到下方的範例假數字。
+
+以下為**範例假數字**，僅供理解結構，不代表真實部位：
+"""
+
+ALERT_PRICE_LOW: float = 99_999.0  # 範例值，非真實
+
+DEFENSE_LADDER: tuple = (
+    (99_999.0, "範例：關閉馬丁1號，釋出 BTC 補入保證金", 0.0, 0.0, "範例附註"),
+    (88_888.0, "範例：台股換 BTC 補入", 0.0, 0.0, "範例附註"),
+    (77_777.0, "範例：關閉馬丁2號，釋出 BTC 補入", 0.0, 0.0, "範例附註"),
+)
+
+DEFENSE_DECISION_CARD: tuple = (
+    "範例分區文案 1",
+    "範例分區文案 2",
+    "範例分區文案 3",
+    "範例分區文案 4",
+)
+
+# 測試自洽驗算用（tests/test_defense_ladder.py 讀不到 config_private 時該測試會 skip，
+# 非公開 CI 環境不影響其他測試）。
+LIQ_BASE: float = 99_999.0
+POSITION_USD: float = 10_000.0

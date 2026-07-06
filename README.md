@@ -86,7 +86,7 @@ strategy/
 
 scripts/
   daily_line_notify.py     GitHub Actions 雲端自動推播腳本（Kraken 備援，台灣 08:23 / 13:39 / 18:27 三時段，含新聞輿情、逃頂警報分級/分數Δ/遲滯狀態機、OI 快照過期警告、週日傍晚場次加推文字週報，時段閘門 hour<17 早退使本地/手動執行也僅傍晚才發）
-  price_alert.py           GitHub Actions 每小時價格警報（防守線 $54,223＝config.ALERT_PRICE_LOW＝防守第 1 階觸發價；文案由 config.DEFENSE_LADDER 三階推移表動態組裝，含同日去重 + armed 遲滯：跌破推一次、回升門檻+$500 才重新武裝）
+  price_alert.py           GitHub Actions 每小時價格警報（防守線＝config.ALERT_PRICE_LOW＝防守第 1 階觸發價；文案由 config.DEFENSE_LADDER 三階推移表動態組裝，含同日去重 + armed 遲滯：跌破推一次、回升門檻+$500 才重新武裝。觸發價/釋出量等真實數字自 2026-07-06 起改由私有來源載入，見 config_private.py.example）
   test_flex_message.py     本地端測試 LINE Flex Message 排版的除錯腳本
   test_compare_backtest.py 驗證腳本：對相同參數同時執行 swing.py 與 Walk-Forward，確認結果量級一致
 
@@ -409,9 +409,9 @@ BTC_WATCH 儀表板右側新增全高 K 線側欄（近 30 日日線、綠漲紅
 - **兼容**: 終端機寬度 < W+45、日線不足 30 筆、或極簡模式時側欄自動消失，退回原單欄畫面；已實跑真實資料驗證整幀 48 列可見寬度一致，`tests/test_wrap_display.py`＋`test_atr_risk.py` 6 passed。
 
 ### v3.28 (2026-07-04)
-修正防守通知文案錯置（治理稽核 C-1【高】）：舊文案寫死過時計畫「跌破 54k 關 2 台馬丁→強平 $37,000」——正確為 $54,223 只關馬1（→$43,379）；「關兩台」驗算強平 ≈$34,410，$37,060 實為「關馬1＋台股 200k」的結果。
-- **feat(config)**: 新增 `DEFENSE_LADDER` 三階防守推移表（單一真實來源；數字正本＝vault「1b 1 BTC ROAD.md」，驗算＝「1b 馬丁格爾數學稽核」）。含 2026-07-04 拍板的三規則：防守為**條件式**（每階執行前看 `final_low`/`ensemble_low`）、第 3 階（關馬2）僅當模型熊底 > $33k 才執行、**馬丁止盈重啟即本表作廢**（新最後加倉價＝新起始價×0.659，整表重算）。
-- **feat(alerts)**: `ALERT_PRICE_LOW` $54,000 → **$54,223**（對齊馬1最後加倉價——警報即行動訊號，急跌時第 1 階須觸價即做）。
+修正防守通知文案錯置（治理稽核 C-1【高】）：舊文案寫死過時計畫，與實際防守表（哪一階關哪台機器人、對應強平價）不一致——經 vault 正本重新驗算後修正三階推移表全部數字。
+- **feat(config)**: 新增 `DEFENSE_LADDER` 三階防守推移表（單一真實來源；數字正本＝vault「1b 1 BTC ROAD.md」，驗算＝「1b 馬丁格爾數學稽核」；**2026-07-06 起真實數字移至私有來源，見 config_private.py.example**）。含 2026-07-04 拍板的三規則：防守為**條件式**（每階執行前看 `final_low`/`ensemble_low`）、第 3 階（關馬2）僅當模型熊底超過門檻才執行、**馬丁止盈重啟即本表作廢**（新最後加倉價＝新起始價×0.659，整表重算）。
+- **feat(alerts)**: `ALERT_PRICE_LOW` 對齊馬1最後加倉價（警報即行動訊號，急跌時第 1 階須觸價即做）。
 - **refactor(notify)**: `notify_defense_line` 文案改由純函數 `build_defense_message` 從 `DEFENSE_LADDER` 動態組裝，依現價標各階 🔴已觸發/⚪未觸發，並帶條件式與重啟作廢提醒；數字不再寫死於通知層。
 - **test**: 新增 `tests/test_defense_ladder.py` 5 項守門（逆合約公式逐階自洽 <0.5%、門檻＝第 1 階、階梯單調、文案完整性＋舊錯誤數字不得復發、標記跟價），**5 passed**；dry-run 文案與 vault 防守表逐格吻合。
 

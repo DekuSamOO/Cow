@@ -28,7 +28,10 @@ from core.relative_universal import (score_volume_price_top, score_volume_price_
                                      score_structure_top, score_structure_bottom)
 from tw_dim_backtest import auc   # noqa: E402  單一來源，不重造 AUC
 
-_CLIMBER_DB = r"D:\Users\63191\Documents\GitHub\tw_stock_climber\db\twse_official_data.db"
+# S-3（2026-07-06）：改相對路徑，假設 tw_stock_climber 與 Cow 為同層 sibling repo；
+# 可用環境變數 TW_CLIMBER_DB 覆蓋（非 sibling 佈局時）。
+_CLIMBER_DB = os.getenv("TW_CLIMBER_DB") or os.path.normpath(
+    os.path.join(_ROOT, "..", "tw_stock_climber", "db", "twse_official_data.db"))
 _PANEL = os.path.join(_ROOT, "scripts", "data", "tw_calib_panel.parquet")
 _SPLIT = "2024-01-01"
 _REV = 0.18
