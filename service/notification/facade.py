@@ -1,5 +1,5 @@
 from datetime import datetime
-from config import ALERT_PRICE_LOW, DEFENSE_LADDER
+from config import ALERT_PRICE_LOW, DEFENSE_LADDER, DEFENSE_DECISION_CARD
 from service.notification.core import (
     _send_line_message,
     _send_telegram_message,
@@ -183,7 +183,12 @@ def build_defense_message(price: float, now_str: str = None) -> str:
             lines.append(f"　　⚠ {note}")
     lines += [
         "━━━━━━━━━━━━━━━━",
-        "🧭 執行前先看戰情室 final_low / ensemble_low（防守為條件式）",
+        "🃏 決策卡（此刻做一次性政策選擇，對照戰情室 final_low/ensemble_low）:",
+    ]
+    for card_line in DEFENSE_DECISION_CARD:
+        lines.append(f"　• {card_line}")
+    lines += [
+        "━━━━━━━━━━━━━━━━",
         "🔁 馬丁若已止盈重啟，本表作廢——依 config.DEFENSE_LADDER 註解公式重算",
         f"🕐 時間: {now_str}",
     ]

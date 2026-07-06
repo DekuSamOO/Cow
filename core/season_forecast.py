@@ -37,7 +37,8 @@ core/season_forecast.py  ·  v1.4
   Halving 1: 2012-11-28
   Halving 2: 2016-07-09
   Halving 3: 2020-05-11
-  Halving 4: 2024-04-19  ← 已發生，ATH $108,268 (2025-01-20，進行中)
+  Halving 4: 2024-04-19  ← 已發生，ATH $124,658.54 (2025-10-06 收盤，進行中；
+             T-20 2026-07-06 修正，原記 $108,268 為 2025-01 前段高點)
   Halving 5: ~2028-04-17 (預估)
 
 純 Python，無 Streamlit 依賴
@@ -107,13 +108,16 @@ CYCLE_HISTORY = [
         # ── 第4週期：已知部分數據（ATH 已發生，熊市底部尚未完成）──
         "halving":       datetime(2024, 4, 19),
         "halving_price": 63842.0,           # 2024-04-19 收盤
-        "ath_price":     108268.0,           # 2025-01-20 收盤（已發生）
-        "ath_date":      datetime(2025, 1, 20),
+        "ath_price":     124658.54,          # 2025-10-06 收盤（T-20 修正：原 108,268 為
+                                             # 2025-01 前段高點，市場其後創新高；本值須隨
+                                             # 新高更新——live 路徑有 df 實算 max 自癒，
+                                             # 但本常數是 df 缺失時的 fallback 與人工分析依據）
+        "ath_date":      datetime(2025, 10, 6),
         "bear_low":      None,               # 尚未完成
         "bear_low_date": None,
-        "peak_mult":     1.70,               # 108268 / 63842（已知）
+        "peak_mult":     1.95,               # 124658.54 / 63842（已知）
         "bottom_mult":   None,               # 尚未完成
-        "peak_days":     276,                # 2024-04-19 → 2025-01-20
+        "peak_days":     535,                # 2024-04-19 → 2025-10-06
         "bottom_days":   None,               # 尚未完成
         "is_complete":   False,              # 進行中
     },
