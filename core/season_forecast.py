@@ -290,6 +290,132 @@ def _derive_real_season(time_season, drawdown, is_above_sma200, month_in_cycle):
     return time_season, s_zh, emoji, None, False
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# 四季論 v2：時間×市場二維狀態機（B1，2026-07-06 新增；design：
+# Github\Cow\season_v2_design.md）。SEASON_ENGINE="v1"（預設，config.py）時
+# 以下函式不被 forecast_price 呼叫、零行為變更；"v2" 才啟用，切換前須完成
+# design §4.2 回放對照三準則，屬受保護設定變更。
+# ══════════════════════════════════════════════════════════════════════════
+
+_M_HYSTERESIS_DAYS = 3   # 連續 N 個交易日一致才切換市場軸狀態
+_M_WINDOW_DAYS = 15      # 防抖掃描回溯天數（含 hysteresis 窗）
+
+
+def _raw_market_axis(dd: float, up: bool) -> str:
+    """單日原始市場軸判定（無防抖）：bull（多頭確認）/ mid（未確認）/ bear（空頭確認）。"""
+    if dd > -0.10 and up:
+        return "bull"
+    if dd < -0.20 and not up:
+        return "bear"
+    return "mid"
+
+
+def _derive_market_axis(df: Optional[pd.DataFrame], current_halving: datetime,
+                        as_of: Optional[datetime] = None):
+    """
+    市場軸 M（v2，3 日防抖）。純函數：從 df 倒推最後 _M_WINDOW_DAYS 個交易日的
+    原始 M 狀態序列，逐日推進「生效狀態」——連續 _M_HYSTERESIS_DAYS 日一致且與
+    現行生效狀態不同才切換，否則沿用（dd 在門檻邊界抖動時不反覆翻轉）。
+    無需外部持久化：生效狀態由本次算的整段窗推出。
+
+    回傳 (state, raw_trace)：state ∈ {"bull","mid","bear"}；raw_trace 為窗內
+    逐日原始判定（供測試/除錯，非防抖後的結果）。df 不足時回 ("mid", [])。
+    """
+    if df is None or df.empty or "close" not in df.columns:
+        return "mid", []
+    df_naive = _strip_tz(df)
+    if as_of is not None:
+        cutoff = _tz_safe_timestamp(as_of)
+        if cutoff.tzinfo is not None:
+            cutoff = cutoff.tz_localize(None)
+        df_naive = df_naive[df_naive.index <= cutoff]
+    if df_naive.empty:
+        return "mid", []
+    n = len(df_naive.index)
+    lookback = min(_M_WINDOW_DAYS, n)
+    raw_trace = []
+    for i in range(n - lookback, n):
+        day_df = df_naive.iloc[: i + 1]
+        price_i = float(day_df["close"].iloc[-1])
+        ms_i = analyze_market_state(price_i, day_df, current_halving)
+        raw_trace.append(_raw_market_axis(ms_i["drawdown_from_ath"], ms_i["is_above_sma200"]))
+    effective = raw_trace[0]
+    for i in range(1, len(raw_trace)):
+        if i >= _M_HYSTERESIS_DAYS - 1:
+            window = raw_trace[i - (_M_HYSTERESIS_DAYS - 1): i + 1]
+            if len(set(window)) == 1 and window[0] != effective:
+                effective = window[0]
+    return effective, raw_trace
+
+
+# 十二象限查表（design §2）：(時間軸 T, 市場軸 M) → {forecast_type, eff_season, conf_cap, note}。
+# forecast_type ∈ {"bull_peak","bear_bottom","observe"}；observe 不輸出 target_low/mid/high。
+# eff_season 供 rationale 顯示與 bull_peak/bear_bottom 計算沿用既有 v1 公式（設計刻意不換公式，
+# 只換「哪個象限走哪條路」——C-2 修復格 (b) 即 autumn×bull 從 v1 的熊底誤判改為延長牛市）。
+_SEASON_V2_TABLE: Dict[Tuple[str, str], Dict[str, Any]] = {
+    ("spring", "bull"): {"forecast_type": "bull_peak",   "eff_season": "spring", "conf_cap": 80, "note": None},
+    ("spring", "mid"):  {"forecast_type": "bull_peak",   "eff_season": "spring", "conf_cap": 55, "note": None},
+    ("spring", "bear"): {"forecast_type": "bear_bottom", "eff_season": "winter", "conf_cap": 65,
+                        "note": "提前深熊（左尾週期，歷史無先例，偏離歷史模式）"},
+    ("summer", "bull"): {"forecast_type": "bull_peak",   "eff_season": "summer", "conf_cap": 85, "note": None},
+    ("summer", "mid"):  {"forecast_type": "bull_peak",   "eff_season": "summer", "conf_cap": 50, "note": "動能受阻"},
+    ("summer", "bear"): {"forecast_type": "bear_bottom", "eff_season": "autumn", "conf_cap": 70, "note": "提前入秋"},
+    ("autumn", "bull"): {"forecast_type": "bull_peak",   "eff_season": "summer_ext", "conf_cap": 45,
+                        "note": "時間入秋、市場未確認——延長牛市，目標僅供參考"},
+    ("autumn", "mid"):  {"forecast_type": "observe",     "eff_season": "autumn", "conf_cap": 35,
+                        "note": "轉折觀察期，不出目標價"},
+    ("autumn", "bear"): {"forecast_type": "bear_bottom", "eff_season": "autumn", "conf_cap": 80, "note": None},
+    ("winter", "bull"): {"forecast_type": "observe",     "eff_season": "early_spring?", "conf_cap": 30,
+                        "note": "時間已冬但創新高——疑新輪提前，勿套舊週期模板"},
+    ("winter", "mid"):  {"forecast_type": "bear_bottom", "eff_season": "winter", "conf_cap": 60, "note": "打底觀察"},
+    ("winter", "bear"): {"forecast_type": "bear_bottom", "eff_season": "winter", "conf_cap": 80, "note": None},
+}
+assert set(_SEASON_V2_TABLE.keys()) == {
+    (t, m) for t in ("spring", "summer", "autumn", "winter") for m in ("bull", "mid", "bear")
+}, "十二象限查表缺漏——每個 (T,M) 組合都必須有定義（design §2 無遺漏原則）"
+
+
+def derive_effective_state(time_season: str, market_axis: str) -> Dict[str, Any]:
+    """v2 核心：十二象限查表。回傳 {forecast_type, eff_season, conf_cap, note} 的複本
+    （呼叫端可安全修改）。未定義象限 raise ValueError——這是設計錯誤不是資料問題，
+    不應吞掉（_SEASON_V2_TABLE 模組層 assert 已保證跑到這裡時查表必中）。"""
+    key = (time_season, market_axis)
+    if key not in _SEASON_V2_TABLE:
+        raise ValueError(f"四季論 v2 未定義象限：{key}")
+    return dict(_SEASON_V2_TABLE[key])
+
+
+def _resolve_ath_ref_v2(current_price: float, df: Optional[pd.DataFrame], current_halving: datetime,
+                        current_cycle_idx: int, prev_ath: float, time_season: str,
+                        market_state: Dict[str, Any]):
+    """v2 的 ath_ref 選擇（design §3，廢除 v1 的 best_cycle_ath>current×1.05 全域魔數規則）。
+    僅在 forecast_type=='bear_bottom' 時呼叫。除 T-spring 左尾情境外，一律用「當前週期
+    ATH（實算與已知取 max）」——頂已印出/未確認皆錨當前週期，v1 的模糊 1.05 門檻只保留
+    給 spring×bear 這個「當前週期尚無有意義高點」的情境（用同一道 1.05 檢查判斷「有意義」）。
+    回傳 (ath_ref, ath_ref_label)。"""
+    known_cycle = next((c for c in CYCLE_HISTORY if c["halving"] == current_halving), None)
+    known_cycle_ath = known_cycle["ath_price"] if known_cycle and known_cycle["ath_price"] else None
+    cycle_ath_ms = market_state.get("cycle_ath", 0)
+    cycle_candidates = [v for v in (known_cycle_ath, cycle_ath_ms) if v]
+    best_cycle_ath = max(cycle_candidates) if cycle_candidates else 0
+
+    has_meaningful_ath = bool(best_cycle_ath and best_cycle_ath > current_price * 1.05)
+
+    if time_season == "spring" and not has_meaningful_ath:
+        return prev_ath, f"前一週期 ATH ${prev_ath:,.0f}（當前週期尚無有意義高點，左尾情境）"
+
+    if not has_meaningful_ath:
+        # 非 spring 情境下當前週期 ATH 仍不明確（極早期）——退化用現價本身避免除零/負數，
+        # 這是邊界防呆非常態路徑（正常情況下能觸發 bear_bottom 象限時 ATH 必已印出）。
+        best_cycle_ath = max(best_cycle_ath, current_price)
+
+    if cycle_ath_ms and cycle_ath_ms >= (known_cycle_ath or 0):
+        label = f"當前週期實算 ATH ${cycle_ath_ms:,.0f}"
+    else:
+        label = f"當前週期已知 ATH ${known_cycle_ath:,.0f}" if known_cycle_ath else f"當前週期 ATH ${best_cycle_ath:,.0f}"
+    return best_cycle_ath, label
+
+
 def get_current_season(as_of: Optional[datetime] = None):
     """計算「時間季節」（純減半週期時間位置，不含市場校正）。"""
     if as_of is None:
@@ -430,7 +556,8 @@ def project_bear_bottom(current_price: float, df: Optional[pd.DataFrame] = None,
     }
 
 
-def forecast_price(current_price: float, df: Optional[pd.DataFrame] = None, as_of: Optional[datetime] = None):
+def forecast_price(current_price: float, df: Optional[pd.DataFrame] = None, as_of: Optional[datetime] = None,
+                   season_engine: Optional[str] = None):
     """
     主要預測函數。整合時間季節 + 真實市場狀態，預測未來12個月目標價。
 
@@ -443,6 +570,12 @@ def forecast_price(current_price: float, df: Optional[pd.DataFrame] = None, as_o
       bear_label_low    : 熊市三標籤（「最深目標」等）
       bear_label_mid    : 熊市中間標籤
       bear_label_high   : 熊市最淺標籤
+
+    [B1 / 2026-07-06] season_engine 參數（"v1"|"v2"，None 時讀 config.SEASON_ENGINE，
+    預設 "v1"）：v2 走十二象限二維狀態機（derive_effective_state），新增
+    forecast_type="observe"（target_low/mid/high 皆回 None——寧可不預測不出錯錨）。
+    v1 路徑本次零改動；v2 沿用同一套 bull_peak/bear_bottom 計算公式，只換「哪個
+    象限走哪條路」與 ath_ref 選擇規則（design：Github\\Cow\\season_v2_design.md）。
     """
     if as_of is None:
         as_of = _utcnow_naive()
@@ -479,12 +612,44 @@ def forecast_price(current_price: float, df: Optional[pd.DataFrame] = None, as_o
 
     market_state = analyze_market_state(current_price, df, current_halving)
 
-    real_season, real_season_zh, real_emoji, correction_reason, is_corrected = _derive_real_season(
-        time_season     = season_info["season"],
-        drawdown        = market_state["drawdown_from_ath"],
-        is_above_sma200 = market_state["is_above_sma200"],
-        month_in_cycle  = season_info["month_in_cycle"],
-    )
+    if season_engine is None:
+        try:
+            from config import SEASON_ENGINE as _cfg_engine
+        except Exception:
+            _cfg_engine = "v1"
+        season_engine = _cfg_engine
+
+    v2_state = None
+    if season_engine == "v2":
+        # ═══ v2：十二象限二維狀態機（B1，2026-07-06）═══
+        market_axis, _ = _derive_market_axis(df, current_halving, as_of)
+        v2_state = derive_effective_state(season_info["season"], market_axis)
+        forecast_type_gate = v2_state["forecast_type"]
+        real_season = v2_state["eff_season"]
+        _v2_label_map = {
+            "summer_ext":    ("夏季（延長）— 時間入秋、市場未確認", "☀️"),
+            "early_spring?": ("春季？— 時間仍冬但市場已創新高",     "🌱"),
+        }
+        if real_season in _v2_label_map:
+            real_season_zh, real_emoji = _v2_label_map[real_season]
+        else:
+            _lm = {"spring": ("春季 — 復甦期", "🌱"), "summer": ("夏季 — 牛市高峰", "☀️"),
+                  "autumn": ("秋季 — 泡沫破裂", "🍂"), "winter": ("冬季 — 熊市底部", "❄️")}
+            real_season_zh, real_emoji = _lm.get(real_season, ("未知", "❓"))
+        is_corrected = (real_season != season_info["season"]) or (market_axis != "mid")
+        correction_reason = (
+            f"【v2 十二象限】時間={season_info['season']}／市場={market_axis}"
+            + (f" → {v2_state['note']}" if v2_state["note"] else "")
+        )
+    else:
+        # ═══ v1：既有散裝校正邏輯（本次零改動）═══
+        real_season, real_season_zh, real_emoji, correction_reason, is_corrected = _derive_real_season(
+            time_season     = season_info["season"],
+            drawdown        = market_state["drawdown_from_ath"],
+            is_above_sma200 = market_state["is_above_sma200"],
+            month_in_cycle  = season_info["month_in_cycle"],
+        )
+        forecast_type_gate = "bull_peak" if real_season in ("spring", "summer") else "bear_bottom"
 
     effective_season = {
         "season":    real_season,
@@ -507,8 +672,23 @@ def forecast_price(current_price: float, df: Optional[pd.DataFrame] = None, as_o
         adj_peak_p75 *= _rescale
 
     days_since = season_info["days_since"]
+    ath_ref = None   # 僅 bear_bottom 分支設值；observe/bull_peak 維持 None
 
-    if real_season in ("spring", "summer"):
+    if forecast_type_gate == "observe":
+        # ═══ v2 專屬：觀察期，寧可不預測不出錯錨（design §2 note c/d）═══
+        forecast_type = "observe"
+        target_median = target_low = target_high = None
+        estimated_date = None
+        confidence = v2_state["conf_cap"]
+        rationale = (
+            f"【有效狀態】{real_emoji} {real_season_zh}\n"
+            f"時間位置：第 {current_cycle_idx+1} 次減半後第 {season_info['month_in_cycle']} 個月\n"
+            f"{v2_state['note']}\n"
+            f"本狀態不輸出目標價（v2 observe 型：寧可不預測，不出錯錨的數字）。"
+        )
+        bear_label_low = bear_label_mid = bear_label_high = None
+
+    elif forecast_type_gate == "bull_peak":
         # ═══ 牛市預測 ═══
         forecast_type = "bull_peak"
 
@@ -542,6 +722,8 @@ def forecast_price(current_price: float, df: Optional[pd.DataFrame] = None, as_o
         confidence = max(confidence, 40)
         if market_state["drawdown_from_ath"] < -0.10:
             confidence = max(confidence - 15, 25)
+        if v2_state is not None:
+            confidence = min(confidence, v2_state["conf_cap"])
 
         bear_label_low  = "保守目標（漲幅較小）"
         bear_label_mid  = "中位數目標"
@@ -551,15 +733,26 @@ def forecast_price(current_price: float, df: Optional[pd.DataFrame] = None, as_o
         # ═══ 熊市預測 ═══
         forecast_type = "bear_bottom"
 
-        # v1.4：熊底投影改由 project_bear_bottom 單一真實來源產出（ath_ref 解析 +
-        #       bottom_mult 週期趨勢外插），forecast_price 與 bottom_floors 共用、杜絕漂移。
-        bb            = project_bear_bottom(current_price, df, as_of, market_state=market_state)
-        ath_ref       = bb["ath_ref"]
-        ath_ref_label = bb["ath_ref_label"]
-        bm_point      = bb["bottom_mult_point"]
-        bottom_med = bb["bottom_mid"]   # 趨勢點估
-        bottom_p25 = bb["bottom_low"]   # 跌更深（悲觀）
-        bottom_p75 = bb["bottom_high"]  # 跌較淺（樂觀）
+        if v2_state is not None:
+            # v2：ath_ref 選擇規則獨立於 v1（design §3，廢除 1.05 全域魔數）
+            ath_ref, ath_ref_label = _resolve_ath_ref_v2(
+                current_price, df, current_halving, current_cycle_idx, prev_ath,
+                season_info["season"], market_state,
+            )
+            bm_point, bm_deep, bm_shallow = extrapolate_bottom_mult(current_cycle_idx)
+            bottom_med = ath_ref * bm_point
+            bottom_p25 = ath_ref * bm_deep
+            bottom_p75 = ath_ref * bm_shallow
+        else:
+            # v1.4：熊底投影改由 project_bear_bottom 單一真實來源產出（ath_ref 解析 +
+            #       bottom_mult 週期趨勢外插），forecast_price 與 bottom_floors 共用、杜絕漂移。
+            bb            = project_bear_bottom(current_price, df, as_of, market_state=market_state)
+            ath_ref       = bb["ath_ref"]
+            ath_ref_label = bb["ath_ref_label"]
+            bm_point      = bb["bottom_mult_point"]
+            bottom_med = bb["bottom_mid"]   # 趨勢點估
+            bottom_p25 = bb["bottom_low"]   # 跌更深（悲觀）
+            bottom_p75 = bb["bottom_high"]  # 跌較淺（樂觀）
 
         # 熊市：min 截斷（底部不可能高於現價）
         target_median = min(bottom_med, current_price)
@@ -587,6 +780,8 @@ def forecast_price(current_price: float, df: Optional[pd.DataFrame] = None, as_o
         confidence = max(confidence, 35)
         if market_state["drawdown_from_ath"] < -0.25:
             confidence = min(confidence + 10, 75)
+        if v2_state is not None:
+            confidence = min(confidence, v2_state["conf_cap"])
 
         # ▸ v1.3: 熊市標籤改為方向明確的描述
         bear_label_low  = "最深目標（歷史最大跌幅）"
@@ -598,9 +793,9 @@ def forecast_price(current_price: float, df: Optional[pd.DataFrame] = None, as_o
         "market_state":        market_state,
         "effective_season":    effective_season,
         "forecast_type":       forecast_type,
-        "target_median":       round(target_median, 0),
-        "target_low":          round(target_low,    0),
-        "target_high":         round(target_high,   0),
+        "target_median":       round(target_median, 0) if target_median is not None else None,
+        "target_low":          round(target_low,    0) if target_low    is not None else None,
+        "target_high":         round(target_high,   0) if target_high   is not None else None,
         "estimated_date":      estimated_date,
         "rationale":           rationale,
         "confidence":          confidence,
@@ -612,7 +807,8 @@ def forecast_price(current_price: float, df: Optional[pd.DataFrame] = None, as_o
         "bear_label_low":      bear_label_low,
         "bear_label_mid":      bear_label_mid,
         "bear_label_high":     bear_label_high,
-        "ath_ref":             round(ath_ref, 0) if forecast_type == "bear_bottom" else None,
+        "ath_ref":             round(ath_ref, 0) if ath_ref is not None else None,
+        "season_engine":       season_engine,
     }
 
 

@@ -154,9 +154,16 @@ def get_decision_data():
             # 預測區塊（同步抓出季節資訊填入四季徽章）
             f_res = forecast_price(current_price, btc_df)
             if f_res:
+                # B1（2026-07-06）消費端盤點：SEASON_ENGINE="v2" 時 forecast_type 可能是
+                # 'observe'（target_* 皆 None，設計刻意不出目標價）。_build_forecast_box
+                # 對 target_low/median/high 做 :,.0f 格式化，None 會 TypeError——退回 0
+                # 避免推播崩潰（目前 SEASON_ENGINE 預設 "v1" 永不觸發此分支，本守門為
+                # 未來切換 v2 預先鋪路）。
                 summary.update({
                     "forecast_type": f_res["forecast_type"],
-                    "target_low": f_res["target_low"], "target_median": f_res["target_median"], "target_high": f_res["target_high"],
+                    "target_low": f_res["target_low"] if f_res["target_low"] is not None else 0,
+                    "target_median": f_res["target_median"] if f_res["target_median"] is not None else 0,
+                    "target_high": f_res["target_high"] if f_res["target_high"] is not None else 0,
                     "label_low": "最深" if "bear" in f_res["forecast_type"] else "保守",
                     "label_high": "最淺" if "bear" in f_res["forecast_type"] else "樂觀",
                     "forecast_ath_ref": f_res.get("ath_ref") or 0,

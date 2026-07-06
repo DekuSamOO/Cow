@@ -87,6 +87,17 @@ def _render_season_timeline(season_info: dict, effective_season: str=None):
 def _render_forecast_chart(btc: pd.DataFrame, fc: dict):
     hist_2y = btc.tail(365 * 2)
     future_pl = get_power_law_forecast(btc, months_ahead=12)
+    # B1（2026-07-06）消費端盤點：SEASON_ENGINE="v2" 時 forecast_type 可能是 'observe'
+    # （target_median/low/high 皆 None——四季論刻意不出目標價，見 season_v2_design.md）。
+    # 目前預設 SEASON_ENGINE="v1" 永不產生 'observe'，本守門為未來切換 v2 預先鋪路。
+    if fc.get('target_median') is None:
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=hist_2y.index, y=hist_2y['close'], mode='lines',
+                                 name='BTC 歷史收盤', line=dict(color='#ffffff', width=2)))
+        fig.update_layout(height=500, template='plotly_dark', yaxis_type='log',
+                          title=dict(text='🔭 觀察期（v2 observe）— 轉折未確認，暫不出目標價', font=dict(size=16)),
+                          paper_bgcolor='#0e1117')
+        return fig
     is_bull = fc['forecast_type'] == 'bull_peak'
     ribbon_color = 'rgba(255,235,59,0.18)' if is_bull else 'rgba(66,165,245,0.18)'
     median_color = '#ffeb3b' if is_bull else '#42a5f5'

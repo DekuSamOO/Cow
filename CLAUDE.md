@@ -1,7 +1,7 @@
 # CLAUDE.md — Cow（BTC 投資戰情室）
 
 **路徑：** `D:\Users\63191\Documents\GitHub\Cow`
-**目前版本：** v3.28
+**目前版本：** v3.33
 **Live App：** https://mfyyo9qf5mymsrouxkfdgj.streamlit.app
 **Streamlit 版本：** 1.37.1
 
@@ -502,3 +502,20 @@ call/put 深入價內、price≈內在價值，行權損失被權利金「加回
 `tests/c7_compare_tmp.py`（本地）；(d) 殘留已知偏差：σ 用 ATR/close proxy 系統性
 高估 ~1.6×（日內 range vs 日報酬 σ），現在回測/live 兩端**一致地**略高估
 （finance-calc-reviewer 2026-07-06 覆核，方向已知、接受）。
+
+### 23. 四季論 v2 十二象限狀態機已完整可用但預設不啟用（2026-07-06，B1）
+
+`core/season_forecast.py` 新增 `_derive_market_axis`／`derive_effective_state`／
+`_resolve_ath_ref_v2`（設計正本 `Github\Cow\season_v2_design.md`），`forecast_price`
+加 `season_engine` 參數，預設讀 `config.SEASON_ENGINE="v1"`——**v1 路徑本次零改動**，
+既有測試/呼叫端行為不受影響。**回放對照（2018-04~2026-07，2,992 天）後不建議
+現在切換 v2**：三驗收準則僅「防抖降低切換次數」乾淨過，「差異集中度」與「2022
+熊底一致性」未過，且發現 v2 十二象限表對深熊嚴重度分級有結構性缺口（v1 三層
+-10/-20/-30% 門檻 vs v2 二元市場軸，972/1,379 差異天源於此，非設計文件命名的
+目標格）。**規則**：(a) `SEASON_ENGINE` 維持 `"v1"`，切換需使用者裁定（受保護
+設定）；(b) 不可回頭調十二象限表/防抖參數讓準則「看起來過」——那是事後合理化；
+下次推進需先做 `season_v2_replay_findings.md` 列的人工檢視；(c) 消費端已加
+`forecast_type="observe"` 防護（`tab_macro_compass.py`／`daily_line_notify.py`），
+`v2` 若未來啟用不會因 target_* 為 None 崩潰；(d) 單元測試
+`tests/core/test_season_v2.py`（24 項）＋回放腳本 `tests/season_v2_replay.py`
+（本地）。

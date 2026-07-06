@@ -54,8 +54,9 @@ def classify_symbol(raw: str) -> dict:
     if s.endswith("USD"):
         return _crypto_info(s[:-3], is_btc=False)
 
-    # 其餘視為美股
-    return {"kind": "us_stock", "display": s, "yahoo": s, "is_btc": False}
+    # 其餘視為美股（W-10：class share 代號如 BRK.B / BF.B，Yahoo 需 BRK-B / BF-B；
+    # 已在上方排除 .TW 情境，此處剩下的 . 只會是這類美股寫法，可安全轉換）
+    return {"kind": "us_stock", "display": s, "yahoo": s.replace(".", "-"), "is_btc": False}
 
 
 def _crypto_info(base: str, is_btc: bool) -> dict:

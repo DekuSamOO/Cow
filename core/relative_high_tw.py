@@ -51,7 +51,7 @@ def _avg_vol(df) -> Optional[float]:
     return v if v > 0 else None
 
 
-def _vol_pctile(df) -> Optional[float]:
+def vol_pctile(df) -> Optional[float]:
     """最新成交量在個股自身歷史的分位（0–1，midrank 處理 ties）。
     自包含、零外部依賴（用 df 本身的 volume 歷史）→ 與 watcher live 自包含原則一致。
     回測對應 scripts 的 per_stock_pctile（成交量 expanding 分位）。"""
@@ -66,6 +66,11 @@ def _vol_pctile(df) -> Optional[float]:
     arr = v.to_numpy(dtype=float)
     # midrank：定值序列回 0.5（非「爆量」），避免常數 volume 誤判滿分
     return float(((arr < latest).sum() + 0.5 * (arr == latest).sum()) / len(arr))
+
+
+# W-7（2026-07-06）：升公開名 vol_pctile（watcher.py 曾直接 import 跨模組私名 _vol_pctile，
+# 見稽核 W-7）；舊名保留 alias，跨檔呼叫端不必立即改。
+_vol_pctile = vol_pctile
 
 
 def _score_technical_high(row, df) -> dict:

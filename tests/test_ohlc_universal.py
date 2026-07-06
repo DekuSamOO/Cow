@@ -12,6 +12,7 @@ import pytest
 from service.ohlc_universal import (
     live_quote_freshness, _is_tw_trading_hours, _is_us_trading_hours,
     is_daily_bar_forming, resolve_live_volume, _tw_candidates, fetch_live_quote,
+    classify_symbol,
 )
 
 
@@ -248,3 +249,45 @@ def test_fetch_live_quote_non_tw_symbol_no_fallback_attempted(monkeypatch):
     monkeypatch.setattr("requests.Session.get", fake_get)
     assert fetch_live_quote("AAPL") == {}
     assert len(calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# classify_symbol（W-9：邊角案例參數化測試，2026-07-06 補）
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("raw,kind,display,yahoo,is_btc", [
+    ("2330",      "tw_stock", "2330",    "2330.TW",  False),   # 台股上市 4 碼
+    ("00878",     "tw_stock", "00878",   "00878.TW", False),   # 台股 ETF 5 碼
+    ("6509",      "tw_stock", "6509",    "6509.TW",  False),   # 台股上櫃（classify 無法預知，統一先給 .TW，實際解析靠 _tw_candidates）
+    ("2330.TW",   "tw_stock", "2330",    "2330.TW",  False),   # 已帶 .TW 後綴
+    ("QQQ",       "us_stock", "QQQ",     "QQQ",      False),   # 美股 ETF
+    ("BRK.B",     "us_stock", "BRK.B",   "BRK-B",    False),   # W-10：class share，Yahoo 需 - 不是 .
+    ("BF.B",      "us_stock", "BF.B",    "BF-B",     False),
+    ("btcusdt",   "crypto",   "BTCUSDT", "BTC-USD",  True),    # 小寫輸入須正規化
+    ("BTC",       "crypto",   "BTCUSDT", "BTC-USD",  True),
+    ("BTC-USD",   "crypto",   "BTCUSDT", "BTC-USD",  True),
+    ("XBTUSD",    "crypto",   "BTCUSDT", "BTC-USD",  True),
+    ("ETHUSDT",   "crypto",   "ETHUSDT", "ETH-USD",  False),   # 非 BTC 幣對
+    ("SOL-USD",   "crypto",   "SOLUSDT", "SOL-USD",  False),
+    ("ETHUSD",    "crypto",   "ETHUSDT", "ETH-USD",  False),
+])
+def test_classify_symbol_matrix(raw, kind, display, yahoo, is_btc):
+    info = classify_symbol(raw)
+    assert info["kind"] == kind
+    assert info["display"] == display
+    assert info["yahoo"] == yahoo
+    assert info["is_btc"] is is_btc
+
+
+def test_classify_symbol_empty_raises():
+    with pytest.raises(ValueError):
+        classify_symbol("")
+    with pytest.raises(ValueError):
+        classify_symbol("   ")
+
+
+def test_classify_symbol_crypto_has_binance_fields():
+    info = classify_symbol("ETHUSDT")
+    assert info["binance"] == "ETHUSDT"
+    assert info["coin"] == "ETHUSD_PERP"
+    assert info["base"] == "ETH"

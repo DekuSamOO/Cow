@@ -30,22 +30,23 @@ if _COW not in sys.path:
 from core.indicators import calculate_technical_indicators          # noqa: E402
 from core.trend_direction import compute_trend_score, trend_meta    # noqa: E402
 from core.action_ensemble import compute_trend_stance, compute_composite_action  # noqa: E402
-from core.relative_high_tw import compute_relative_high_tw, relative_high_tw_meta, _vol_pctile  # noqa: E402
+from core.relative_high_tw import compute_relative_high_tw, relative_high_tw_meta, vol_pctile  # noqa: E402
 from core.relative_low_tw import compute_relative_low_tw, relative_low_tw_meta     # noqa: E402
-from core.relative_high_us import compute_relative_high_us, relative_high_us_meta  # noqa: E402
-from core.relative_low_us import compute_relative_low_us, relative_low_us_meta     # noqa: E402
 from service.ohlc_universal import (classify_symbol, fetch_ohlc,            # noqa: E402
                                     fetch_live_quote, live_quote_freshness, KIND_LABEL,
                                     is_daily_bar_forming, resolve_live_volume)
-# 重用 BTC_WATCH 既有的畫框 / 面板 / 等待 helper（單一真實來源，不重造）
+# W-7（2026-07-06）：畫框/面板/等待 helper 改吃 core/term_ui（單一真實來源），
+# 不再綁死 BTC_WATCH 內部私名——BTC_WATCH 整形不會再靜默破 watcher。
 from core.momentum import momentum_ref_rows                             # noqa: E402
 from core.watch_plan import get_plan, load_plans_cached, plan_panel_rows  # noqa: E402
 from core.watch_alerts import (check_price_events, check_signal_change,   # noqa: E402
                                banner_rows, notify_beep, journal_append, journal_record)
-from BTC_WATCH import (BitcoinMonitor, _title, _row, _edge, _dw, _bar, _bar_signed,  # noqa: E402
-                       _panel, _short_momentum, _panel_trend, _panel_stance,
-                       interruptible_wait, _atr_risk_rows, _pair_lines, _wrap_display,
-                       _panel_block, _MIN_COL_W, _print_with_kline)
+from core.risk import atr_risk_rows as _atr_risk_rows                    # noqa: E402
+from core.term_ui import (_title, _row, _edge, _dw, _bar, _bar_signed,   # noqa: E402
+                          _panel, _short_momentum, _panel_trend, _panel_stance,
+                          interruptible_wait, _pair_lines, _wrap_display,
+                          _panel_block, _MIN_COL_W, _print_with_kline)
+from BTC_WATCH import BitcoinMonitor                                     # noqa: E402
 
 
 def _fmt_price(v: float) -> str:
@@ -128,9 +129,11 @@ class UniversalMonitor:
         trend = compute_trend_score(row, df)
         mom = _short_momentum(df)
 
-        # 52 週高低（純 OHLC，給股票相對位置脈絡）
-        win = df["close"].tail(252)
-        hi, lo = float(win.max()), float(win.min())
+        # 52 週高低（W-4：改用 high/low 欄含盤中影線，符合「52週高/低」一般理解口徑；
+        # 原用 close 極值僅為「52週收盤高/低」，較窄）
+        win = df.tail(252)
+        hi = float(win["high"].max()) if "high" in win.columns else float(win["close"].max())
+        lo = float(win["low"].min()) if "low" in win.columns else float(win["close"].min())
         pos = (close - lo) / (hi - lo) * 100 if hi > lo else 0.0
 
         header = [
@@ -174,7 +177,7 @@ class UniversalMonitor:
             if self.is_tw and self._shares_out:
                 vol_line += f"（週轉率 {live_vol / self._shares_out * 100:.2f}%）"
             quote.append(vol_line)
-        pct = _vol_pctile(df)
+        pct = vol_pctile(df)
         if pct is not None:
             quote.append(f"  量能分位      個股自身 {pct * 100:.0f}分位（近期日均量比較）")
         # 時間序列動能（3/6/12M 報酬）— 參考訊號，未計入加權（待回測）
@@ -215,26 +218,19 @@ class UniversalMonitor:
                     "     AUC~0.63)+量能見頂(0.648)+量價背離(0.566 已轉正式)；抄底靠融資清洗(0.564)。",
                     "     已移除：抄底大戶(AUC 0.422 方向反)、抄底量價/結構(0.50/0.52 雜訊)、逃頂結構(0.483)。",
                     "     法人為弱維(AUC<0.55) 僅參考。"]
-        elif not self.is_tw:
-            # 美股：無籌碼/估值免費源，但量價背離＋結構轉折＋技術背離皆純 OHLCV → 通用軸也能有逃頂/抄底
-            high = compute_relative_high_us(row, df)
-            low = compute_relative_low_us(row, df)
-            _, top_rows = _panel(high, relative_high_us_meta, 100, "逃頂訊號（美股通用軸）",
-                                 ("technical", "vol_price", "structure"))
-            _, low_rows = _panel(low, relative_low_us_meta, 100, "抄底訊號（美股通用軸）",
-                                 ("technical", "vol_price", "structure"))
-            ct_top = f"逃頂  {high[0]}/100  {_bar(high[0], 100)}  {relative_high_us_meta(high[0])[0]}"
-            ct_low = f"抄底  {low[0]}/100  {_bar(low[0], 100)}  {relative_low_us_meta(low[0])[0]}"
-            ct_comp, comp_rows, act = _composite_panel(trend[0], high[0], low[0])
-            note = ["  ⚠ 美股逃頂/抄底 v0.1〔2026-07 新建〕：個股槓桿/法人/IV 無免費源，改用純 OHLCV",
-                    "     通用軸（技術背離+量價背離+結構轉折）。2026-07-02 家用網路已回測（50 檔）→ 三維",
-                    "     全近雜訊(AUC~0.5，權值股純技術面抓頂難)；權重 50/30/20 維持專家值、僅參考未獲實證。"]
         else:
+            # C1（2026-07-04 拍板，2026-07-06 落地）：美股/其他非台股標的的逃頂/抄底通用軸
+            # 面板已撤下（曾以 relative_high_us/relative_low_us 純 OHLCV 實作，2026-07-02
+            # 家用網路回測 50 檔三維全近雜訊 AUC~0.5，權重未獲實證）。台股籌碼未就緒時亦走此分支。
             act = compute_trend_stance(trend[0], mom)
             _, comp_rows = _panel_stance(
                 "操作", f"{act['emoji']} {act['action']}", act["detail"])
             ct_comp = f"操作  {act['emoji']} {act['action']}"
-            note = ["  ⚠ 台股籌碼資料尚未就緒 → 暫僅通用軸（趨勢方向＋技術＋短線動能）。"]
+            if self.is_tw:
+                note = ["  ⚠ 台股籌碼資料尚未就緒 → 暫僅通用軸（趨勢方向＋技術＋短線動能）。"]
+            else:
+                note = ["  ⚠ 美股/其他標的無籌碼/估值免費源 → 僅通用軸（趨勢方向＋技術＋短線動能）。",
+                        "     股票版逃頂/抄底（融資融券/法人/期權IV）列為後續 Phase。"]
 
         # ── E2 警戒引擎：本標的觸價/訊號變化＋watch_plan 其餘標的背景觸價（盯一檔不漏他檔）──
         events = []

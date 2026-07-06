@@ -384,6 +384,60 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 
 ## 版本紀錄
 
+### v3.33 (2026-07-06)
+四季論 v2 十二象限二維狀態機（`season_v2_design.md`，衝刺清單 B1）——結構性根治
+C-2（v1 在「時間入秋、市場未確認」誤出熊底預測）。**本次為背後開關落地，`config.
+SEASON_ENGINE` 預設維持 "v1"，v1 行為零改動；v2 已完整可用但回放對照後不建議
+現在採用。**
+- **feat(core)**: `core/season_forecast.py` 新增 `_derive_market_axis`（市場軸
+  M：bull/mid/bear，3 日防抖，dd/up 在門檻邊界抖動時不反覆翻轉）、
+  `derive_effective_state`（十二象限查表：(時間軸T,市場軸M)→forecast_type/
+  eff_season/conf_cap/note，模組層 assert 保證 12 格無遺漏）、`_resolve_ath_ref_v2`
+  （廢除 v1 的 best_cycle_ath>current×1.05 全域魔數，改依 M 軸與 T-spring 左尾
+  情境判斷）。新增 `forecast_type="observe"`（不出目標價，寧可不預測不出錯錨）。
+- **feat(config)**: `SEASON_ENGINE: str = "v1"`（受保護設定，切換需回放對照後裁定）。
+- **fix(consumers)**: 消費端盤點（憲法第14條）——`handler/tab_macro_compass.py`
+  的 `_render_forecast_chart`、`scripts/daily_line_notify.py` 的 `get_decision_data`
+  補 `forecast_type="observe"` 防護（target_* 為 None 時原本會 TypeError 崩潰）；
+  `core/relative_high.py` 原生已安全（既有 `if fc.get(...)` truthy 檢查天然涵蓋）。
+- **test**: `tests/core/test_season_v2.py` 24 項全綠（十二象限逐格、防抖 2 例、
+  C-2 重現例：month 26 近 ATH 上漲中，v1 誤判 bear_bottom、v2 正確判 bull_peak/
+  summer_ext 且 `ath_ref is None`）。
+- **驗證(回放對照)**: `tests/season_v2_replay.py`（2018-04~2026-07，2,992 天，
+  15 秒）——三條驗收準則僅 1 條乾淨通過（切換次數 27<78，防抖確實降低翻轉）；
+  差異集中度與 2022 FTX 熊底一致性兩條未乾淨過，**發現 v2 十二象限表對「深熊
+  嚴重度分級」有結構性缺口**（v1 三層 -10%/-20%/-30% 門檻 vs v2 二元 M 軸，
+  972/1,379 差異天源於此，非設計文件命名的目標格）。刻意不回頭調參數讓準則
+  「看起來過」——詳細分析與建議見 `season_v2_replay_findings.md`。
+  全 repo 回歸 358 passed（唯一失敗仍為既有 yfinance 網路環境問題）。
+
+### v3.32 (2026-07-06)
+稽核批3/批4收尾（`20260704plan_watcher稽核.md`）：C1 拍板落地＋剩餘 W 項全清。
+- **feat(watch)**: **C1** 撤下 `watcher.UniversalMonitor` 的美股/非台股逃頂/抄底通用軸面板
+  （曾以 `relative_high_us`/`relative_low_us` 純 OHLCV 實作，2026-07-02 家用網路回測 50 檔
+  三維全近雜訊 AUC~0.5，權重從未獲實證）——非台股標的統一走 stance-only 分支（同「台股籌碼
+  未就緒」的既有 fallback），module docstring 描述的「非 BTC 標的看不到逃頂/抄底」重新對齊實作
+  （W-8 文件漂移隨 C1 一併消除，不需額外改字）。
+- **fix(watch)**: **W-4** 52 週高/低改用 `high`/`low` 欄（含盤中影線），原用 `close` 極值
+  僅為「52 週收盤高/低」、口徑較窄，與一般理解不符。
+- **refactor(core)**: **W-7** 抽新模組 `core/term_ui.py`，收納畫框/排版/面板組裝/K 線側欄/
+  可中斷等待共 29 個 helper（`_bar/_dw/_row/_edge/_title/_panel/_panel_trend/_panel_stance/
+  _wrap_display/_panel_block/_pair_lines/_print_with_kline/interruptible_wait` 等）——原本
+  `watcher.py` 直接綁死 `BTC_WATCH` 內部私名，BTC_WATCH 任何整形都可能靜默破 watcher。
+  `BTC_WATCH.py` 保留 `from core.term_ui import (...)` re-export shim（純位置移動、零邏輯改動，
+  identity 驗證 `BTC_WATCH._bar is core.term_ui._bar` 等 29 項全 pass）；`watcher.py` 改直接吃
+  `core.term_ui`（不再透過 BTC_WATCH 間接依賴，`_atr_risk_rows` 同步改直接吃 `core.risk`）。
+  `core/relative_high_tw._vol_pctile` 升公開名 `vol_pctile`（舊名保留 alias）。
+- **test(watch)**: **W-9** 新增 `classify_symbol` 參數化測試 14 例（2330/00878/6509/2330.TW/
+  QQQ/BRK.B/BF.B/btcusdt 小寫/BTC/BTC-USD/XBTUSD/ETHUSDT/SOL-USD/ETHUSD，含空字串例外與
+  crypto 欄位斷言）。
+- **fix(service)**: **W-10** `classify_symbol` 美股 class share 代號（`BRK.B`/`BF.B`）現轉換
+  `.`→`-` 給 Yahoo（`BRK-B`/`BF-B`），原樣傳入永遠 404「無資料」。
+- **驗證**: `core/term_ui.py`＋`BTC_WATCH.py`＋`watcher.py`＋`core/relative_high_tw.py` 語法/
+  import 全過；shim 29 個名稱 identity 檢查全 pass（比視覺對照更強——證明搬移後執行的是
+  同一份程式碼物件，行為不可能改變）；全 repo 回歸 334 passed（新增 14 例，唯一失敗仍為既有
+  `test_market_data` yfinance 網路環境問題，與本次改動無關）。
+
 ### v3.31 (2026-07-05)
 K 線側欄擴及 watcher `UniversalMonitor`（台股/美股/非 BTC 幣對之外的通用分支）：v3.29 只有 BitcoinMonitor 有側欄，實跑 `python watcher.py` 進台股/美股才發現通用分支自己逐行 print、沒接側欄。
 - **refactor(watch)**: 抽共用函式 `BTC_WATCH._print_with_kline(left, W, df, n_days, enabled=True)`（左欄整頁字串陣列＋日線 df → 右接全高 K 線側欄；終端機寬 < W+45、資料不足或 enabled=False 時退回原樣逐行印），BitcoinMonitor.render 尾端原內嵌拼接區塊改呼叫之，**單一來源**杜絕兩 Monitor 對齊邏輯漂移。
