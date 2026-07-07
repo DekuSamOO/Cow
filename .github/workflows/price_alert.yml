@@ -51,6 +51,7 @@ jobs:
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
           IS_STREAMLIT_CLOUD: "true"
           PYTHONPATH: ${{ github.workspace }}
+          DEFENSE_CONFIG_JSON: ${{ secrets.DEFENSE_CONFIG_JSON }}
         run: |
           python scripts/price_alert.py
 
