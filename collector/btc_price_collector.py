@@ -267,13 +267,18 @@ def collect_year(year: int) -> int:
     year_end_ms   = min(year_end_ms, now_ms)
 
     # 確定抓取起點
+    # C-16 修正（2026-07-07）：原本 last_ts + INTERVAL_MS 會跳過最後一根，但那根在
+    # 上次抓取當下可能仍是「成形中」的 K 線（Binance 回傳未收盤資料），此後永遠
+    # 不會被重抓回補——每日排程時點固定產生一根壞棒（實測 2025+2026 全部 7 筆
+    # 跳差異常皆發生在 01:00 UTC，凍結根 volume 遠低於鄰近根）。改回 last_ts
+    # 本身（重抓最後一根），INSERT OR REPLACE 天然以 open_time 覆蓋，此後自癒。
     last_ts = get_last_open_time(year)
     if last_ts:
-        fetch_start_ms = last_ts + INTERVAL_MS
+        fetch_start_ms = last_ts
         start_label = datetime.fromtimestamp(
             fetch_start_ms / 1000, tz=timezone.utc
         ).strftime("%Y-%m-%d %H:%M UTC")
-        print(f"  增量更新：從 {start_label} 開始")
+        print(f"  增量更新：從 {start_label} 開始（含重抓上次可能未收盤的最後一根）")
     else:
         fetch_start_ms = year_start_ms
         print(f"  全量下載：從 {year}-01-01 開始")
