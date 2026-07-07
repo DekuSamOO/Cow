@@ -55,6 +55,13 @@ def fetch_aux_history():
     # 補救：資金費率（非同步抓取）
     if funding is None or funding.empty:
         funding = _fetch_funding_rate_history()
+        # [C-17] ccxt 路徑目前所有環境皆無法使用（SSL 攔截 / Streamlit Cloud 451），
+        # 持久化寫回 SQLite 快取，避免每次啟動都要重新對外抓取
+        if funding is not None and not funding.empty:
+            try:
+                data_manager._df_to_sqlite(funding, 'funding_history')
+            except Exception as e:
+                logger.warning(f"[Funding] 寫回 SQLite 快取失敗: {e}")
 
     return _clean(tvl, "tvl"), _clean(stable, "stable"), _clean(funding, "funding")
 

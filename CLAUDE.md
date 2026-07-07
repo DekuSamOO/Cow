@@ -1,7 +1,7 @@
 # CLAUDE.md — Cow（BTC 投資戰情室）
 
 **路徑：** `D:\Users\63191\Documents\GitHub\Cow`
-**目前版本：** v3.33
+**目前版本：** v3.34
 **Live App：** https://mfyyo9qf5mymsrouxkfdgj.streamlit.app
 **Streamlit 版本：** 1.37.1
 
@@ -519,3 +519,19 @@ call/put 深入價內、price≈內在價值，行權損失被權利金「加回
 `v2` 若未來啟用不會因 target_* 為 None 崩潰；(d) 單元測試
 `tests/core/test_season_v2.py`（24 項）＋回放腳本 `tests/season_v2_replay.py`
 （本地）。
+
+### 24. `_df_from_sqlite` 曾強制欄名全轉小寫，camelCase 資料欄（fundingRate）遭殃（2026-07-07，C-17/C-18/C-19）
+
+舊版只為了相容 yfinance `'Date'` vs `'date'` 這一種 index 欄大小寫問題，卻把**所有**欄位
+（含 `fundingRate` 這種資料欄）都轉小寫，導致：快取一旦成功寫入，消費端讀 camelCase
+全部讀不到；第二輪增量 `concat([既有小寫欄, 新抓 camel 欄])` 產生大小寫分裂雙欄，
+`to_sql` 寫回時 SQLite 因欄名大小寫不敏感直接 `duplicate column name` 崩潰。修法：只在
+`index_col` 找不到時才嘗試不分大小寫改名，其餘欄位一律保留寫入時原始大小寫。同案：
+`onchain.py:fetch_aux_history` 的 httpx/Bybit/OKX 補救路徑成功後主動回寫 SQLite 快取
+（ccxt 路徑在所有現行環境皆卡死，故快取表過去從未真正落地磁碟，只留在
+`@st.cache_data` 記憶體）；`collector/btc_price_collector.py` 的 Binance K 線抓取補齊
+`< end_ms` 年界過濾（C-18，與 Kraken 分支對齊，避免年檔尾根跨入下一年）；Kraken
+2013-2016 回補文件誠實化＋預設 `--from-year` 改 2017（C-19，Kraken OHLC 端點實測
+只回最近約 720 根、無法深翻歷史，程式碼保留但不再預設觸發）。詳見
+`Github\_governance\AUDIT-data-internals-batch4.md` C-17/C-18/C-19；回歸測試見
+`tests/test_market_data.py` 新增兩項。

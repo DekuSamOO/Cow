@@ -1,4 +1,4 @@
-# Cow — 比特幣投資戰情室 v3.30
+# Cow — 比特幣投資戰情室 v3.34
 
 > 比特幣多週期量化分析工具，整合技術指標、鏈上數據、期權與波段策略。
 
@@ -383,6 +383,32 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 ---
 
 ## 版本紀錄
+
+### v3.34 (2026-07-07)
+稽核批 4 收官（C-16/C-17/C-18/C-19）＋ S-1 生產環境修復。
+- **fix(security)**: GitHub Actions workflow（`price_alert.yml`/`daily_line_notify.yml`）
+  漏了把 Repository Secret `DEFENSE_CONFIG_JSON` 實際傳給 Python 腳本的 `env:` 宣告
+  （Secret 設定本身不會自動變成 process 環境變數）——S-1 私有化落地後首次上線失敗的
+  真因，補上 `env:` 宣告後兩支 workflow 皆 `workflow_dispatch` 重跑驗證成功。
+- **fix(collector)**: `collector/btc_price_collector.py`（C-16）——增量起點
+  `fetch_start_ms` 改回 `last_ts`（重抓最後一根），修復「每日 01:00 UTC 排程時點
+  永久凍結成形中 K 線」的結構性 bug；一次性歷史回補腳本
+  `tests/c16_frozen_kline_backfill.py` 掃出並修復 73 根凍結壞棒（2026-06 批出現
+  volume 0.26→1821 的戲劇性修正，證實確為壞棒）。
+- **fix(data)**: `service/historical_data_manager.py` 的 `_df_from_sqlite`（C-17）
+  不再強制把所有欄名轉小寫，只正規化 index 欄（相容 yfinance `Date`/`date`）——修復
+  資料欄（如 `fundingRate`）大小寫被強制改寫，導致快取一旦成功寫入、消費端全部讀不到，
+  且第二輪增量 concat 產生大小寫分裂雙欄、`to_sql` 寫回觸發 SQLite
+  `duplicate column name` 崩潰的三重病。`service/onchain.py:fetch_aux_history`
+  補上 httpx/Bybit/OKX 補救路徑成功後主動回寫 SQLite 快取（ccxt 路徑目前所有環境皆
+  卡死，快取表過去從未真正落地磁碟）。
+- **fix(collector)**: Binance K 線抓取補齊 `< end_ms` 年界過濾（C-18，與 Kraken 分支
+  對齊，避免年檔尾根跨入下一年重複）；Kraken 2013-2016 回補文件誠實化＋
+  `--from-year` 預設改 2017（C-19，Kraken OHLC 端點實測只回最近約 720 根、無法深翻
+  歷史，程式碼保留但不再預設觸發）。
+- **test**: `tests/test_market_data.py` 新增 2 項回歸測試重現並驗證 C-17 病 2/病 3；
+  全 repo 358 個非網路測試通過（`pytest tests/ -q -m "not network"`）。
+- 詳見 `Github\_governance\AUDIT-data-internals-batch4.md` C-16/C-17/C-18/C-19。
 
 ### v3.33 (2026-07-06)
 四季論 v2 十二象限二維狀態機（`season_v2_design.md`，衝刺清單 B1）——結構性根治

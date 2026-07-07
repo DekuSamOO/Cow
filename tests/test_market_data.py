@@ -157,6 +157,68 @@ def test_sqlite_write_read_roundtrip():
             _restore_db_path(orig)
 
 
+def test_sqlite_preserves_data_column_casing():
+    """
+    [C-17] _df_from_sqlite 不應把資料欄位（如 fundingRate）強制轉小寫，
+    只應正規化 index 欄位大小寫。
+    """
+    import service.historical_data_manager as data_manager
+
+    with tempfile.TemporaryDirectory() as tmp:
+        orig = _patch_db_path(tmp)
+        try:
+            idx = pd.date_range('2025-01-01', periods=3, name='date')
+            df_write = pd.DataFrame({'fundingRate': [0.01, 0.02, 0.03]}, index=idx)
+            data_manager._df_to_sqlite(df_write, 'funding_history')
+
+            df_read = data_manager._df_from_sqlite('funding_history')
+            print(f"\n[test] 讀回欄位: {list(df_read.columns)}")
+            assert 'fundingRate' in df_read.columns, (
+                f"資料欄位大小寫被錯誤轉換，讀回欄位: {list(df_read.columns)}"
+            )
+            print("[test] 資料欄位大小寫保留 ✅ 通過")
+        finally:
+            _restore_db_path(orig)
+
+
+def test_sqlite_incremental_concat_no_duplicate_column_crash():
+    """
+    [C-17] 重現並驗證修復：existing_df（讀回）與新 fetched_df 兩者的
+    fundingRate 欄位大小寫必須一致，concat 後寫回不應觸發 SQLite
+    'duplicate column name' 錯誤。
+    """
+    import service.historical_data_manager as data_manager
+
+    with tempfile.TemporaryDirectory() as tmp:
+        orig = _patch_db_path(tmp)
+        try:
+            idx1 = pd.date_range('2025-01-01', periods=3, name='date')
+            df_write = pd.DataFrame({'fundingRate': [0.01, 0.02, 0.03]}, index=idx1)
+            data_manager._df_to_sqlite(df_write, 'funding_history')
+
+            existing_df = data_manager._df_from_sqlite('funding_history')
+
+            idx2 = pd.date_range('2025-01-04', periods=2, name='date')
+            fetched_df = pd.DataFrame({'fundingRate': [0.04, 0.05]}, index=idx2)
+
+            full_df = pd.concat([existing_df, fetched_df])
+            full_df = full_df[~full_df.index.duplicated(keep='last')]
+            full_df.sort_index(inplace=True)
+
+            assert list(full_df.columns) == ['fundingRate'], (
+                f"concat 產生了大小寫分裂的重複欄位: {list(full_df.columns)}"
+            )
+
+            # 第二次寫回不應拋出 sqlite3.OperationalError: duplicate column name
+            data_manager._df_to_sqlite(full_df, 'funding_history')
+
+            df_read_back = data_manager._df_from_sqlite('funding_history')
+            assert len(df_read_back) == 5
+            print("[test] 增量 concat 無重複欄位、寫回無崩潰 ✅ 通過")
+        finally:
+            _restore_db_path(orig)
+
+
 def test_sqlite_empty_on_missing_valid_table():
     """確認有效表格名稱但尚未建立時，_df_from_sqlite 回傳空 DataFrame。"""
     import service.historical_data_manager as data_manager

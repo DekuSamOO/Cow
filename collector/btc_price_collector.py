@@ -9,8 +9,11 @@ collector/btc_price_collector.py
   python collector/btc_price_collector.py --push            # 收集完後自動 git push
 
 數據源：
-  - Binance  REST API（2017-08-17 起，BTCUSDT 15m，最高流動性）
-  - Kraken   REST API（2013 起，XBTUSD 15m，無地理封鎖，填補 Binance 前空白）
+  - Binance  REST API（2017-08-17 起，BTCUSDT 15m，最高流動性；本收集器實際數據起點）
+  - Kraken   REST API（XBTUSD 15m，無地理封鎖；[C-19] OHLC 端點只回最近約 720 根，
+             無法深翻歷史，故無法真正回補 2013-2016——`--from-year 2013` 實測會對
+             2013-2016 靜默印出「無新數據」，db/ 從未產生對應年檔。此分支保留供
+             Kraken API 未來若支援深翻歷史時使用，預設不啟用）
 
 儲存結構：
   db/
@@ -54,7 +57,8 @@ BINANCE_START_STR = "2017-08-17"            # Binance BTCUSDT 最早可用日期
 BINANCE_START_MS  = int(
     datetime(2017, 8, 17, tzinfo=timezone.utc).timestamp() * 1000
 )
-KRAKEN_START_YEAR = 2013                    # Kraken XBTUSD 最早年份
+KRAKEN_START_YEAR = 2013                    # Kraken 端點理論最早年份（實測無法深翻回補，見 C-19）
+DEFAULT_START_YEAR = 2017                   # [C-19] 無參數時的實際預設起點（Binance 上市年）
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -167,6 +171,7 @@ def _binance_klines(start_ms: int, end_ms: int) -> list:
         rows = [
             (k[0], float(k[1]), float(k[2]), float(k[3]), float(k[4]), float(k[5]))
             for k in batch
+            if k[0] < end_ms  # [C-18] Binance endTime inclusive，過濾避免跨入下一年界的重複根
         ]
         all_rows.extend(rows)
 
@@ -472,7 +477,8 @@ def main():
         """
     )
     parser.add_argument("--year",      type=int, help="只收集指定年份")
-    parser.add_argument("--from-year", type=int, help="從指定年份收集到今年（預設 2013）",
+    parser.add_argument("--from-year", type=int, help="從指定年份收集到今年（預設 2017，Binance 上市年；"
+                        "2017 以前 Kraken 無法深翻歷史，詳見 C-19）",
                         dest="from_year")
     parser.add_argument("--push",      action="store_true", help="收集後自動 git commit & push")
     args = parser.parse_args()
@@ -485,8 +491,8 @@ def main():
     elif args.from_year:
         years = list(range(args.from_year, current_year + 1))
     else:
-        # 預設：從 Kraken 最早年份到今年
-        years = list(range(KRAKEN_START_YEAR, current_year + 1))
+        # [C-19] 預設：從實際數據起點（Binance 上市年）到今年；Kraken 無法深翻回補 2013-2016
+        years = list(range(DEFAULT_START_YEAR, current_year + 1))
 
     print("=" * 55)
     print("  BTC/USDT 15m K 線收集器")

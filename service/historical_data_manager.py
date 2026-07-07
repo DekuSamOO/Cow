@@ -137,8 +137,14 @@ def _df_from_sqlite(table_name: str, index_col: str = 'date') -> pd.DataFrame:
                 return pd.DataFrame()  # 首次啟動，表格尚未建立
 
             df = pd.read_sql(f"SELECT * FROM {table_name}", conn)
-            # 欄位名稱統一轉小寫，避免 yfinance 的 'Date' vs 'date' 大小寫不一致問題
-            df.columns = [c.lower() for c in df.columns]
+            # [C-17] 只正規化 index 欄位的大小寫（相容 yfinance 'Date' vs 'date'），
+            # 其餘資料欄位（如 fundingRate）保留寫入時的原始大小寫，避免與
+            # update_funding_history() 寫入的 camelCase 產生大小寫不一致的欄位分裂
+            if index_col not in df.columns:
+                for c in df.columns:
+                    if c.lower() == index_col.lower():
+                        df.rename(columns={c: index_col}, inplace=True)
+                        break
             if index_col in df.columns:
                 df[index_col] = pd.to_datetime(df[index_col])
                 df.set_index(index_col, inplace=True)
