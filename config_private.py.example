@@ -38,6 +38,7 @@ DEFENSE_DECISION_CARD: tuple = (
     "範例分區文案 2",
     "範例分區文案 3",
     "範例分區文案 4",
+    "範例反彈側出口文案（C-R5：回本點=減槓桿天然出口，下行卡+上行卡成對）",
 )
 
 # 測試自洽驗算用（tests/test_defense_ladder.py 讀不到 config_private 時該測試會 skip，
