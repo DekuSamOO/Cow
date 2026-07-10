@@ -183,7 +183,7 @@ def build_defense_message(price: float, now_str: str = None) -> str:
             lines.append(f"　　⚠ {note}")
     lines += [
         "━━━━━━━━━━━━━━━━",
-        "🃏 決策卡（此刻做一次性政策選擇，對照戰情室 final_low/ensemble_low）:",
+        "🃏 決策卡（此刻做一次性政策選擇，對照戰情室 final_low 區間·悲觀/點估/樂觀 與 ensemble_low）:",
     ]
     for card_line in DEFENSE_DECISION_CARD:
         lines.append(f"　• {card_line}")

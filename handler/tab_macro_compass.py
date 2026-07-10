@@ -1086,9 +1086,14 @@ def render(btc, chart_df, tvl_hist, stable_hist, fund_hist, curr, dxy, ov, proxi
             mcol1, mcol2 = st.columns(2)
             with mcol1:
                 fl = be.get('final_low')
+                # C-R3：外插 n=3 點估精度撐不起防守決策 → 併列悲觀/樂觀區間
+                _fld, _fls = be.get('final_low_deep'), be.get('final_low_shallow')
+                _range_html = (f'<div style="color:#ff8a65;font-size:0.78rem;">區間 ${_fld:,.0f} ~ ${_fls:,.0f}（悲觀~樂觀）</div>'
+                               if (_fld and _fls) else '')
                 st.markdown(f"""<div style="background:#1a1a2e;border:2px solid #ef5350;border-radius:10px;padding:14px;text-align:center;">
                     <div style="color:#888;font-size:0.8rem;">最終最低價估計</div>
                     <div style="color:#ef5350;font-size:1.8rem;font-weight:800;">${fl:,.0f}</div>
+                    {_range_html}
                     <div style="color:#666;font-size:0.72rem;">依據 {be.get('final_low_basis') or '—'}</div>
                 </div>""" if fl else '—', unsafe_allow_html=True)
             with mcol2:

@@ -198,6 +198,16 @@ def compute_all_bottom_estimates(
         final_low = None
         final_low_basis = None
 
+    # ── final_low 區間伴隨值（C-R3，2026-07-10）────────────────────
+    # 外插只有 n=3，點估精度撐不起防守決策——顯示層須帶悲觀/樂觀區間。
+    # 同樣對電費硬地板做 max 截斷（與 final_low 同規則，保 deep ≤ point ≤ shallow）。
+    def _floor_clamp(season_v):
+        cands = [v for v in (season_v, miner_elec) if v]
+        return max(cands) if cands else None
+
+    final_low_deep    = _floor_clamp(season["bottom_low"]  if season else None)   # 悲觀（跌更深）
+    final_low_shallow = _floor_clamp(season["bottom_high"] if season else None)   # 樂觀（跌較淺）
+
     # ── ensemble：可靠度加權中位數（穩健中央估計；排除 all-in 警示線）──
     ensemble_low = _weighted_median(
         [(e["value"], e["reliability"]) for e in estimates if e["key"] != "miner_allin"]
@@ -210,6 +220,8 @@ def compute_all_bottom_estimates(
         "estimates":       estimates,
         "final_low":       final_low,
         "final_low_basis": final_low_basis,
+        "final_low_deep":    final_low_deep,     # C-R3 悲觀值（外插 deep band，同受電費地板截斷）
+        "final_low_shallow": final_low_shallow,  # C-R3 樂觀值（外插 shallow band）
         "ensemble_low":    ensemble_low,
         # 便利欄（display 用）
         "miner_elec":      miner_elec,

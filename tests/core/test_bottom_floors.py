@@ -61,6 +61,25 @@ def test_compute_final_low_is_max_season_and_miner_elec():
     assert res["final_low_basis"] in ("礦工電費硬地板", "四季論趨勢底")
 
 
+def test_final_low_range_order_and_floor_clamp():
+    """C-R3：final_low_deep ≤ final_low ≤ final_low_shallow，且各值同受電費地板截斷。"""
+    df = _synthetic_df()
+    price = float(df["close"].iloc[-1])
+    onchain = {"realized_price": 50000, "balanced_price": 30000, "cvdd": 15000, "asof": "x"}
+    res = compute_all_bottom_estimates(price, df=df, hashrate_ths=7.6e8,
+                                       now=datetime(2026, 6, 1), onchain=onchain)
+    d, p, s = res["final_low_deep"], res["final_low"], res["final_low_shallow"]
+    assert d is not None and s is not None
+    assert d <= p <= s, f"區間序關係錯：{d} / {p} / {s}"
+    sb = res["season_bottom"]
+    assert abs(d - max(sb["bottom_low"],  res["miner_elec"])) < 1e-6
+    assert abs(s - max(sb["bottom_high"], res["miner_elec"])) < 1e-6
+    # 無 season 亦無電費 → 區間值應為 None 不炸
+    res2 = compute_all_bottom_estimates(price, df=None, hashrate_ths=None,
+                                        now=datetime(2026, 6, 1), onchain=None)
+    assert "final_low_deep" in res2 and "final_low_shallow" in res2
+
+
 def test_estimates_filter_none_and_zero():
     df = _synthetic_df()
     price = float(df["close"].iloc[-1])

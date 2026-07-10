@@ -672,7 +672,10 @@ def _build_bottom_eval_box(s):
         })
         basis = be.get("final_low_basis") or ""
         ens = be.get("ensemble_low")
-        sub = f"依據 {basis}" + (f"｜多錨中位數 ${ens:,.0f}" if ens else "")
+        # C-R3：LINE 文案也帶悲觀~樂觀區間（外插 n=3，點估不可單獨消費）
+        fld, fls = be.get("final_low_deep"), be.get("final_low_shallow")
+        rng = f"區間 ${fld:,.0f}~${fls:,.0f}｜" if (fld and fls) else ""
+        sub = f"{rng}依據 {basis}" + (f"｜多錨中位數 ${ens:,.0f}" if ens else "")
         header.append({"type": "text", "text": sub, "color": "#888888", "size": "xxs", "margin": "xs", "wrap": True})
 
     # LINE 版精簡：只取代表性幾項 = 最高估計 + 3 硬地板 + 最低估計（去重後依價排序）
