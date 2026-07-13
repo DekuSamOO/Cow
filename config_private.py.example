@@ -46,6 +46,7 @@ DEFENSE_DECISION_CARD: tuple = (
     "範例分區文案 3",
     "範例分區文案 4",
     "範例反彈側出口文案（C-R5：回本點=減槓桿天然出口，下行卡+上行卡成對）",
+    "範例預設政策文案（U5-2，2026-07-13：警報後 24h 未行動＝預設不防守——把「來不及」變成預選結果）",
 )
 
 # 測試自洽驗算用（tests/test_defense_ladder.py 讀不到 config_private 時該測試會 skip，
