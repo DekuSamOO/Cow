@@ -79,12 +79,81 @@ def test_message_stage_marks_follow_price():
                for i in (1, 2, 3))
 
 
+# ── P4 馬丁止盈重啟偵測（2026-07-13）──────────────────────────
+# 全部用範例假數字與假行情，不依賴 config_private / 網路。
+
+_FAKE_BASELINE = {
+    "date": "2026-01-01",
+    "marts": [
+        {"name": "馬1", "tp": 99_999.0, "rung": 1},
+        {"name": "馬2", "tp": 88_888.0, "rung": 3},
+    ],
+}
+
+
+def _fake_df(max_high):
+    import pandas as pd
+    return pd.DataFrame({"high": [max_high * 0.9, max_high], "close": [1.0, 1.0]})
+
+
+def test_mart_restart_lines_variants():
+    from service.notification.facade import _mart_restart_lines
+    # 未執行/不可用 → 靜態警語（含「對帳重算」）
+    static = _mart_restart_lines(None)
+    assert len(static) == 1 and '對帳重算' in static[0]
+    # 全部未達止盈 → 單行「仍有效」
+    fresh = _mart_restart_lines(
+        [{"name": "馬1", "tp": 99_999.0, "rung": 1, "max_high": 80_000.0, "restarted": False},
+         {"name": "馬2", "tp": 88_888.0, "rung": 3, "max_high": 80_000.0, "restarted": False}],
+        baseline_date="2026-01-01")
+    assert len(fresh) == 1 and '仍有效' in fresh[0] and '2026-01-01' in fresh[0]
+    # 馬2 已重啟 → 逐台警示、標明第 3 階作廢
+    stale = _mart_restart_lines(
+        [{"name": "馬1", "tp": 99_999.0, "rung": 1, "max_high": 90_000.0, "restarted": False},
+         {"name": "馬2", "tp": 88_888.0, "rung": 3, "max_high": 90_000.0, "restarted": True}],
+        baseline_date="2026-01-01")
+    assert len(stale) == 1 and '馬2' in stale[0] and '第3階' in stale[0] and '作廢' in stale[0]
+
+
+def test_detect_mart_restart_with_fake_market(monkeypatch):
+    import service.market_data as md
+    from service.notification import facade
+    # 高點 90,000：馬2（tp 88,888）判重啟、馬1（tp 99,999）未重啟
+    monkeypatch.setattr(md, 'fetch_binance_daily', lambda d: _fake_df(90_000.0))
+    info = facade.detect_mart_restart(_FAKE_BASELINE)
+    assert [m['restarted'] for m in info] == [False, True]
+    assert info[1]['rung'] == 3 and info[0]['max_high'] == 90_000.0
+    # Binance 空手 → Kraken 備援
+    monkeypatch.setattr(md, 'fetch_binance_daily', lambda d: None)
+    monkeypatch.setattr(md, 'fetch_kraken_daily', lambda d: _fake_df(100_000.0))
+    info2 = facade.detect_mart_restart(_FAKE_BASELINE)
+    assert [m['restarted'] for m in info2] == [True, True]
+    # 兩備援皆失敗 → None（降級不阻斷）
+    monkeypatch.setattr(md, 'fetch_kraken_daily', lambda d: (_ for _ in ()).throw(RuntimeError))
+    assert facade.detect_mart_restart(_FAKE_BASELINE) is None
+    # 基線未設定 → None
+    assert facade.detect_mart_restart({}) is None
+
+
+def test_message_embeds_restart_detection():
+    stale_info = [
+        {"name": "馬1", "tp": 99_999.0, "rung": 1, "max_high": 90_000.0, "restarted": False},
+        {"name": "馬2", "tp": 88_888.0, "rung": 3, "max_high": 90_000.0, "restarted": True},
+    ]
+    msg = build_defense_message(53_000.0, now_str='TEST',
+                                mart_restart=stale_info, baseline_date='2026-01-01')
+    assert '第3階觸發價/釋出量作廢' in msg and '執行前必對帳重算' in msg
+    # 未傳偵測結果 → 靜態警語不消失（既有守門的「重算」提醒仍在）
+    msg2 = build_defense_message(53_000.0, now_str='TEST')
+    assert '重算' in msg2
+
+
 if __name__ == '__main__':
     test_ladder_liq_prices_match_formula()
     test_alert_threshold_is_stage1_trigger()
     test_ladder_monotonic()
     test_message_contains_all_stages_and_conditions()
     test_message_stage_marks_follow_price()
-    print('防守推移表守門 5 項全部通過。')
+    print('防守推移表守門測試通過（P4 偵測測試需經 pytest 跑 monkeypatch 版）。')
     print('\n──── 推播文案 dry-run（現價 53,000）────')
     print(build_defense_message(53_000.0))

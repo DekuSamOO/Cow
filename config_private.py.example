@@ -15,8 +15,15 @@ config_private.py.example — S-1 覆蓋層範本（2026-07-06）
          [50000.0, "台股換 BTC...", 0.127, 37060.0, "附註..."],
          [44070.0, "關閉馬丁2號...", 0.165, 31180.0, "附註..."]
        ],
-       "defense_decision_card": ["文案1", "文案2", "文案3", "文案4"]
+       "defense_decision_card": ["文案1", "文案2", "文案3", "文案4"],
+       "mart_tp_baseline": {"date": "YYYY-MM-DD", "marts": [
+         {"name": "馬1", "tp": 99999.0, "rung": 1},
+         {"name": "馬2", "tp": 88888.0, "rung": 3}]}
      }
+
+     mart_tp_baseline 為「可選」鍵（P4 止盈重啟偵測基線，2026-07-13）：缺值＝
+     偵測停用、警報回退靜態警語，不觸發 fail-loud。date=對帳基線日；tp=該輪
+     推斷止盈價（均價×(1+tp%)）；rung=止盈重啟時作廢的防守階（1-based）。
 
   兩個來源缺一即可（config.py 優先讀 DEFENSE_CONFIG_JSON 環境變數，
   找不到才 import 本模組）；兩者都缺時 config.py 會 raise（fail-loud，
@@ -45,3 +52,12 @@ DEFENSE_DECISION_CARD: tuple = (
 # 非公開 CI 環境不影響其他測試）。
 LIQ_BASE: float = 99_999.0
 POSITION_USD: float = 10_000.0
+
+# P4 馬丁止盈重啟偵測基線（可選；刪除本段＝偵測停用）。範例假數字。
+MART_TP_BASELINE: dict = {
+    "date": "2026-01-01",
+    "marts": [
+        {"name": "馬1", "tp": 99_999.0, "rung": 1},
+        {"name": "馬2", "tp": 88_888.0, "rung": 3},
+    ],
+}

@@ -112,7 +112,9 @@ DEFAULT_APY_THRESHOLD: float = 20.0  # 20%
 # 數字正本：vault「1b 1 BTC ROAD.md」§4.2 防守推移表；驗算：vault「1b 馬丁格爾數學稽核.md」。
 # ⚠️ 馬丁重啟即作廢／防守為條件式／決策卡設計說明見 config_private.py.example 與 vault 正本，
 #   本檔不再重複列出（數字已不在此處，說明留在私有檔與 vault）。
-_DEFENSE_ATTRS = frozenset(("ALERT_PRICE_LOW", "DEFENSE_LADDER", "DEFENSE_DECISION_CARD"))
+_DEFENSE_ATTRS = frozenset(
+    ("ALERT_PRICE_LOW", "DEFENSE_LADDER", "DEFENSE_DECISION_CARD", "MART_TP_BASELINE")
+)
 _defense_cache = None
 
 
@@ -128,14 +130,17 @@ def _load_defense_config():
             float(data["alert_price_low"]),
             tuple(tuple(row) for row in data["defense_ladder"]),
             tuple(data["defense_decision_card"]),
+            # P4（2026-07-13）：馬丁止盈重啟偵測基線——「可選」鍵，缺值=偵測停用
+            # 回退舊靜態警語（非防守數字本體，不觸發 fail-loud）。
+            data.get("mart_tp_baseline"),
         )
         return _defense_cache
     try:
-        from config_private import (
-            ALERT_PRICE_LOW as _alp,
-            DEFENSE_LADDER as _dl,
-            DEFENSE_DECISION_CARD as _ddc,
+        import config_private as _cp
+        _alp, _dl, _ddc = (
+            _cp.ALERT_PRICE_LOW, _cp.DEFENSE_LADDER, _cp.DEFENSE_DECISION_CARD,
         )
+        _mtb = getattr(_cp, "MART_TP_BASELINE", None)
     except ImportError as e:
         raise RuntimeError(
             "敏感防守數字缺失（S-1 覆蓋層，憲法第 3 條 fail-loud，拒絕假數字/空表）：\n"
@@ -143,14 +148,15 @@ def _load_defense_config():
             "  GitHub Actions：設定 Repository Secret DEFENSE_CONFIG_JSON\n"
             "防守推播已停止，直到私有來源就緒。"
         ) from e
-    _defense_cache = (_alp, _dl, _ddc)
+    _defense_cache = (_alp, _dl, _ddc, _mtb)
     return _defense_cache
 
 
 def __getattr__(name):
     if name in _DEFENSE_ATTRS:
-        alp, dl, ddc = _load_defense_config()
-        return {"ALERT_PRICE_LOW": alp, "DEFENSE_LADDER": dl, "DEFENSE_DECISION_CARD": ddc}[name]
+        alp, dl, ddc, mtb = _load_defense_config()
+        return {"ALERT_PRICE_LOW": alp, "DEFENSE_LADDER": dl,
+                "DEFENSE_DECISION_CARD": ddc, "MART_TP_BASELINE": mtb}[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
