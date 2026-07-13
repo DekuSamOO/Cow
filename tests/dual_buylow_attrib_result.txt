@@ -1,0 +1,11 @@
+雙幣 BUY_LOW 不行權歸因（全史 2017-10-05~2026-07-02，put_risk=0.5，cooldown=1）
+
+[臂0 baseline] 結算 622（BUY_LOW 588，其中行權 1）  USDT 態曆日 3062  期末 Equity_BTC 0.1180（-88.2%）
+[臂1 gate-off] 結算 1140（BUY_LOW 822，其中行權 7）  USDT 態曆日 2300  期末 Equity_BTC 0.1202（-88.0%）
+
+分類器自我驗證：開單序列與引擎 完全一致 PASS（622 vs 622 單）
+
+== USDT 態決策日分解（baseline）==
+  gate 擋掉：1036 日（其中依同 strike 規則開單會行權：13 次）
+  實際開單 BUY_LOW：588 單（行權 1；若 strike 掛最鬆 cap=99% 收盤，上界行權 201）
+  冷卻 589 日／週末 648 日
