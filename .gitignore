@@ -41,3 +41,7 @@ collector/run_oi_snapshot.bat
 # watcher 個人交易計畫與觸發日誌（公開 repo，個人部位計畫/交易紀錄不得入庫）
 watch_plan.json
 logs/watch_journal.jsonl
+
+# S-1 覆蓋層延伸：三軌壓力測試腳本含真實部位數字（馬丁本金/成交價/網格保證金），
+# 不得入公開 repo；正本另存 vault Github\Cow\（f2_btc_stress.py 源檔曾佚失只剩 pyc）
+tests/f2_*
