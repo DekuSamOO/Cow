@@ -29,6 +29,12 @@ config_private.py.example — S-1 覆蓋層範本（2026-07-06）
   找不到才 import 本模組）；兩者都缺時 config.py 會 raise（fail-loud，
   憲法第 3 條），不會 fallback 到下方的範例假數字。
 
+  ⚠️ 同步義務（2026-07-14 稽核 No.1 立，改 config_private.py 後必走四步）：
+  1. python scripts/defense_config_check.py       → 記本地指紋
+  2. 更新 Repository Secret DEFENSE_CONFIG_JSON
+  3. gh workflow run price_alert.yml -f verify_config=true
+  4. LINE 收到 secret 側指紋，與步驟 1 一致才算同步完成
+
 以下為**範例假數字**，僅供理解結構，不代表真實部位：
 """
 
