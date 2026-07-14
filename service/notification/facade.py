@@ -282,6 +282,11 @@ def _u5_window_h() -> int:
     return getattr(_config, "DEFENSE_DECISION_WINDOW_H", 24)
 
 
+def _send_defense_text(text: str) -> bool:
+    """U5-①：防守文字訊息統一出口（core 端專用憑證優先、未設 fallback 日常通道）。"""
+    return _core._send_defense_line_message([{"type": "text", "text": text}])
+
+
 def notify_defense_line(price: float) -> dict:
     """
     BTC 跌至防守線（config.ALERT_PRICE_LOW = 防守第 1 階觸發價）推播 —
@@ -300,13 +305,13 @@ def notify_defense_line(price: float) -> dict:
         baseline_date=_baseline["date"] if _baseline else None,
     )
 
-    result['line'] = _core._send_defense_line_message([{"type": "text", "text": text}])
+    result['line'] = _send_defense_text(text)
     if result['line']:
         import time as _time
         n_burst = getattr(_config, "DEFENSE_BURST_COUNT", 3)
         for burst_text in build_defense_burst_texts(n_burst):
             _time.sleep(2)   # 獨立 push 呼叫間隔，讓手機逐響而非合併通知
-            if _core._send_defense_line_message([{"type": "text", "text": burst_text}]):
+            if _send_defense_text(burst_text):
                 result['burst'] += 1
     if _is_telegram_configured():
         result['telegram'] = _send_telegram_message(text)
@@ -317,13 +322,13 @@ def notify_defense_line(price: float) -> dict:
 def notify_defense_reminder(price: float, elapsed_h: float, nth: int) -> bool:
     """U5-①：決策窗內里程碑提醒（price_alert.py 每小時 cron 驅動）。"""
     text = build_defense_reminder(price, elapsed_h, nth)
-    return _core._send_defense_line_message([{"type": "text", "text": text}])
+    return _send_defense_text(text)
 
 
 def notify_defense_window_close(price: float) -> bool:
     """U5-①：決策窗屆滿收尾推播（之後本事件靜默直到 rearm）。"""
     text = build_defense_window_close(price)
-    return _core._send_defense_line_message([{"type": "text", "text": text}])
+    return _send_defense_text(text)
 
 
 def notify_bear_bottom_score(
