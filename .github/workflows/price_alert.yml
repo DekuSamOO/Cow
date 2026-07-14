@@ -4,8 +4,14 @@ on:
   schedule:
     # 每小時整點執行（UTC），涵蓋台灣時間全天
     - cron: '0 * * * *'
-  # 允許手動觸發測試
+  # 允許手動觸發測試；verify_config=true 時另推 DEFENSE_CONFIG_JSON 指紋到 LINE
+  # （防守三處同步哨兵，2026-07-14 稽核 No.1——比對本地 defense_config_check.py 輸出）
   workflow_dispatch:
+    inputs:
+      verify_config:
+        description: '推送 secret 側防守 config 指紋到 LINE（同步驗證）'
+        required: false
+        default: 'false'
 
 jobs:
   check_price:
@@ -57,6 +63,19 @@ jobs:
           DEFENSE_CONFIG_JSON: ${{ secrets.DEFENSE_CONFIG_JSON }}
         run: |
           python scripts/price_alert.py
+
+      # 防守三處同步哨兵：手動 dispatch 帶 verify_config=true 時，把 secret 側
+      # config 指紋推 LINE（公開 repo 的 log 不落指紋——取值空間有限有窮舉風險）
+      - name: Verify defense config fingerprint
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.verify_config == 'true'
+        env:
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+          IS_STREAMLIT_CLOUD: "true"
+          PYTHONPATH: ${{ github.workspace }}
+          DEFENSE_CONFIG_JSON: ${{ secrets.DEFENSE_CONFIG_JSON }}
+        run: |
+          python scripts/defense_config_check.py --push
 
       # 無論是否觸發警報，都上傳最新狀態（保留 2 天）
       - name: Upload alert state
