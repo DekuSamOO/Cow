@@ -8,6 +8,8 @@
 > **📌 否決史唯一正本**（2026-07-14 比照 tw G-C 裁定延伸）：vault
 > `Literature Noteb Cow 開發決策史.md` 第三節。本檔與 AUDIT/STRESS 各檔的
 > 否決敘述僅為摘要；復活禁令查核一律查該表，新否決先入該表再引用。
+> **架構決策**：`_governance\ADR\Cow\`（ADR-001~004）｜**子系統規格**：
+> `_governance\SPEC\cow-radar-spec.md`（每季隨 PREREG §0.5(d) 校準）。
 
 ---
 
