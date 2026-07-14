@@ -164,6 +164,15 @@ def __getattr__(name):
 # 防止價格在門檻附近震盪時隔日反覆推播（單次跌破只提醒一次）。
 ALERT_PRICE_REARM_GAP: float = 500.0
 
+# ── U5-①（2026-07-14）：防守警報重複策略（獨立通道的 LINE 版）──
+# 同一支 LINE bot 無法分聲音，改以「重複策略」與日常推播區隔（U5 原文：聲音/重複策略
+# 不同）：觸發時三連響 burst＋決策窗內按里程碑重推＋24h 屆滿收尾（接 U5-② 預設不防守）。
+# 若日後建立防守專用 LINE channel，只需設 DEFENSE_LINE_CHANNEL_ACCESS_TOKEN／
+# DEFENSE_LINE_USER_ID（env/secret），零代碼改動即分流（見 service/notification/core.py）。
+DEFENSE_BURST_COUNT: int = 3            # 觸發時連響次數（含主訊息；獨立 push 呼叫才會逐響）
+DEFENSE_DECISION_WINDOW_H: int = 24     # 決策窗小時數（U5-②：屆滿未行動＝預設不防守）
+DEFENSE_REMINDER_HOURS: tuple = (1, 2, 3, 6, 12, 18, 24)  # 窗內重推里程碑（事件起算小時）
+
 # ==============================================================================
 # 相對高點（逃頂）LINE 警報門檻
 # ==============================================================================

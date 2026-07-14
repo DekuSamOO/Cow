@@ -49,6 +49,9 @@ jobs:
         env:
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+          # U5-①：防守專用 LINE 通道（可選 secret，未設時 fallback 上方日常憑證）
+          DEFENSE_LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.DEFENSE_LINE_CHANNEL_ACCESS_TOKEN }}
+          DEFENSE_LINE_USER_ID: ${{ secrets.DEFENSE_LINE_USER_ID }}
           IS_STREAMLIT_CLOUD: "true"
           PYTHONPATH: ${{ github.workspace }}
           DEFENSE_CONFIG_JSON: ${{ secrets.DEFENSE_CONFIG_JSON }}

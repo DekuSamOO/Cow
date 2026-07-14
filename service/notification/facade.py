@@ -1,5 +1,6 @@
 from datetime import datetime
 from config import ALERT_PRICE_LOW, DEFENSE_LADDER, DEFENSE_DECISION_CARD
+from service.notification import core as _core
 from service.notification.core import (
     _send_line_message,
     _send_telegram_message,
@@ -246,12 +247,51 @@ def build_defense_message(price: float, now_str: str = None,
     return "\n".join(lines)
 
 
+def build_defense_burst_texts(n_burst: int) -> list[str]:
+    """U5-①：三連響的第 2~n 響短文案（純函數供測試對拍）。"""
+    return [
+        f"🚨🚨 防守警報 第{i}響／共{n_burst}響——請回看上一則防守推移表。"
+        f"警報後 {_u5_window_h()}h 未行動＝預設不防守（U5-② 決策卡）"
+        for i in range(2, n_burst + 1)
+    ]
+
+
+def build_defense_reminder(price: float, elapsed_h: float, nth: int) -> str:
+    """U5-①：決策窗內里程碑提醒（純函數供測試對拍）。"""
+    left_h = max(0, _u5_window_h() - elapsed_h)
+    return (
+        f"⏰ 防守決策窗提醒（第{nth}則）\n"
+        f"💰 BTC 現價: ${price:,.0f}（仍低於防守線 ${ALERT_PRICE_LOW:,.0f}）\n"
+        f"⏳ 距預設裁定剩 {left_h:.0f} 小時——屆時未行動＝預設不防守（U5-②）\n"
+        f"📋 推移表與決策卡見首響訊息"
+    )
+
+
+def build_defense_window_close(price: float) -> str:
+    """U5-①：24h 決策窗屆滿收尾（純函數供測試對拍）。"""
+    return (
+        f"🔒 防守決策窗關閉（{_u5_window_h()}h 屆滿）\n"
+        f"💰 BTC 現價: ${price:,.0f}\n"
+        f"📌 依 U5-② 預設政策：未行動＝不防守，本事件不再提醒\n"
+        f"（價格回升重新武裝後，下次跌破會重新開窗）"
+    )
+
+
+def _u5_window_h() -> int:
+    import config as _config
+    return getattr(_config, "DEFENSE_DECISION_WINDOW_H", 24)
+
+
 def notify_defense_line(price: float) -> dict:
     """
     BTC 跌至防守線（config.ALERT_PRICE_LOW = 防守第 1 階觸發價）推播 —
     1 BTC ROAD 防守事件。文案見 build_defense_message（config.DEFENSE_LADDER 單一來源）。
+
+    U5-①（2026-07-14）：走防守專用發送（core._send_defense_line_message，未設專用
+    憑證時 fallback 日常通道）＋三連響 burst——主訊息後再獨立 push 兩則短訊息，
+    手機連響 N 次與日常單響區隔（重複策略）。
     """
-    result = {'line': False, 'telegram': False}
+    result = {'line': False, 'telegram': False, 'burst': 0}
     import config as _config
     _baseline = _config.MART_TP_BASELINE
     text = build_defense_message(
@@ -260,12 +300,30 @@ def notify_defense_line(price: float) -> dict:
         baseline_date=_baseline["date"] if _baseline else None,
     )
 
-    if _is_line_configured():
-        result['line'] = _send_line_message([{"type": "text", "text": text}])
+    result['line'] = _core._send_defense_line_message([{"type": "text", "text": text}])
+    if result['line']:
+        import time as _time
+        n_burst = getattr(_config, "DEFENSE_BURST_COUNT", 3)
+        for burst_text in build_defense_burst_texts(n_burst):
+            _time.sleep(2)   # 獨立 push 呼叫間隔，讓手機逐響而非合併通知
+            if _core._send_defense_line_message([{"type": "text", "text": burst_text}]):
+                result['burst'] += 1
     if _is_telegram_configured():
         result['telegram'] = _send_telegram_message(text)
 
     return result
+
+
+def notify_defense_reminder(price: float, elapsed_h: float, nth: int) -> bool:
+    """U5-①：決策窗內里程碑提醒（price_alert.py 每小時 cron 驅動）。"""
+    text = build_defense_reminder(price, elapsed_h, nth)
+    return _core._send_defense_line_message([{"type": "text", "text": text}])
+
+
+def notify_defense_window_close(price: float) -> bool:
+    """U5-①：決策窗屆滿收尾推播（之後本事件靜默直到 rearm）。"""
+    text = build_defense_window_close(price)
+    return _core._send_defense_line_message([{"type": "text", "text": text}])
 
 
 def notify_bear_bottom_score(

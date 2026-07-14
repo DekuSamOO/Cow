@@ -14,11 +14,13 @@ import os
 import sys
 from core.http_client import safe_get
 import urllib3
-from datetime import date
+from datetime import datetime, timezone
 
 
-from config import SSL_VERIFY, ALERT_PRICE_LOW, ALERT_PRICE_REARM_GAP
-from service.notification.facade import notify_defense_line
+from config import (SSL_VERIFY, ALERT_PRICE_LOW, ALERT_PRICE_REARM_GAP,
+                    DEFENSE_DECISION_WINDOW_H, DEFENSE_REMINDER_HOURS)
+from service.notification.facade import (notify_defense_line, notify_defense_reminder,
+                                         notify_defense_window_close)
 
 if not SSL_VERIFY:
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -45,9 +47,29 @@ def _save_state(state: dict) -> None:
         json.dump(state, f)
 
 
+def _now() -> datetime:
+    """UTC now（抽函式供測試凍結時間；main 內日期/窗計時一律同源自此）。"""
+    return datetime.now(timezone.utc)
+
+
 def _should_alert(last_date: str | None) -> bool:
     """當日曆日與上次推播日期不同時才推播（每天最多一次）。"""
-    return last_date != str(date.today())
+    return last_date != _now().date().isoformat()
+
+
+def _due_reminder_idx(elapsed_h: float, sent_idx: int) -> int:
+    """
+    U5-①：回傳「已到期的最後一個里程碑 index＋1」（純函數供測試）。
+
+    milestones = DEFENSE_REMINDER_HOURS（事件起算小時）。Actions 若停擺數小時，
+    補推時只推最新一則、跳過中間積欠的（catch-up 不轟炸）。
+    回傳值 > sent_idx 表示有新提醒要推；推播後把 state 的 idx 更新為回傳值。
+    """
+    idx = sent_idx
+    for i in range(sent_idx, len(DEFENSE_REMINDER_HOURS)):
+        if elapsed_h >= DEFENSE_REMINDER_HOURS[i]:
+            idx = i + 1
+    return idx
 
 
 def fetch_btc_price() -> float | None:
@@ -74,23 +96,48 @@ def main() -> None:
         sys.exit(0)
 
     state = _load_state()
-    today = str(date.today())
+    today = _now().date().isoformat()
     armed = state.get("armed_defense", True)  # 舊 state 檔無此鍵 → 視為已武裝
 
-    # ── 防守事件：防守線警報（遲滯：單次跌破只推一次，回升超過門檻+GAP 才重新武裝）──
+    # ── 防守事件：防守線警報（遲滯：單次跌破只推一次全量，回升超過門檻+GAP 才重新武裝）──
+    # U5-①（2026-07-14）：全量警報後進入 24h 決策窗——窗內按 DEFENSE_REMINDER_HOURS
+    # 里程碑重推短提醒，屆滿推「窗關閉＝預設不防守（U5-②）」後本事件靜默直到 rearm。
     rearm_price = ALERT_PRICE_LOW + ALERT_PRICE_REARM_GAP
     if price <= ALERT_PRICE_LOW:
         if armed and _should_alert(state.get("last_defense_date")):
-            print(f"🛡️  防守事件：BTC ${price:,.0f} <= ${ALERT_PRICE_LOW:,.0f}，發送防守警報")
+            print(f"🛡️  防守事件：BTC ${price:,.0f} <= ${ALERT_PRICE_LOW:,.0f}，發送防守警報（三連響）")
             notify_defense_line(price)
             state["last_defense_date"] = today
-            state["armed_defense"] = False  # 解除武裝：持續低於門檻不再重複推播
+            state["armed_defense"] = False  # 解除武裝：全量警報只推一次，後續走決策窗提醒
+            state["defense_event_start"] = _now().isoformat(timespec="seconds")
+            state["defense_reminder_idx"] = 0
+            state["defense_window_closed"] = False
+        elif not armed and state.get("defense_event_start") and not state.get("defense_window_closed"):
+            elapsed_h = (_now() - datetime.fromisoformat(state["defense_event_start"])
+                         ).total_seconds() / 3600.0
+            if elapsed_h >= DEFENSE_DECISION_WINDOW_H:
+                print(f"🔒 決策窗屆滿（{elapsed_h:.1f}h ≥ {DEFENSE_DECISION_WINDOW_H}h），推播窗關閉（預設不防守）")
+                notify_defense_window_close(price)
+                state["defense_window_closed"] = True
+            else:
+                sent_idx = state.get("defense_reminder_idx", 0)
+                due_idx = _due_reminder_idx(elapsed_h, sent_idx)
+                if due_idx > sent_idx:
+                    print(f"⏰ 決策窗提醒：事件後 {elapsed_h:.1f}h，推播第 {due_idx} 則里程碑提醒")
+                    notify_defense_reminder(price, elapsed_h, due_idx)
+                    state["defense_reminder_idx"] = due_idx
+                else:
+                    print(f"ℹ️  決策窗內（{elapsed_h:.1f}h），下個里程碑未到，略過。")
         else:
-            reason = "今日已推播" if armed else f"已解除武裝（回升至 ${rearm_price:,.0f} 才重新武裝）"
+            reason = ("今日已推播" if armed
+                      else f"事件已收尾（回升至 ${rearm_price:,.0f} 才重新武裝）")
             print(f"ℹ️  BTC ${price:,.0f} <= ${ALERT_PRICE_LOW:,.0f}，{reason}，略過。")
     else:
         if not armed and price >= rearm_price:
             state["armed_defense"] = True
+            state.pop("defense_event_start", None)   # U5-①：清事件狀態，下次跌破重新開窗
+            state.pop("defense_reminder_idx", None)
+            state.pop("defense_window_closed", None)
             print(f"🔄 BTC ${price:,.0f} >= ${rearm_price:,.0f}，防守警報重新武裝。")
         else:
             print(f"✓ BTC ${price:,.0f} > ${ALERT_PRICE_LOW:,.0f}，未觸及防守門檻。")
