@@ -804,7 +804,18 @@ def render(btc, chart_df, tvl_hist, stable_hist, fund_hist, curr, dxy, ov, proxi
             if len(comm) >= 90:
                 corr = _btc2.loc[comm]['close'].rolling(90).corr(_dxy2.loc[comm]['close']).iloc[-1]
                 corr_val = f'{corr:.2f}' if corr == corr else '—'
-                st.metric('BTC vs DXY 90d 相關係數', corr_val, '負相關 (正常)' if corr == corr and corr < -0.5 else '相關性減弱')
+                # 2026-07-15 稽核 No.5（T-18 同類名實不符修正）：舊版 corr>=-0.5 一律標
+                # 「相關性減弱」，強正相關（如 +0.8）被誤標——正相關不是減弱。改三態：
+                #   corr<-0.5 負相關(正常避險)｜-0.5~+0.3 相關性減弱｜>+0.3 正相關(異常)
+                if corr != corr:
+                    corr_delta = '數據不足'
+                elif corr < -0.5:
+                    corr_delta = '負相關 (正常避險)'
+                elif corr > 0.3:
+                    corr_delta = '正相關 (異常/風險偏好切換)'
+                else:
+                    corr_delta = '相關性減弱'
+                st.metric('BTC vs DXY 90d 相關係數', corr_val, corr_delta)
                 st.caption('來源：本地計算 (Yahoo Finance DXY)')
             else:
                 st.metric('BTC vs DXY 90d', '—', '數據不足')
