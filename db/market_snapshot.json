@@ -691,5 +691,31 @@
 "funding_rate": 0.01,
 "btc_dominance": 56.582040436357985,
 "ts": 1785459607.114138
+},
+"2026-08-01": {
+"price": null,
+"oi_btc": 130553.27793218,
+"oi_usd": null,
+"funding_rate": null,
+"btc_dominance": null,
+"source": "backfill",
+"ts": 1785752652.3819575
+},
+"2026-08-02": {
+"price": null,
+"oi_btc": 129570.46328281,
+"oi_usd": null,
+"funding_rate": null,
+"btc_dominance": null,
+"source": "backfill",
+"ts": 1785752652.3819575
+},
+"2026-08-03": {
+"price": 62822.92,
+"oi_btc": 129647.41209212752,
+"oi_usd": 8144828998.07076,
+"funding_rate": 0.0037259999999999997,
+"btc_dominance": 56.20794025444206,
+"ts": 1785752653.5882227
 }
 }
