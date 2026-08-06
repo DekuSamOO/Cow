@@ -22,8 +22,21 @@ D:\Users\63191\AppData\Local\anaconda3\python.exe -m streamlit run app.py
 D:\Users\63191\AppData\Local\anaconda3\python.exe collector/btc_price_collector.py --push
 ```
 
-排程 `Cow OI Snapshot`（09:00）判斷有沒有跑，看 `LastRunTime` **不要看 `LastTaskResult`**
-（詳 `_governance\OPS-notes.md`）。
+排程 `Cow OI Snapshot`（09:00，跑 `collector\run_oi_snapshot.bat` → `--year <今年> --push`）
+判斷有沒有跑，看 `LastRunTime` **不要看 `LastTaskResult`**（詳 `_governance\OPS-notes.md`）。
+
+> [!warning] 本 repo 有每日自動 push 通道——**留在本地的 commit 會被它一併送上遠端**
+> `git_push()` 的 commit **已精準鎖在 `db/`**（`git add db/`；`db/` 無變更就直接 return，
+> 不 commit 也不 push），這部分沒問題。問題在最後一步 **`git push` 推的是「整個分支」
+> 不是「剛才那個 commit」**——這是 git 的本質，改不掉。
+>
+> 所以只要本地有任何未推的 commit 躺著，**隔天 09:00 排程就會替你決定把它推出去**。
+> 2026-08-06 實際發生過：一筆文件 commit 被當日的 K 線更新順手帶上 `origin/main`。
+>
+> **紀律**：在 Cow **不要留「還沒想清楚、暫時不想推」的本地 commit**。
+> 真要暫存未定案的工作，用 `git stash` 或另開分支，不要 commit 到 `main` 上放著。
+> （2026-08-06 評估過「push 前檢查是否有非資料 commit，有就只警告不推」的方案，
+> **否決**——會讓「價格資料每天上雲」這個核心功能變得不可靠，為罕見情況犧牲天天要用的東西。）
 
 ---
 
