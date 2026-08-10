@@ -408,6 +408,9 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 - **test**: 新增 6 項（均量視窗平滑單日爆量、drop_last 三情境、盤中不提前計分、幣對 24/7
   forming 兩例）；`pytest tests/core tests/test_ohlc_universal.py tests/test_watcher_stability.py
   tests/test_signal_parity.py -q` → **239 passed**。
+- **verify**: `scripts/tw_position_calib.py` 以新舊定義各重跑一次（194 檔／75,352 樣本、同樣本）
+  確認維度定義變更未翻轉既有結論：桶級 pos_mid vs fwd60_mean 等級相關 IS −0.29→−0.27、
+  OOS +0.27→+0.30（差異雜訊級）→ 倉位建議的**「未擬合（專家設定）」標籤維持不變**。
 
 ### v3.34 (2026-07-07)
 稽核批 4 收官（C-16/C-17/C-18/C-19）＋ S-1 生產環境修復。

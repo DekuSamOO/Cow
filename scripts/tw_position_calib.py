@@ -44,7 +44,7 @@ from core.action_ensemble import compute_composite_action            # noqa: E40
 _CLIMBER_DB = os.getenv("TW_CLIMBER_DB") or os.path.normpath(
     os.path.join(_ROOT, "..", "tw_stock_climber", "db", "twse_official_data.db"))
 _SPLIT = "2024-01-01"
-_WARMUP = 260     # SMA_200(200) + 緩衝，足夠 divergence lookback=120 / vol_pctile>=60
+_WARMUP = 260     # SMA_200(200) + 緩衝，足夠 divergence lookback=120 / vol_pctile 需 60+VOL_WINDOW-1 根
 _FWD = (20, 60)   # 前瞻報酬窗（交易日）
 
 
