@@ -195,23 +195,33 @@ def _is_us_trading_hours(now=None) -> bool:
     return datetime.time(9, 30) <= now.time() <= datetime.time(16, 0)
 
 
-def is_daily_bar_forming(last_bar_date, is_tw: bool, now=None) -> bool:
+def is_daily_bar_forming(last_bar_date, is_tw: bool, now=None, *, is_crypto: bool = False) -> bool:
     """
     判斷日線最後一根 K 棒是否為「今日進行式」（尚未結算收盤）。
 
     Yahoo v8 chart 的 1d bar 在交易時段中會即時更新今日這根（close＝當下成交價，非結算
     收盤），watcher「最新日線」若照樣顯示會跟「現價」數字重複、日期同天（2026-07-03 使用者
     回報：盤中看到「最新日線 今日 收 X」跟「現價 X」完全一樣，像多餘重複）。
+    量能側更嚴重：進行式那根的 volume 只累積到當下（見 `core.relative_high_tw.vol_pctile`）。
 
     需同時滿足才視為「進行式」：(a) 該市場此刻正在交易時段 (b) 最後一根日期＝當地「今天」。
     只判斷 (a) 不夠：日線快取每小時才刷新一次（`UniversalMonitor.DAILY_REFRESH_SEC`），市場
     剛開盤時快取可能還停在昨天已結算的收盤，此時最後一根其實不是今天，不該被誤判為進行式
     而錯誤退回前兩天。
 
+    is_crypto=True：幣對 24/7 無收盤，(a) 恆真——只要最後一根＝今天就一定還在累積。Yahoo
+    幣對日棒以 **UTC** 為界（`fetch_ohlc` 的 index 即 UTC epoch 轉 naive），故比的是 UTC 今天。
+    不特判會套到美股時段上：美股一收盤就把仍在累積的今日棒當成已結算（幣對每天有 17.5 小時
+    落在此誤判區間），量能分位因此拿半天的量去比歷史整日量。
+
     now 供測試注入（語意同 `_is_tw_trading_hours`/`_is_us_trading_hours`：代表該市場當地
-    此刻的 wall-clock datetime，呼叫端負責建構正確時區的值）。
+    此刻的 wall-clock datetime，幣對則為 UTC，呼叫端負責建構正確時區的值）。
     """
     import datetime
+    if is_crypto:
+        if now is None:
+            now = datetime.datetime.now(datetime.timezone.utc)
+        return last_bar_date == now.date()
     if now is None:
         from zoneinfo import ZoneInfo
         now = datetime.datetime.now(ZoneInfo("Asia/Taipei" if is_tw else "America/New_York"))

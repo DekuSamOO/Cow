@@ -30,7 +30,8 @@ if _COW not in sys.path:
 from core.indicators import calculate_technical_indicators          # noqa: E402
 from core.trend_direction import compute_trend_score, trend_meta    # noqa: E402
 from core.action_ensemble import compute_trend_stance, compute_composite_action  # noqa: E402
-from core.relative_high_tw import compute_relative_high_tw, relative_high_tw_meta, vol_pctile  # noqa: E402
+from core.relative_high_tw import (compute_relative_high_tw, relative_high_tw_meta,  # noqa: E402
+                                   vol_pctile, VOL_WINDOW)
 from core.relative_low_tw import compute_relative_low_tw, relative_low_tw_meta     # noqa: E402
 from service.ohlc_universal import (classify_symbol, fetch_ohlc,            # noqa: E402
                                     fetch_live_quote, live_quote_freshness, KIND_LABEL,
@@ -83,6 +84,7 @@ class UniversalMonitor:
         self.yahoo = info["yahoo"]
         self.kind_label = KIND_LABEL.get(info["kind"], info["kind"])
         self.is_tw = info["kind"] == "tw_stock"   # 台股有逃頂/抄底籌碼面板；美股僅通用軸
+        self.is_crypto = info["kind"] == "crypto"  # 幣對 24/7：今日日棒判定不能套美股收盤時段
         self._daily_cache = None
         self._daily_ts = 0.0
         self._chip = None           # 台股籌碼/估值（每小時隨日線刷新一次）
@@ -151,7 +153,11 @@ class UniversalMonitor:
             price_line = f"  現價          {_fmt_price(close)}   （日線收盤）"
         # 「最新日線」若恰逢今日進行式棒（Yahoo 盤中即時更新的今日 1d bar），數字會跟「現價」
         # 完全重複（同日同價，看起來像多餘），改顯示前一個已結算交易日收盤，兩者才各有意義。
-        if len(df) >= 2 and is_daily_bar_forming(df.index[-1].date(), self.is_tw):
+        # 最後一根是否為「今日進行式」：一處判定，日線行／量能分位／逃頂雷達共用
+        # （量能側若不排除這根，會拿只累積到當下的當日量去比歷史整日量，見 vol_pctile）
+        forming = len(df) >= 2 and is_daily_bar_forming(df.index[-1].date(), self.is_tw,
+                                                        is_crypto=self.is_crypto)
+        if forming:
             daily_date, daily_close = df.index[-2].date(), float(df.iloc[-2]["close"])
             daily_line = f"  前一交易日    {daily_date} 收 {_fmt_price(daily_close)}（{len(df)} 根）"
         else:
@@ -177,9 +183,13 @@ class UniversalMonitor:
             if self.is_tw and self._shares_out:
                 vol_line += f"（週轉率 {live_vol / self._shares_out * 100:.2f}%）"
             quote.append(vol_line)
-        pct = vol_pctile(df)
+        # 口徑：近 N 日均量在「個股自身歷史同口徑均量」的排名（midrank 分位），**不是**量比倍數；
+        # 盤中今日棒還沒累積完，均量只取已結算日（否則早盤把半天量拌進去，永遠顯示低分位）。
+        pct = vol_pctile(df, drop_last=forming)
         if pct is not None:
-            quote.append(f"  量能分位      個股自身 {pct * 100:.0f}分位（近期日均量比較）")
+            tail = "；今日未結算不計" if forming else ""
+            quote.append(f"  量能分位      近{VOL_WINDOW}日均量 {pct * 100:.0f}分位"
+                         f"（個股自身歷史{VOL_WINDOW}日均量排名{tail}）")
         # 時間序列動能（3/6/12M 報酬）— 參考訊號，未計入加權（待回測）
         quote += momentum_ref_rows(df)
         # 風控框架（ATR 停損 + 近 60 日支撐壓力風報比）— 支撐用近期低（股票無動態地板）
@@ -201,7 +211,7 @@ class UniversalMonitor:
         high = low = None               # E3 日誌快照用（fallback 分支無逃頂/抄底分數）
         ct_top = ct_low = ""
         if self.is_tw and self._chip is not None:
-            high = compute_relative_high_tw(row, df, chip=self._chip)
+            high = compute_relative_high_tw(row, df, chip=self._chip, forming_last=forming)
             low = compute_relative_low_tw(row, df, chip=self._chip)
             _, top_rows = _panel(high, relative_high_tw_meta, 100, "逃頂訊號（台股籌碼）",
                                  ("technical", "valuation", "volume", "leverage", "institution",

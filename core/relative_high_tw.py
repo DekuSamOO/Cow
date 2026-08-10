@@ -51,13 +51,34 @@ def _avg_vol(df) -> Optional[float]:
     return v if v > 0 else None
 
 
-def vol_pctile(df) -> Optional[float]:
-    """最新成交量在個股自身歷史的分位（0–1，midrank 處理 ties）。
+VOL_WINDOW = 5      # 量能維的均量視窗（交易日）；改此值＝改維度定義，須重跑 tw_volwindow_calib
+
+
+def vol_pctile(df, *, window: int = VOL_WINDOW, drop_last: bool = False) -> Optional[float]:
+    """近 `window` 日均量在個股自身歷史的分位（0–1，midrank 處理 ties）。
     自包含、零外部依賴（用 df 本身的 volume 歷史）→ 與 watcher live 自包含原則一致。
-    回測對應 scripts 的 per_stock_pctile（成交量 expanding 分位）。"""
-    if df is None or "volume" not in getattr(df, "columns", []) or len(df) < 60:
+    回測對應 scripts 的 per_stock_pctile（expanding 分位，無 look-ahead）。
+    比較母體是 df 歷史上**每一天的同口徑 N 日均量**（live 為近 2 年），故這是「量能水準的
+    歷史排名」，不是 `vol/MA20` 那種量比倍數。
+
+    window=5（2026-08-10 `scripts/tw_volwindow_calib.py` 拍板，2079 檔 / 446 萬列 / OOS≥2024）：
+    swing 逃頂 AUC 1日 0.648、3日 0.650、5日 0.648、10日 0.646、20日 0.638，抄底側全 ≤0.521
+    （無雙向混淆）。**5 日不是因為更準**（與現役單日判別力相同、差異在雜訊內），而是單日量
+    一根爆量就跳滿格、隔天縮回又掉光，判讀不穩；10/20 日開始稀釋掉見頂訊號。不取名目最高的
+    3 日：+0.002 是雜訊，挑峰值即過擬合。
+
+    drop_last=True：整根排除最後一根（連比較母體一起排除），均量改由前 `window` 個已結算日算。
+    供 live 呼叫端在**盤中**使用：Yahoo 日線最後一根在交易時段中是「今日進行式」，量只累積
+    到當下，混進均量會系統性偏低（早盤尤甚），而回測餵的一律是已結算 EOD 日量 → 盤中不排除
+    就等於 live 與回測口徑不一致。代價是量能維盤中整天不動，與台股籌碼/估值本就對齊 EOD
+    最後交易日的行為一致。"""
+    if df is None or "volume" not in getattr(df, "columns", []):
         return None
     v = df["volume"].dropna()
+    if drop_last:
+        v = v.iloc[:-1]
+    if window > 1:
+        v = v.rolling(window).mean().dropna()   # 母體＝歷史每一天的 N 日均量（同口徑才可比）
     if len(v) < 60:
         return None
     latest = float(v.iloc[-1])
@@ -110,19 +131,22 @@ def _score_valuation_high(valuation) -> dict:
             "sub": {"pe": pe, "pb": pb}}
 
 
-def _score_volume_high(row, df) -> dict:
-    """量能見頂（max 18，v0.3 新增最強新維）= 成交量處個股自身高分位（爆量見頂）。
-    swing 逃頂 AUC 0.648、跨 labeling 0.61–0.67、抄底側 0.49–0.51（不對稱，非移動幅度混淆）。"""
-    pct = _vol_pctile(df)
+def _score_volume_high(row, df, *, forming_last: bool = False) -> dict:
+    """量能見頂（max 18，v0.3 新增最強新維）= 近 `VOL_WINDOW` 日均量處個股自身高分位（爆量見頂）。
+    swing 逃頂 AUC 0.648、跨 labeling 0.61–0.67、抄底側 0.49–0.51（不對稱，非移動幅度混淆）；
+    均量視窗 5 日與單日判別力等價、判讀更穩（2026-08-10 校準，見 `vol_pctile`）。
+    forming_last=True（live 盤中）→ 排除未結算的今日棒，均量只用已結算日。"""
+    pct = _vol_pctile(df, drop_last=forming_last)
     if pct is None:
         return {"score": 0, "max": 18, "label": "量能 ⚪ 資料不足",
-                "note": "成交量個股自身分位（爆量見頂，AUC 0.648）", "sub": {}}
+                "note": f"{VOL_WINDOW}日均量個股自身分位（爆量見頂，AUC 0.648）", "sub": {}}
     if pct >= 0.95: s, l = 18, f"量能 🔴 爆量 {pct*100:.0f}分位（見頂）"
     elif pct >= 0.85: s, l = 12, f"量能 🟠 量增 {pct*100:.0f}分位"
     elif pct >= 0.70: s, l = 6, f"量能 🟡 偏高 {pct*100:.0f}分位"
     else: s, l = 0, f"量能 ⚪ {pct*100:.0f}分位（正常）"
-    return {"score": s, "max": 18, "label": l, "note": "成交量個股自身分位（爆量見頂，swing AUC 0.648）",
-            "sub": {"vol_pctile": pct}}
+    return {"score": s, "max": 18, "label": l,
+            "note": f"{VOL_WINDOW}日均量個股自身分位（爆量見頂，swing AUC 0.648）",
+            "sub": {"vol_pctile": pct, "vol_window": VOL_WINDOW, "forming_excluded": forming_last}}
 
 
 def _score_leverage_high(margin) -> dict:
@@ -171,17 +195,25 @@ def _score_tdcc_high(tdcc) -> dict:
             "sub": {"retail_pct": rp, "major_pct": tdcc.get("major_pct")}}
 
 
-def compute_relative_high_tw(row, df=None, *, chip=None) -> Tuple[int, Dict[str, dict]]:
-    """台股相對高點七維評分（0–100，clamp）。chip = service.tw_chip.get_chip_bundle 結果（可缺）。"""
+def compute_relative_high_tw(row, df=None, *, chip=None,
+                             forming_last: bool = False) -> Tuple[int, Dict[str, dict]]:
+    """台股相對高點七維評分（0–100，clamp）。chip = service.tw_chip.get_chip_bundle 結果（可缺）。
+
+    forming_last=True：df 最後一根是「今日進行式」日棒（live 盤中，見
+    `service.ohlc_universal.is_daily_bar_forming`）→ **兩個吃成交量的維度**（量能見頂、量價背離）
+    改以最後一根已結算日棒為準，不用只累積到當下的當日量去比歷史整日量（理由見 `vol_pctile`）。
+    價格類維度（技術衰竭）仍用進行式那根＝當下價，語意本就該即時。
+    回測/校準腳本餵的是 EOD 日線，維持預設 False（PiT 口徑不變）。"""
     chip = chip or {}
+    df_settled = df.iloc[:-1] if (forming_last and df is not None and len(df) >= 2) else df
     signals = {
         "technical": _score_technical_high(row, df),
         "valuation": _score_valuation_high(chip.get("valuation")),
-        "volume": _score_volume_high(row, df),
+        "volume": _score_volume_high(row, df, forming_last=forming_last),
         "leverage": _score_leverage_high(chip.get("margin")),
-        "institution": _score_institution_high(chip.get("institutional"), df),
+        "institution": _score_institution_high(chip.get("institutional"), df_settled),
         "tdcc": _score_tdcc_high(chip.get("tdcc")),
-        "vol_price": rescale_dim(score_volume_price_top(df), WEIGHTS_HIGH_TW["vol_price"]),
+        "vol_price": rescale_dim(score_volume_price_top(df_settled), WEIGHTS_HIGH_TW["vol_price"]),
     }
     score = max(0, min(100, int(sum(s["score"] for s in signals.values()))))
     return score, signals

@@ -127,6 +127,19 @@ def test_daily_bar_forming_us_weekend_false():
     assert is_daily_bar_forming(datetime.date(2026, 7, 4), False, now=now) is False
 
 
+def test_daily_bar_forming_crypto_247_ignores_us_session():
+    """幣對 24/7：美股已收盤（或週末）但最後一根＝UTC 今天 → 仍是進行式（量還在累積）。
+    不特判會套美股時段，每天有 17.5 小時把未結算的今日棒當成已結算。"""
+    now = datetime.datetime(2026, 7, 4, 22, 0)    # 週六深夜 UTC，美股沒開
+    assert is_daily_bar_forming(datetime.date(2026, 7, 4), False, now=now, is_crypto=True) is True
+
+
+def test_daily_bar_forming_crypto_yesterday_bar_settled():
+    """幣對最後一根＝UTC 昨天（已跨日結算）→ 非進行式。"""
+    now = datetime.datetime(2026, 7, 4, 0, 30)
+    assert is_daily_bar_forming(datetime.date(2026, 7, 3), False, now=now, is_crypto=True) is False
+
+
 # ---------------------------------------------------------------------------
 # resolve_live_volume
 # ---------------------------------------------------------------------------

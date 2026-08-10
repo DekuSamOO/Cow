@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 import pandas as pd
 import pytest
 
-from core.relative_high_tw import compute_relative_high_tw, relative_high_tw_meta
+from core.relative_high_tw import compute_relative_high_tw, relative_high_tw_meta, vol_pctile
 from core.relative_low_tw import compute_relative_low_tw, relative_low_tw_meta
 
 
@@ -43,8 +43,9 @@ def test_low_deep_value_and_chips():
     assert "低估" in relative_low_tw_meta(score)[0]
 
 
-def _df_vol_spike(n=60, base=1_000_000, last=10_000_000, rsi=82):
-    """60 根 df，最後一根爆量（量能分位≈99）→ 觸發 v0.3 量能見頂維。"""
+def _df_vol_spike(n=70, base=1_000_000, last=10_000_000, rsi=82):
+    """n 根 df，最後一根爆量（量能分位≈99）→ 觸發 v0.3 量能見頂維。
+    n 需 ≥64：量能維比的是 5 日均量（VOL_WINDOW），母體 rolling 後仍要 ≥60 個。"""
     vols = [base] * (n - 1) + [last]
     df = pd.DataFrame({"close": [100.0] * n, "volume": vols})
     row = pd.Series({"RSI_14": rsi, "close": 100.0})
@@ -73,7 +74,7 @@ def test_high_volume_pctile_dim():
     """量能見頂維：定值量→0.5 分位→0 分；末根爆量→高分位→滿分；歷史不足→灰燈 0。"""
     # 定值 volume（非爆量）→ midrank 0.5 → 0 分
     row, df = _df(volume=5_000_000, rsi=50)
-    df = pd.concat([df] * 2, ignore_index=True)   # 60 根定值
+    df = pd.concat([df] * 3, ignore_index=True)   # 90 根定值（rolling 5 後仍 ≥60）
     assert compute_relative_high_tw(row, df, chip=None)[1]["volume"]["score"] == 0
     # 末根爆量 → 滿分 18
     row2, df2 = _df_vol_spike(rsi=50)
@@ -81,6 +82,39 @@ def test_high_volume_pctile_dim():
     # 歷史 <60 根 → 資料不足灰燈 0
     row3, df3 = _df(volume=1_000_000, rsi=50)   # 30 根
     assert compute_relative_high_tw(row3, df3, chip=None)[1]["volume"]["score"] == 0
+
+
+def test_vol_window_smooths_single_day_spike():
+    """VOL_WINDOW=5 的採用理由（2026-08-10 tw_volwindow_calib 拍板）：判別力與單日等價，
+    但單日口徑「爆量隔天就掉光」，5 日均量還記得——判讀才不會一天一個樣。"""
+    vols = [1_000_000] * 70 + [10_000_000] + [1_000_000]   # 倒數第 2 根爆量，最後一根回normal
+    df = pd.DataFrame({"close": [100.0] * 72, "volume": vols})
+    assert vol_pctile(df, window=1) < 0.55        # 單日：爆量隔天分位掉回中位，訊號蒸發
+    assert vol_pctile(df, window=5) > 0.95        # 5日均量：爆量仍在窗內，維持高分位
+
+
+def test_vol_pctile_drop_last_excludes_forming_bar():
+    """盤中進行式日棒（量只累積到當下）不可進均量：drop_last 連比較母體一起排除該根。"""
+    df = pd.DataFrame({"close": [100.0] * 71,
+                       "volume": [1_000_000] * 70 + [50_000]})   # 末根＝早盤只成交 5% 日量
+    # 不排除：半根的量拌進 5 日均量 → 掉到最低分位（假訊號：看起來「量能極冷」）
+    assert vol_pctile(df) < 0.02
+    # 排除後＝前 5 個已結算日的均量（定值序列 midrank 0.5），與收盤後看到的數字一致
+    assert vol_pctile(df, drop_last=True) == 0.5
+    # 排除後母體不足 60 個均量 → 回 None（不硬湊）
+    assert vol_pctile(df.iloc[:64], drop_last=True) is None
+
+
+def test_high_volume_dim_ignores_forming_bar():
+    """live 盤中：量能見頂維的均量只取已結算日；爆量發生在未結算的今日棒時不提前計分。"""
+    row, df = _df_vol_spike(rsi=50)                    # 末根爆量（≥95 分位 → 18 分）
+    assert compute_relative_high_tw(row, df, chip=None)[1]["volume"]["score"] == 18
+    sig = compute_relative_high_tw(row, df, chip=None, forming_last=True)[1]["volume"]
+    assert sig["score"] == 0                           # 退回前 5 個已結算日定值量 → 0.5 分位
+    assert sig["sub"]["forming_excluded"] is True
+    assert sig["sub"]["vol_window"] == 5
+    # 回測/校準腳本不傳此參數 → 預設 False，PiT 口徑與既有回測一致
+    assert compute_relative_high_tw(row, df, chip=None)[1]["volume"]["sub"]["forming_excluded"] is False
 
 
 def test_weights_sum():
