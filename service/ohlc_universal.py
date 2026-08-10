@@ -214,18 +214,22 @@ def is_daily_bar_forming(last_bar_date, is_tw: bool, now=None, *, is_crypto: boo
     不特判會套到美股時段上：美股一收盤就把仍在累積的今日棒當成已結算（幣對每天有 17.5 小時
     落在此誤判區間），量能分位因此拿半天的量去比歷史整日量。
 
+    ⚠️ `is_tw` 與 `is_crypto` **互斥**（三選一的市場別用兩個 bool 編碼，`is_crypto` 優先）；
+    呼叫端一律由 `classify_symbol` 的 `kind` 衍生（`kind=="tw_stock"` / `kind=="crypto"`），
+    勿手工湊出 (True, True) 這種不存在的組合。同檔 `live_quote_freshness` 亦為 bool 慣例。
+
     now 供測試注入（語意同 `_is_tw_trading_hours`/`_is_us_trading_hours`：代表該市場當地
     此刻的 wall-clock datetime，幣對則為 UTC，呼叫端負責建構正確時區的值）。
     """
     import datetime
-    if is_crypto:
-        if now is None:
-            now = datetime.datetime.now(datetime.timezone.utc)
-        return last_bar_date == now.date()
     if now is None:
-        from zoneinfo import ZoneInfo
-        now = datetime.datetime.now(ZoneInfo("Asia/Taipei" if is_tw else "America/New_York"))
-    trading_now = _is_tw_trading_hours(now) if is_tw else _is_us_trading_hours(now)
+        if is_crypto:
+            now = datetime.datetime.now(datetime.timezone.utc)
+        else:
+            from zoneinfo import ZoneInfo
+            now = datetime.datetime.now(ZoneInfo("Asia/Taipei" if is_tw else "America/New_York"))
+    # 幣對 24/7 → 條件 (a) 恆真，只剩「最後一根＝今天（UTC）」要判
+    trading_now = is_crypto or (_is_tw_trading_hours(now) if is_tw else _is_us_trading_hours(now))
     return trading_now and last_bar_date == now.date()
 
 

@@ -23,10 +23,10 @@ core/relative_low_tw.py  ·  v0.4（2026-07-02 疊加新維回測拍板 + 反指
 PE/PB 用絕對值（與逃頂一致）。〔弱/雜訊〕維度＝已回測 AUC<0.55、給低權、判讀僅參考。
 台股底部與加密非對稱：加密底部靠長週期估值，台股底部靠「融資斷頭清洗」。
 """
-from typing import Optional, Dict, Tuple
+from typing import Dict, Tuple
 
 from core.divergence import detect_bottom_divergence_combo
-from core.relative_universal import rescale_dim, _nan, low_meta_ladder
+from core.relative_universal import rescale_dim, _nan, low_meta_ladder, avg_vol as _avg_vol
 
 WEIGHTS_LOW_TW = {
     "leverage": 40, "technical": 30, "institution": 20, "valuation": 10,
@@ -36,13 +36,6 @@ WEAK_DIMS_LOW_TW = ("institution", "valuation")
 # 已無「未擬合」維：vol_price/structure 抄底 2026-07-02 回測皆近雜訊(0.500/0.516) 已移除；
 # tdcc 大戶抄底 AUC 0.422（方向反、比亂猜差）已移除，其 15 分權重重配給最強兩維（見 docstring）。
 UNFITTED_DIMS_LOW_TW = ()
-
-
-def _avg_vol(df) -> Optional[float]:
-    if df is None or "volume" not in getattr(df, "columns", []) or len(df) < 5:
-        return None
-    v = float(df["volume"].tail(20).mean())
-    return v if v > 0 else None
 
 
 def _score_leverage_low(margin) -> dict:

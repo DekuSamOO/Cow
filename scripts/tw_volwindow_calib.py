@@ -6,59 +6,51 @@ scripts/tw_volwindow_calib.py  ·  量能見頂維「幾日均量」視窗校準
 部分量。本腳本用既有 `tw_variant_panel.parquet` 面板，比較「N 日均量分位」
 N∈{1,3,5,10,20} 的 swing 逃頂判別力，由資料決定 N（N=1 即現役，作對照）。
 
-方法沿用 `tw_variant_backtest.py`（刻意不改，結果才與 v0.5 拍板數字可比）：
+方法沿用 `tw_variant_backtest.py`（刻意不改，結果才與 v0.5 拍板數字可比）——面板路徑／
+split／反向門檻／swing 窗**直接 import 該檔常數**，不複製字面值，避免日後單邊改動後
+兩支腳本靜默失去可比性：
   ±10 日 centered swing 窗標高/低點、其後 60 日反向 ≥18% 為真、時序 split 2024 只報 test。
   分位定義同 `tw_dim_backtest.per_stock_pctile`（個股 expanding、含當日、無 look-ahead），
-  但改 bisect 增量實作（446 萬列 × 5 變體用 expanding.apply 跑不完），上線前先與原版
-  逐列比對驗證一致（--verify-only 可單獨跑驗證）。
+  但改 pandas 原生 `expanding().rank()`（C 實作）取代原版的 `expanding.apply` Python
+  callback（446 萬列 × 5 變體用 apply 跑不完），上線前先與原版逐列比對驗證一致
+  （--verify-only 可單獨跑驗證）。
 
 雙向混淆測試（CONSTITUTION 10）：同時報抄底側 AUC。若兩側都 >0.55，代表該變體抓的是
 「接下來會大動」而非方向，不可當逃頂維採用（券資比/波動率分位即因此被否決）。
 """
 import os
 import sys
-from bisect import insort, bisect_right
 
-import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from tw_dim_backtest import auc, per_stock_pctile  # noqa: E402
+from tw_dim_backtest import auc, per_stock_pctile                    # noqa: E402
+from tw_variant_backtest import _PANEL, _SPLIT, _REV, _W             # noqa: E402
 
-_PANEL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "tw_variant_panel.parquet")
-_SPLIT = "2024-01-01"
-_REV = 0.18
-_W = 10
 _MINP = 60
 _WINDOWS = (1, 3, 5, 10, 20)
 
 
-def expanding_pctile_fast(s: pd.Series, min_periods: int = _MINP) -> pd.Series:
-    """個股 expanding 分位的增量實作：count(歷史值 ≤ 當日值)/n，含當日、無 look-ahead。
-    語意等同 `tw_dim_backtest.per_stock_pctile` 的 `(w.iloc[-1] >= w).mean()`，
-    但 O(n log n) 而非 O(n²)（NaN 不入母體，原版會讓 NaN 稀釋分母，故僅在無 NaN 欄等價）。"""
-    vals = s.to_numpy(dtype=float)
-    out = np.full(len(vals), np.nan)
-    buf: list = []
-    for i, v in enumerate(vals):
-        if v != v:                      # NaN
-            continue
-        insort(buf, v)
-        if len(buf) >= min_periods:
-            out[i] = bisect_right(buf, v) / len(buf)
-    return pd.Series(out, index=s.index)
+def expanding_pctile(s: pd.Series, min_periods: int = _MINP) -> pd.Series:
+    """個股 expanding 分位：count(歷史值 ≤ 當日值)/n，含當日、無 look-ahead。
+    語意等同 `tw_dim_backtest.per_stock_pctile` 的 `(w.iloc[-1] >= w).mean()`——`method="max"`
+    即「≤ 當日值的筆數」、`pct=True` 除以窗內非 NaN 筆數。
+    NaN 不入母體（rank 跳過），原版 apply 則讓 NaN 稀釋分母，故僅在無 NaN 欄兩者等價；
+    `_verify` 比對的 `Volume` 欄無 NaN，正是等價區間。"""
+    return s.expanding(min_periods=min_periods).rank(method="max", pct=True)
 
 
 def _verify(df: pd.DataFrame) -> None:
-    """對隨機幾檔股票逐列比對 fast vs 原版 expanding.apply（無 NaN 欄應完全一致）。"""
+    """對排序後前三檔（固定、可重現）逐列比對本檔實作 vs 原版 expanding.apply。
+    比對 `Volume`（無 NaN 欄）→ 兩者應完全一致（見 `expanding_pctile` 的 NaN 說明）。"""
     ids = sorted(df["Stock_ID"].unique())[:3]
     for sid in ids:
-        sub = df[df["Stock_ID"] == sid].head(600).copy()
+        sub = df[df["Stock_ID"] == sid].head(600)
         ref = per_stock_pctile(sub, "Volume")
-        got = expanding_pctile_fast(sub["Volume"])
+        got = expanding_pctile(sub["Volume"])
         m = ref.notna() | got.notna()
         diff = float((ref[m].fillna(-1) - got[m].fillna(-1)).abs().max())
-        print(f"[VW] verify {sid}: n={int(m.sum())} 列，max|fast-ref|={diff:.2e} "
+        print(f"[VW] verify {sid}: n={int(m.sum())} 列，max|native-ref|={diff:.2e} "
               f"→ {'一致' if diff < 1e-12 else '⚠ 不一致'}")
 
 
@@ -75,16 +67,14 @@ def main():
     if "--verify-only" in sys.argv:
         return
 
-    g = df.groupby("Stock_ID", sort=False)
-    cols = []
+    # 均量分位：groupby 只建一次（446 萬列 factorize 每次約 0.14s），中間的 N 日均量不落欄
+    # （4 欄 float64 約 143MB，算完分位就沒人再讀）。
+    g_vol = df.groupby("Stock_ID", sort=False)["Volume"]
     for n in _WINDOWS:
-        src = "Volume" if n == 1 else f"vol_ma{n}"
-        if n > 1:
-            df[src] = g["Volume"].transform(lambda s, n=n: s.rolling(n, min_periods=n).mean())
-        col = f"volpct{n}"
         print(f"[VW] 算 {n} 日均量分位…", flush=True)
-        df[col] = df.groupby("Stock_ID", sort=False)[src].transform(expanding_pctile_fast)
-        cols.append((n, col))
+        ma = (df["Volume"] if n == 1 else
+              g_vol.transform(lambda s, n=n: s.rolling(n, min_periods=n).mean()))
+        df[f"volpct{n}"] = ma.groupby(df["Stock_ID"], sort=False).transform(expanding_pctile)
 
     # swing 標註（與 tw_variant_backtest 同：±10 日 centered 窗）
     gp = df.groupby("Stock_ID", sort=False)["price"]
@@ -104,7 +94,8 @@ def main():
 
     print("══ 量能分位視窗掃描（swing-only, out-of-sample ≥2024）══")
     print(f"  {'視窗':<12}{'逃頂AUC':>9}{'抄底AUC':>9}{'真頂':>8}{'假頂':>8}  判讀")
-    for n, col in cols:
+    for n in _WINDOWS:
+        col = f"volpct{n}"
         a_hi, n1_hi, n0_hi = auc(highs[col], highs["real"], True)    # 量能高分 → 其後大跌
         a_lo, _, _ = auc(lows[col], lows["real"], True)              # 同方向套抄底側（混淆測試）
         name = "1日（現役）" if n == 1 else f"{n}日均量"

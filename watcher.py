@@ -189,7 +189,7 @@ class UniversalMonitor:
         if pct is not None:
             tail = "；今日未結算不計" if forming else ""
             quote.append(f"  量能分位      近{VOL_WINDOW}日均量 {pct * 100:.0f}分位"
-                         f"（個股自身歷史{VOL_WINDOW}日均量排名{tail}）")
+                         f"（個股自身歷史同口徑排名{tail}）")
         # 時間序列動能（3/6/12M 報酬）— 參考訊號，未計入加權（待回測）
         quote += momentum_ref_rows(df)
         # 風控框架（ATR 停損 + 近 60 日支撐壓力風報比）— 支撐用近期低（股票無動態地板）

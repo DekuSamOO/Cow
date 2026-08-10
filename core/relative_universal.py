@@ -60,6 +60,16 @@ def low_meta_ladder(score: int, top_action: str) -> Tuple[str, str, str]:
     return "🔴 無底部訊號", "#ff4b4b", "無低估壓力，勿接刀"
 
 
+def avg_vol(df, window: int = 20) -> Optional[float]:
+    """近 `window` 日均量（<5 根或均量非正回 None）。台股逃頂/抄底的「法人買賣超/均量」
+    正規化分母共用此式——原本 high/low 各存一份逐字相同的拷貝，改一邊漏一邊會讓同一次
+    render 的兩張面板用不同分母，故收斂到這裡當單一來源。"""
+    if df is None or "volume" not in getattr(df, "columns", []) or len(df) < 5:
+        return None
+    v = float(df["volume"].tail(window).mean())
+    return v if v > 0 else None
+
+
 def _vol_ratio(df: pd.DataFrame, short: int, long: int) -> Optional[float]:
     """近 short 日均量 / 近 long 日均量。資料不足或均量為 0 回 None。"""
     if df is None or "volume" not in getattr(df, "columns", []) or len(df) < long:

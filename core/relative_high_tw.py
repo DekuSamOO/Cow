@@ -7,7 +7,7 @@ core/relative_high_tw.py  ·  v0.5（2026-07-02 疊加新維回測拍板）
 `compute_relative_high_tw` 仍 clamp 到 100）：
   技術衰竭 30（頂背離 + RSI 超買）        ← 複用 core/divergence（與加密同源、已驗證）
   估值過高 30（PE/PB 絕對值高）          ← ✅ 最強維（swing 逃頂 AUC PE 0.626/PB 0.640）
-  量能見頂 18（成交量處個股自身高分位）    ← ✅ v0.3 新增（swing 逃頂 AUC 0.648，跨 labeling 穩健、抄底側中性）
+  量能見頂 18（近 5 日均量處個股自身高分位）← ✅ v0.3 新增（swing 逃頂 AUC 0.648，跨 labeling 穩健、抄底側中性）
   槓桿過熱 10（融資增速高＝散戶追高）      ← 〔弱〕swing AUC 0.538
   法人派發  4（三大法人賣超）            ← 〔弱/雜訊〕swing AUC 0.519 → 降權
   籌碼鬆動  8（TDCC 散戶持股比高）       ← 〔弱・樣本薄 2023-09起〕swing AUC 0.538
@@ -22,6 +22,9 @@ core/relative_high_tw.py  ·  v0.5（2026-07-02 疊加新維回測拍板）
             2080 檔、out-of-sample≥2024）：量價背離逃頂 **AUC 0.566>0.55** → 轉正式權重
             5→8（與弱維 leverage/散戶 同級疊加）；結構轉折逃頂 **AUC 0.483（雜訊/微反）→ 移除**
             （不再計分；純函數仍在 relative_universal 供美股框架用）。核心六維內部分級不動。
+  v0.5→v0.5.1：**2026-08-10 均量視窗校準**（`scripts/tw_volwindow_calib.py`）量能維由單日量
+            改吃 `VOL_WINDOW`=5 日均量（判別力等價、判讀更穩，見 `vol_pctile`）；並新增
+            `forming_last` 供 live 盤中排除未結算今日棒。**配重與分級門檻不動。**
 PE/PB **用絕對值非分位**（swing 重測：絕對 PE 0.626 大勝個股分位 0.452/0.452，且分位多次反向 <0.5）。
 量能維用**個股自身分位**（爆量見頂）非絕對量（跨股不可比）；P4 驗證其逃頂 0.61–0.67、抄底 0.49–0.51 不對稱
 → 非「會大動」的移動幅度混淆（券資比/波動率分位即因雙向皆 >0.55 被否決）。
@@ -31,7 +34,7 @@ from typing import Optional, Dict, Tuple
 
 from core.divergence import detect_top_divergence_combo
 from core.relative_universal import (score_volume_price_top, rescale_dim,
-                                     _nan, high_meta_ladder)
+                                     _nan, high_meta_ladder, avg_vol as _avg_vol)
 
 WEIGHTS_HIGH_TW = {
     "technical": 30, "valuation": 30, "volume": 18, "leverage": 10, "institution": 4, "tdcc": 8,
@@ -42,16 +45,9 @@ WEAK_DIMS_HIGH_TW = ("leverage", "institution", "tdcc")
 # 已無「未擬合」維：vol_price 逃頂 2026-07-02 回測 AUC 0.566（>0.55）轉正式權重（見 docstring）；
 # structure 逃頂 AUC 0.483（雜訊/微反）已移除，不再計分。
 UNFITTED_DIMS_HIGH_TW = ()
-
-
-def _avg_vol(df) -> Optional[float]:
-    if df is None or "volume" not in getattr(df, "columns", []) or len(df) < 5:
-        return None
-    v = float(df["volume"].tail(20).mean())
-    return v if v > 0 else None
-
-
-VOL_WINDOW = 5      # 量能維的均量視窗（交易日）；改此值＝改維度定義，須重跑 tw_volwindow_calib
+# 量能維的均量視窗（交易日）；改此值＝改維度定義，須重跑 scripts/tw_volwindow_calib.py
+VOL_WINDOW = 5
+_VOL_NOTE = f"{VOL_WINDOW}日均量個股自身分位（爆量見頂，swing AUC 0.648）"
 
 
 def vol_pctile(df, *, window: int = VOL_WINDOW, drop_last: bool = False) -> Optional[float]:
@@ -131,21 +127,19 @@ def _score_valuation_high(valuation) -> dict:
             "sub": {"pe": pe, "pb": pb}}
 
 
-def _score_volume_high(row, df, *, forming_last: bool = False) -> dict:
+def _score_volume_high(df, *, forming_last: bool = False) -> dict:
     """量能見頂（max 18，v0.3 新增最強新維）= 近 `VOL_WINDOW` 日均量處個股自身高分位（爆量見頂）。
     swing 逃頂 AUC 0.648、跨 labeling 0.61–0.67、抄底側 0.49–0.51（不對稱，非移動幅度混淆）；
     均量視窗 5 日與單日判別力等價、判讀更穩（2026-08-10 校準，見 `vol_pctile`）。
     forming_last=True（live 盤中）→ 排除未結算的今日棒，均量只用已結算日。"""
-    pct = _vol_pctile(df, drop_last=forming_last)
+    pct = vol_pctile(df, drop_last=forming_last)
     if pct is None:
-        return {"score": 0, "max": 18, "label": "量能 ⚪ 資料不足",
-                "note": f"{VOL_WINDOW}日均量個股自身分位（爆量見頂，AUC 0.648）", "sub": {}}
+        return {"score": 0, "max": 18, "label": "量能 ⚪ 資料不足", "note": _VOL_NOTE, "sub": {}}
     if pct >= 0.95: s, l = 18, f"量能 🔴 爆量 {pct*100:.0f}分位（見頂）"
     elif pct >= 0.85: s, l = 12, f"量能 🟠 量增 {pct*100:.0f}分位"
     elif pct >= 0.70: s, l = 6, f"量能 🟡 偏高 {pct*100:.0f}分位"
     else: s, l = 0, f"量能 ⚪ {pct*100:.0f}分位（正常）"
-    return {"score": s, "max": 18, "label": l,
-            "note": f"{VOL_WINDOW}日均量個股自身分位（爆量見頂，swing AUC 0.648）",
+    return {"score": s, "max": 18, "label": l, "note": _VOL_NOTE,
             "sub": {"vol_pctile": pct, "vol_window": VOL_WINDOW, "forming_excluded": forming_last}}
 
 
@@ -200,8 +194,9 @@ def compute_relative_high_tw(row, df=None, *, chip=None,
     """台股相對高點七維評分（0–100，clamp）。chip = service.tw_chip.get_chip_bundle 結果（可缺）。
 
     forming_last=True：df 最後一根是「今日進行式」日棒（live 盤中，見
-    `service.ohlc_universal.is_daily_bar_forming`）→ **兩個吃成交量的維度**（量能見頂、量價背離）
-    改以最後一根已結算日棒為準，不用只累積到當下的當日量去比歷史整日量（理由見 `vol_pctile`）。
+    `service.ohlc_universal.is_daily_bar_forming`）→ **三個吃成交量的維度**（量能見頂、量價背離、
+    法人派發的均量分母）改以最後一根已結算日棒為準，不用只累積到當下的當日量去比歷史整日量
+    （理由見 `vol_pctile`）。改動時三個都要顧：漏掉 institution 會讓法人賣超/均量的分母偏小。
     價格類維度（技術衰竭）仍用進行式那根＝當下價，語意本就該即時。
     回測/校準腳本餵的是 EOD 日線，維持預設 False（PiT 口徑不變）。"""
     chip = chip or {}
@@ -209,7 +204,7 @@ def compute_relative_high_tw(row, df=None, *, chip=None,
     signals = {
         "technical": _score_technical_high(row, df),
         "valuation": _score_valuation_high(chip.get("valuation")),
-        "volume": _score_volume_high(row, df, forming_last=forming_last),
+        "volume": _score_volume_high(df, forming_last=forming_last),
         "leverage": _score_leverage_high(chip.get("margin")),
         "institution": _score_institution_high(chip.get("institutional"), df_settled),
         "tdcc": _score_tdcc_high(chip.get("tdcc")),

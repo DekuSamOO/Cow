@@ -48,7 +48,7 @@ core/
   miner_cost.py       礦工成本純數學模型（btc_per_day 依減半切換、eff_jth 分段插值、電費盈虧/all-in 成本，無 IO 依賴）
   gemini_client.py    Gemini REST API 輕量封裝（關閉 thinking budget 省 token、x-goog-api-key header，供新聞中文化）
   divergence.py       價格 vs 動能（RSI/MACD）頂/底背離偵測（純 pandas/numpy，無 Streamlit 依賴；detect_top/bottom_divergence_combo 供逃頂與抄底雷達共用）；新增 `detect_swing_structure`（複用既有 `_local_extrema` 樞紐掃描，判斷 HH_HL/LH_LL/mixed 波段結構，供 relative_universal 結構轉折維度使用）
-  relative_universal.py 通用逃頂/抄底子訊號單一真實來源（純 OHLCV，零網路請求，不依賴任何市場專屬籌碼資料）：`score_volume_price_top/bottom`（量增價縮＝出貨／量縮價增＝賣壓竭盡）+ `score_structure_top/bottom`（複用 divergence.detect_swing_structure 判斷前高未過/前低未破）+ `rescale_dim`（子維分數按比例縮放到新配額，供疊加進其他框架）+ `high_meta_ladder`/`low_meta_ladder`（逃頂/抄底 5 級門檻階梯，TW/US 共用）。台股（relative_high_tw/low_tw）、美股（relative_high_us/low_us）皆共用此模組，避免各市場各寫一份重複邏輯。全數規則式、尚未回測校準。
+  relative_universal.py 通用逃頂/抄底子訊號單一真實來源（純 OHLCV，零網路請求，不依賴任何市場專屬籌碼資料）：`score_volume_price_top/bottom`（量增價縮＝出貨／量縮價增＝賣壓竭盡）+ `score_structure_top/bottom`（複用 divergence.detect_swing_structure 判斷前高未過/前低未破）+ `rescale_dim`（子維分數按比例縮放到新配額，供疊加進其他框架）+ `high_meta_ladder`/`low_meta_ladder`（逃頂/抄底 5 級門檻階梯，TW/US 共用）+ `avg_vol`（近 N 日均量，台股逃頂/抄底「法人買賣超÷均量」正規化的共用分母；2026-08-10 自 relative_high_tw/relative_low_tw 兩份逐字拷貝收斂而來，避免改一邊漏一邊讓同一次 render 的兩張面板用不同分母）。台股（relative_high_tw/low_tw）、美股（relative_high_us/low_us）皆共用此模組，避免各市場各寫一份重複邏輯。全數規則式、尚未回測校準。
   relative_high.py    相對高點（逃頂雷達）單一真實來源：Layer A 五維逃頂評分(0-100，合約/技術/鏈上/情緒/總經) + Layer B 長週期大頂 + 高點價位錨；常數 WEIGHTS/FUNDING_ANN_YELLOW(過熱起點 30%)/FUNDING_ANN_RED(滿分線 50%，2026-06 以幣安資費史回歸重校) 供 BTC_WATCH path import，無 Streamlit 依賴
   relative_low.py     相對底部（抄底雷達）單一真實來源：六維抄底評分(0-100，長週期深跌25/合約超冷20/技術回穩20/情緒恐慌15/鏈上10/總經10，權重經 relative_low_backtest 拍板)；compute_relative_low_score/relative_low_meta 供 BTC_WATCH path import，無 Streamlit 依賴
   trend_direction.py  趨勢方向（波段雷達第三軸）單一真實來源：四維**有號**評分（均線結構±40/MACD±30/斜率±15/ADX±15）→ 淨分 [-100,+100]，ADX<20 方向三維打 0.6 折防盤整假突破；compute_trend_score/trend_meta/compute_trend_direction 供 dashboard/BTC_WATCH/LINE 共用，無 Streamlit 依賴
@@ -404,13 +404,24 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
   的現役數字，交叉驗證口徑一致）／3日 0.650／5日 0.648／10日 0.646／20日 0.638，抄底側全
   ≤0.521 無雙向混淆。→ `VOL_WINDOW=5` 拍板：**與單日判別力等價但判讀更穩**（單日一根爆量即
   跳滿格、隔天掉光），不取名目最高的 3 日（+0.002 屬雜訊，挑峰值即過擬合）。
-  分位增量實作（bisect，O(n log n)）已對隨機 3 檔逐列比對原版 `expanding.apply`，max diff 0。
+  分位改用 pandas 原生 `expanding().rank(method="max", pct=True)`（取代原版 `expanding.apply`
+  的 Python callback），已對排序後前 3 檔逐列比對原版，max diff **0.00e+00**；面板常數
+  （路徑/split/反向門檻/swing 窗）直接 import `tw_variant_backtest`，不複製字面值。
 - **test**: 新增 6 項（均量視窗平滑單日爆量、drop_last 三情境、盤中不提前計分、幣對 24/7
   forming 兩例）；`pytest tests/core tests/test_ohlc_universal.py tests/test_watcher_stability.py
   tests/test_signal_parity.py -q` → **239 passed**。
 - **verify**: `scripts/tw_position_calib.py` 以新舊定義各重跑一次（194 檔／75,352 樣本、同樣本）
   確認維度定義變更未翻轉既有結論：桶級 pos_mid vs fwd60_mean 等級相關 IS −0.29→−0.27、
   OOS +0.27→+0.30（差異雜訊級）→ 倉位建議的**「未擬合（專家設定）」標籤維持不變**。
+- **refactor**: 上述改動的品質收尾（**零行為變更**，四角度審查後套用）——`_avg_vol` 自
+  relative_high_tw/relative_low_tw 兩份逐字拷貝收斂進 `relative_universal.avg_vol`；
+  `_score_volume_high` 移除從未使用的 `row` 參數；量能維 note 抽 `_VOL_NOTE` 單一來源、
+  `VOL_WINDOW` 移到檔頭常數區；`is_daily_bar_forming` 幣對分支併回單一出口（`is_crypto`
+  即「條件 (a) 恆真」）並註明 `is_tw`/`is_crypto` **互斥**；`compute_relative_high_tw`
+  docstring 更正為**三個**吃量維度（原寫兩個，漏記 institution 的均量分母）。
+  校準腳本 AUC 表重跑重現（1日 0.648／3日 0.650／5日 0.648／10日 0.646／20日 0.638），
+  全套件 `pytest tests/ -q` → **379 passed, 2 failed**（既有紅燈：`test_market_data.py`
+  兩支 yfinance 受公司 IP 429 限流，未 import 本次任何模組）。
 
 ### v3.34 (2026-07-07)
 稽核批 4 收官（C-16/C-17/C-18/C-19）＋ S-1 生產環境修復。
