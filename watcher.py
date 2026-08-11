@@ -46,7 +46,7 @@ from core.risk import atr_risk_rows as _atr_risk_rows                    # noqa:
 from core.term_ui import (_title, _row, _edge, _dw, _bar, _bar_signed,   # noqa: E402
                           _panel, _short_momentum, _panel_trend, _panel_stance,
                           interruptible_wait, _pair_lines, _wrap_display,
-                          _panel_block, _MIN_COL_W, _print_with_kline)
+                          _panel_block, _MIN_COL_W, _print_with_kline, kline_mas_for)
 from BTC_WATCH import BitcoinMonitor                                     # noqa: E402
 
 
@@ -77,6 +77,12 @@ class UniversalMonitor:
     DAILY_REFRESH_SEC = 3600    # 日線重抓+重算間隔（日 K 不會分鐘級變動，比照 BitcoinMonitor）
     RETRY_REFRESH_SEC = 300     # 日線刷新失敗（有快取沿用時）下次重試間隔
     MAX_TRANSIENT_FAILS = 3     # 連續暫時性失敗達此次數 → 自動回代號選單（不無限重試）
+    BG_QUOTE_SEC = 300          # 背景標的（watch_plan 其餘代號）觸價巡檢間隔
+    BG_QUOTE_MAX = 8            # 每輪巡檢的背景標的上限
+    # 為何背景要獨立節流：原本每 60s 主迴圈都把背景標的全掃一遍 → 本標的現價 1 發 +
+    # 背景 8 發 = 9 req/min ≈ 540 req/hr，這 repo 有 Yahoo 429 限流前例（見
+    # service/ohlc_universal 檔頭）。背景是「盯一檔不漏他檔」的兜底，不需要 60 秒粒度；
+    # 改 300s 後降到約 2.6 req/min。代價是背景觸價最多晚 5 分鐘通知（本標的仍是 60s）。
 
     def __init__(self, info: dict):
         self.info = info            # {kind, display, yahoo, is_btc}
@@ -88,6 +94,8 @@ class UniversalMonitor:
         self._daily_cache = None
         self._daily_ts = 0.0
         self._chip = None           # 台股籌碼/估值（每小時隨日線刷新一次）
+        self._chip_err = None       # 最近一次籌碼刷新的失敗原因（成功即清；見 _refresh_chip）
+        self._bg_ts = 0.0           # 背景標的觸價巡檢的上次執行時刻（見 BG_QUOTE_SEC）
         self._shares_out = None     # 台股已發行股數（週轉率用；tw_chip 內部已日快取，這裡存最近一次結果）
         self._last_live_vol = None       # 即時成交量快取（Yahoo 該欄位偶爾單次缺漏，見 render 說明）
         self._last_live_vol_ts = 0.0
@@ -115,11 +123,51 @@ class UniversalMonitor:
                 self._daily_cache = df
                 self._daily_ts = time.time()
                 if self.is_tw:
-                    # 籌碼/估值對齊最新日線日期（TWSE 全量檔為 EOD，盤中用最後交易日）
-                    from service.tw_chip import get_chip_bundle, get_shares_outstanding
-                    self._chip = get_chip_bundle(self.display, df.index[-1].strftime("%Y%m%d"))
-                    self._shares_out = get_shares_outstanding(self.display)
+                    self._refresh_chip(df)
         return self._daily_cache
+
+    def _refresh_chip(self, df):
+        """台股籌碼/估值刷新（對齊最新日線日期；TWSE 全量檔為 EOD，盤中用最後交易日）。
+
+        **例外一律吸收**：此處原本沒有 try/except，TWSE/TPEx 一有連線問題就會把例外
+        丟出 `_fetch` → `run()` 當成「擷取失敗」走 transient 重試分支（整頁換成錯誤訊息、
+        等 10 秒、fails+1），但那時**價格/趨勢/量能/K 線全都是好的**，只是籌碼那一塊拿不到。
+        2026-08-11 以模擬 TWSE 逾時實測確認此路徑。
+        改為：保留上一輪 `_chip`（TWSE 是 EOD 檔，舊一天仍是真資料，畫面的
+        `籌碼資料截至 as_of` 會如實顯示是哪天），只記錯誤讓說明欄標註；下次日線刷新自動再試。"""
+        from service.tw_chip import get_chip_bundle, get_shares_outstanding
+        try:
+            self._chip = get_chip_bundle(self.display, df.index[-1].strftime("%Y%m%d"))
+            self._shares_out = get_shares_outstanding(self.display)
+            self._chip_err = None
+        except Exception as e:      # noqa: BLE001 — 籌碼源故障不得中斷監控（見 docstring）
+            self._chip_err = str(e)[:70]
+
+    def _background_events(self, sym_key, plans_all):
+        """watch_plan 其餘標的的觸價巡檢（盯一檔不漏他檔）→ 事件列表。
+
+        每 `BG_QUOTE_SEC` 才跑一輪、上限 `BG_QUOTE_MAX` 檔（限流理由見類別常數註解）；
+        未屆期直接回 []（零網路請求）。**先剔本標的再取上限**，實際發數恆為 BG_QUOTE_MAX
+        ——原本是先 `[:9]` 後 skip 本標的，本標的不在計畫內時會多打一發，與註解宣稱的
+        「上限 8 檔」對不上。
+        自成一個方法而非埋在 render 裡：render 要真實日線+終端機才跑得動，節流與上限
+        這兩件事得能單獨驗（否則只能在測試裡複製一份迴圈，那等於驗自己寫的副本）。"""
+        if time.time() - self._bg_ts < self.BG_QUOTE_SEC:
+            return []
+        self._bg_ts = time.time()
+        events = []
+        for sym, p in [(s, p) for s, p in plans_all.items() if s != sym_key][:self.BG_QUOTE_MAX]:
+            try:
+                q = fetch_live_quote(classify_symbol(sym)["yahoo"])
+            except ValueError:
+                continue
+            if not q.get("price"):
+                continue
+            st_bg = self._alert_state.get(sym, {})
+            evs, st_bg = check_price_events(p, q["price"], st_bg)
+            self._alert_state[sym] = st_bg
+            events += [dict(e, msg=e["msg"] + "〔背景標的〕") for e in evs]
+        return events
 
     def render(self, df):
         os.system("cls" if os.name == "nt" else "clear")
@@ -239,6 +287,9 @@ class UniversalMonitor:
                     "     AUC~0.63)+量能見頂(0.648)+量價背離(0.566 已轉正式)；抄底靠融資清洗(0.564)。",
                     "     已移除：抄底大戶(AUC 0.422 方向反)、抄底量價/結構(0.50/0.52 雜訊)、逃頂結構(0.483)。",
                     "     法人為弱維(AUC<0.55) 僅參考。"]
+            if self._chip_err:
+                # 籌碼源本輪失敗但手上有舊 EOD 檔 → 續用並如實標註（上方 as_of 就是它的日期）
+                note.insert(1, f"  ⚠ 本輪籌碼刷新失敗（{self._chip_err}），沿用上表日期資料；下次日線刷新自動再試")
         else:
             # C1（2026-07-04 拍板，2026-07-06 落地）：美股/其他非台股標的的逃頂/抄底通用軸
             # 面板已撤下（曾以 relative_high_us/relative_low_us 純 OHLCV 實作，2026-07-02
@@ -248,7 +299,8 @@ class UniversalMonitor:
                 "操作", f"{act['emoji']} {act['action']}", act["detail"])
             ct_comp = f"操作  {act['emoji']} {act['action']}"
             if self.is_tw:
-                note = ["  ⚠ 台股籌碼資料尚未就緒 → 暫僅通用軸（趨勢方向＋技術＋短線動能）。"]
+                why = f"（{self._chip_err}）" if self._chip_err else ""
+                note = [f"  ⚠ 台股籌碼資料尚未就緒{why} → 暫僅通用軸（趨勢方向＋技術＋短線動能）。"]
             else:
                 note = ["  ⚠ 美股/其他標的無籌碼/估值免費源 → 僅通用軸（趨勢方向＋技術＋短線動能）。",
                         "     股票版逃頂/抄底（融資融券/法人/期權IV）列為後續 Phase。"]
@@ -264,21 +316,8 @@ class UniversalMonitor:
                                           (act or {}).get("action"), st_sym)
         events += evs
         self._alert_state[sym_key] = st_sym
-        # 背景標的：每輪各打一發輕量報價（60s 一輪、上限 8 檔，勿撞 Yahoo 限流）
         plans_all, _ = load_plans_cached()
-        for sym, p in list(plans_all.items())[:9]:
-            if sym == sym_key:
-                continue
-            try:
-                q = fetch_live_quote(classify_symbol(sym)["yahoo"])
-            except ValueError:
-                continue
-            if not q.get("price"):
-                continue
-            st_bg = self._alert_state.get(sym, {})
-            evs, st_bg = check_price_events(p, q["price"], st_bg)
-            self._alert_state[sym] = st_bg
-            events += [dict(e, msg=e["msg"] + "〔背景標的〕") for e in evs]
+        events += self._background_events(sym_key, plans_all)
         if events:
             self._alert_banner = banner_rows(events)   # 保留顯示直到下批事件覆蓋
             # E3：事件＋觸發當下訊號快照落日誌（背景標的無本畫面分數 → 快照僅本標的事件附）
@@ -334,8 +373,10 @@ class UniversalMonitor:
         left += ["", f"  下次刷新 {nxt}    （b 重選代號｜e 記錄已執行｜q 結束）"]
 
         # 右側全高 K 線側欄（近 30 日日線，與 BitcoinMonitor 同一份 helper；
-        # 終端機過窄/資料不足自動退回單欄）
-        _print_with_kline(left, W, df, BitcoinMonitor.KLINE_DAYS)
+        # 終端機過窄/資料不足自動退回單欄）。均線組依市場類別取（台股 5/20/60/240 週月季年線，
+        # 美股/幣 5/20/200 國際慣例——「根/年」不同，見 core.term_ui 的 KLINE_MAS 註解）。
+        _print_with_kline(left, W, df, BitcoinMonitor.KLINE_DAYS,
+                          mas=kline_mas_for(self.info["kind"]))
 
     def run(self):
         fails = 0                   # 連續暫時性失敗計數（成功一輪即歸零）

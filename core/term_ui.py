@@ -295,7 +295,48 @@ def _pair_lines(pa, pb, wl, wr):
 # 不走 _row()。標題/日期軸/底框仍是純文字，照舊用 _title/_row/_edge。
 _ANSI_GREEN = "\x1b[92m"
 _ANSI_RED = "\x1b[91m"
+_ANSI_CYAN = "\x1b[96m"
+_ANSI_YELLOW = "\x1b[93m"
+_ANSI_BLUE = "\x1b[94m"
+_ANSI_MAGENTA = "\x1b[95m"
 _ANSI_RESET = "\x1b[0m"
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+# ── K 線疊圖均線：(天期, 繪圖字元, ANSI 色) ──────────────────────────────────
+#
+# ⚠ 每條線的字元刻意都不一樣，不是只靠顏色區分：`_enable_windows_ansi` 對舊主控台是
+#   **靜默降級**（抓不到 handle 就 pass），那時整組顏色失效，同字元就變成完全分不出來。
+#
+# ⚠ **分市場不同組，因為「根/年」不同**（實測 Yahoo 10y 日線：台股 243、美股 251、幣 365）：
+#   同一個 MA200 在股市涵蓋 9.6~9.9 個月、在幣市只有 6.5 個月，根本不是同一件事；
+#   MA20 在股市 0.89 個月（台股正是「月線」），在幣市只剩 0.62 個月（不是月線）。
+#   拿固定根數當固定時長，對 24/7 市場一律會錯。
+_MA5 = (5, "·", _ANSI_CYAN)
+_MA20 = (20, "-", _ANSI_YELLOW)
+_MA60 = (60, "+", _ANSI_BLUE)
+_MA200 = (200, "=", _ANSI_MAGENTA)
+_MA240 = (240, "=", _ANSI_MAGENTA)
+
+# 台股：243 根/年 → **年線是 240 不是 200**（200 是美股移植數字）；中期看季線 60。
+# 選 60 而非 120/200 還有一個實證理由：8 檔 × 10 年逐日，落在近 30 日 K 線框內的比例
+# MA60 為 94%、MA120 59%、MA200 39%、MA240 34% —— 季線是真的會跟價格互動的那條，
+# 年線多數時候只能靠圖例讀值（框外不畫線，見 `_ma_legend_segs`）。
+KLINE_MAS_TW = (_MA5, _MA20, _MA60, _MA240)
+# 美股／幣對（亦為未知市場的預設）：沿用 5/20/200 國際慣例。
+KLINE_MAS = (_MA5, _MA20, _MA200)
+_KLINE_MAS_BY_KIND = {"tw_stock": KLINE_MAS_TW}
+
+
+def kline_mas_for(kind):
+    """市場類別（`classify_symbol` 的 `kind`）→ 該市場的疊圖均線組。
+    未知類別回國際慣例組，不拋錯——側欄是輔助顯示，不該因為新增市場別就整頁掛掉。"""
+    return _KLINE_MAS_BY_KIND.get(kind, KLINE_MAS)
+
+
+def _dw_ansi(s):
+    """含 ANSI 色碼字串的顯示寬度（色碼不佔格）。`_dw` 會把 ESC[ 92m 逐字元算進去，
+    K 線列/圖例列都內嵌色碼 → 對齊與終端機寬度判斷一律走這個。"""
+    return _dw(_ANSI_RE.sub("", s))
 
 
 def _enable_windows_ansi():
@@ -345,10 +386,69 @@ def _kline_column(o, h, l, c, height, pmin, pmax):
     return col
 
 
-def _kline_panel_lines(df, n_days, height):
-    """近 n_days 日 K 線 → 完整框線 block（┌─┐/│…│/└─┘，與其他面板同款式），
-    高度＝呼叫端指定的 height（供逐列跟左欄整頁並排），每日固定佔 1 字元寬欄位。
-    資料不足 / 可畫列數太少（<5）時回 []，呼叫端據此退回舊版單欄（不並排）畫面。"""
+def _ma_series(df, n_days, mas):
+    """近 n_days 日的各均線值 → [(period, char, color, values)]，values 長度＝n_days。
+    歷史不足以讓**整段 n_days 都有值**的天期整條略過——畫半截均線比不畫更誤導
+    （會看起來像「均線在這天才開始」）。`close` 缺欄/df 太短一律回 []。"""
+    if df is None or "close" not in getattr(df, "columns", []):
+        return []
+    out = []
+    for period, ch, color in mas:
+        if len(df) < period + n_days - 1:
+            continue
+        vals = df["close"].rolling(period).mean().iloc[-n_days:].tolist()
+        if any(v != v for v in vals):        # NaN（close 有缺）→ 該天期不畫
+            continue
+        out.append((period, ch, color, vals))
+    return out
+
+
+def _ma_legend_segs(ma_data, close, pmin, pmax):
+    """均線圖例片段 → [(plain, colored)]，plain 供排版量寬、colored 供輸出。
+
+    每段格式 `·MA5 209.8 +1.1%`：字元＋天期＋均線現值＋**收盤價對它的乖離**。
+    落在 [pmin, pmax] 框外的均線末尾加 `↑`/`↓` 表示「線在圖框上/下方，未畫出」。
+
+    為何框外不 clamp 到邊緣：實測 8 檔 × 10 年逐日，MA 落在近 30 日框內的比例為
+    MA5/10/20 100%、MA60 94%、MA120 59%、**MA200 僅 39%**、MA240 34%——MA200 有六成
+    交易日在框外，硬貼邊會讓「年線遠在下方 23%」看起來像「價格剛好站在年線上」，
+    是會直接害人誤判的假訊號。改成不畫線但圖例照給數值與乖離，資訊一點不少。"""
+    segs = []
+    for period, ch, color, vals in ma_data:
+        v = vals[-1]
+        dev = (close / v - 1) * 100 if v else 0.0
+        mark = "" if pmin <= v <= pmax else ("↑" if v > pmax else "↓")
+        plain = f"{ch}MA{period} {_fmt_axis_price(v)} {dev:+.1f}%{mark}"
+        segs.append((plain, f"{color}{plain}{_ANSI_RESET}"))
+    return segs
+
+
+def _pack_segs(segs, width, sep="  "):
+    """把 [(plain, colored)] 依 plain 寬度裝進每列不超過 width 的多列 → [(plain, colored)]。
+    至少回一列（單段就超寬時該列自己溢出，由呼叫端以實際寬度撐開面板）。"""
+    lines, cur_p, cur_c = [], "", ""
+    for plain, colored in segs:
+        cand = plain if not cur_p else cur_p + sep + plain
+        if cur_p and _dw(cand) > width:
+            lines.append((cur_p, cur_c))
+            cur_p, cur_c = plain, colored
+        else:
+            cur_p, cur_c = cand, (colored if not cur_c else cur_c + sep + colored)
+    if cur_p:
+        lines.append((cur_p, cur_c))
+    return lines
+
+
+def _kline_panel_lines(df, n_days, height, mas=KLINE_MAS):
+    """近 n_days 日 K 線（疊 `mas` 指定的均線）→ 完整框線 block（┌─┐/│…│/└─┘，
+    與其他面板同款式），高度＝呼叫端指定的 height（供逐列跟左欄整頁並排），
+    每日固定佔 1 字元寬欄位。
+    資料不足 / 可畫列數太少（<5）時回 []，呼叫端據此退回舊版單欄（不並排）畫面。
+
+    ⚠ 疊圖優先序：**K 棒 > 短天期均線 > 長天期均線**（同一格只放得下一個字元）。
+    K 棒永遠贏——它是價格本身，被均線蓋掉就讀不出當天漲跌了；均線的關鍵資訊本來就是
+    它**沒被 K 棒蓋住**的那段（在價格上方＝壓力、下方＝支撐）。
+    面板寬度取「軸標籤+天數」與「圖例列」的較大者，圖例才不會撐破右框線。"""
     if df is None or len(df) < n_days or height < 8:
         return []
     sub = df.iloc[-n_days:]
@@ -356,12 +456,19 @@ def _kline_panel_lines(df, n_days, height):
     pmin = float(sub["low"].min())
     if not (pmax > pmin):
         return []
-    n_rows = height - 3   # 扣：標題列 + 日期軸列 + 底框
-    if n_rows < 5:
-        return []
 
     tick_prices = [pmin + i * (pmax - pmin) / 3 for i in range(4)]
     label_w = max(len(_fmt_axis_price(p)) for p in tick_prices) + 1   # +1：軸刻度符
+    grid_w = label_w + n_days
+
+    ma_data = _ma_series(df, n_days, mas)
+    segs = _ma_legend_segs(ma_data, float(sub["close"].iloc[-1]), pmin, pmax)
+    legend = _pack_segs(segs, grid_w) if segs else []
+    # 扣：標題列 + 圖例列 + 日期軸列 + 底框
+    n_rows = height - 3 - len(legend)
+    if n_rows < 5:
+        return []
+    inner_w = max(grid_w, max((_dw(p) for p, _ in legend), default=0))
 
     def _row_of(price):
         frac = (price - pmin) / (pmax - pmin)
@@ -370,8 +477,13 @@ def _kline_panel_lines(df, n_days, height):
     tick_rows = {_row_of(p): p for p in tick_prices}
     cols = [_kline_column(float(r.open), float(r.high), float(r.low), float(r.close),
                           n_rows, pmin, pmax) for r in sub.itertuples()]
+    # 均線層：反向走訪 → 短天期後寫入、蓋掉長天期（見 docstring 優先序）
+    ma_layer = [[None] * n_rows for _ in range(n_days)]
+    for period, ch, color, vals in reversed(ma_data):
+        for i, v in enumerate(vals):
+            if pmin <= v <= pmax:
+                ma_layer[i][_row_of(v)] = (ch, color)
 
-    inner_w = label_w + n_days
     lines = [_title(f"K 線圖  近{n_days}日（綠漲／紅跌）", inner_w)]
     for r in range(n_rows):
         if r in tick_rows:
@@ -379,10 +491,13 @@ def _kline_panel_lines(df, n_days, height):
         else:
             label = " " * (label_w - 1) + "│"
         day_chars = []
-        for col in cols:
-            cell = col[r]
+        for i, col in enumerate(cols):
+            cell = col[r] or ma_layer[i][r]       # K 棒優先，空格才讓給均線
             day_chars.append(" " if cell is None else f"{cell[1]}{cell[0]}{_ANSI_RESET}")
-        lines.append("│" + label + "".join(day_chars) + "│")
+        body = label + "".join(day_chars)
+        lines.append("│" + body + " " * max(0, inner_w - grid_w) + "│")
+    for plain, colored in legend:
+        lines.append("│" + colored + " " * max(0, inner_w - _dw(plain)) + "│")
     d0 = sub.index[0].strftime("%m/%d")
     d1 = sub.index[-1].strftime("%m/%d")
     gap = max(1, n_days - len(d0) - len(d1))
@@ -392,16 +507,23 @@ def _kline_panel_lines(df, n_days, height):
     return lines
 
 
-def _print_with_kline(left, W, df, n_days, enabled=True):
+def _print_with_kline(left, W, df, n_days, enabled=True, mas=KLINE_MAS):
     """左欄整頁字串陣列 + 日線 df → 右接全高 K 線側欄後印出（BitcoinMonitor 與
     watcher.UniversalMonitor 共用單一來源）。側欄畫不出（資料不足/終端機太窄/enabled=False）
-    → 原樣逐行印，行為與無側欄版完全相同。"""
+    → 原樣逐行印，行為與無側欄版完全相同。
+    `mas` 為疊圖均線組，呼叫端依市場類別傳（見 `kline_mas_for`）；預設國際慣例組。"""
     try:
         term_cols = os.get_terminal_size().columns
     except OSError:
         term_cols = None
-    show = enabled and (term_cols is None or term_cols >= W + 45)
-    chart = _kline_panel_lines(df, n_days, len(left)) if show else []
+    chart = _kline_panel_lines(df, n_days, len(left), mas=mas) if enabled else []
+    # 終端機寬度用**側欄實寬**判斷，不用固定 +45 猜：疊上均線後圖例列可能比格線寬
+    # （長天期均線值位數多），固定門檻會讓側欄溢出換行、整頁對齊全毀。
+    # W+2＝左欄框線實寬（_row/_edge 為「│+內容W+│」），+2＝兩欄之間的分隔空白。
+    if chart and term_cols is not None:
+        chart_w = max(_dw_ansi(c) for c in chart)
+        if term_cols < W + 2 + 2 + chart_w:
+            chart = []
     if not chart:
         for l in left:
             print(l)
