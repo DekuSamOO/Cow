@@ -12,7 +12,7 @@ import pytest
 from service.ohlc_universal import (
     live_quote_freshness, _is_tw_trading_hours, _is_us_trading_hours,
     is_daily_bar_forming, resolve_live_volume, _tw_candidates, fetch_live_quote,
-    classify_symbol,
+    classify_symbol, fetch_ohlc,
 )
 
 
@@ -304,3 +304,49 @@ def test_classify_symbol_crypto_has_binance_fields():
     assert info["binance"] == "ETHUSDT"
     assert info["coin"] == "ETHUSD_PERP"
     assert info["base"] == "ETH"
+
+
+# ---------------------------------------------------------------------------
+# fetch_ohlc：歷史長度預設 / 幽靈零量列（2026-08-11）
+# ---------------------------------------------------------------------------
+
+def _chart_payload(volumes, ts0=1700000000):
+    n = len(volumes)
+    return {"chart": {"result": [{
+        "timestamp": [ts0 + i * 86400 for i in range(n)],
+        "indicators": {"quote": [{
+            "open": [100.0] * n, "high": [101.0] * n, "low": [99.0] * n,
+            "close": [100.0] * n, "volume": list(volumes),
+        }]},
+    }]}}
+
+
+def test_fetch_ohlc_default_range_is_10y(monkeypatch):
+    """量能分位母體＝本函式抓回的歷史，須與校準面板（expanding，自 2016-01-01）對齊。
+    預設縮回 2y 會系統性推高分位（6782 實測 93.5 vs 83.5 分位、量能維 12/18 vs 6/18）。"""
+    seen = {}
+
+    def fake_get(self, url, **kw):
+        seen["range"] = kw["params"]["range"]
+        seen["interval"] = kw["params"]["interval"]
+        return _FakeResp(_chart_payload([1_000_000] * 5))
+
+    monkeypatch.setattr("requests.Session.get", fake_get)
+    fetch_ohlc("2330.TW")
+    assert seen["range"] == "10y"      # 不可改回 2y；也不可改 max（Yahoo 會降頻成週/月線）
+    assert seen["interval"] == "1d"
+
+
+def test_fetch_ohlc_phantom_zero_volume_becomes_nan(monkeypatch):
+    """Yahoo 對台股偶爾回「有價無量」幽靈列（實測近 10 年 6782 1 筆 / 2454 4 筆 / 6509 9 筆）。
+    量欄轉 NaN（不進量能母體、mean 自動略過），但**價格那根保留**——它是真的，
+    MA/RSI/ATR 不該因此少一天。"""
+    def fake_get(self, url, **kw):
+        return _FakeResp(_chart_payload([1_000_000, 0, 2_000_000]))
+
+    monkeypatch.setattr("requests.Session.get", fake_get)
+    df = fetch_ohlc("6782.TW")
+    assert len(df) == 3                                  # 列沒被刪掉
+    assert df["close"].notna().all()
+    assert df["volume"].isna().sum() == 1
+    assert df["volume"].dropna().tolist() == [1_000_000, 2_000_000]

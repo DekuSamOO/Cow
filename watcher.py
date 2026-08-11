@@ -31,7 +31,7 @@ from core.indicators import calculate_technical_indicators          # noqa: E402
 from core.trend_direction import compute_trend_score, trend_meta    # noqa: E402
 from core.action_ensemble import compute_trend_stance, compute_composite_action  # noqa: E402
 from core.relative_high_tw import (compute_relative_high_tw, relative_high_tw_meta,  # noqa: E402
-                                   vol_pctile, VOL_WINDOW)
+                                   vol_snapshot, VOL_WINDOW)
 from core.relative_low_tw import compute_relative_low_tw, relative_low_tw_meta     # noqa: E402
 from service.ohlc_universal import (classify_symbol, fetch_ohlc,            # noqa: E402
                                     fetch_live_quote, live_quote_freshness, KIND_LABEL,
@@ -96,7 +96,7 @@ class UniversalMonitor:
         self._alert_banner = []          # 最近一批警戒事件顯示列（保留到下批事件覆蓋）
 
     def _fetch(self):
-        """日線每小時重抓+重算一次（避免 60s 迴圈重抓 2y OHLC 與全套指標）；台股一併刷新籌碼。
+        """日線每小時重抓+重算一次（避免 60s 迴圈重抓 10y OHLC 與全套指標）；台股一併刷新籌碼。
         每小時刷新失敗但手上有快取 → 退回舊快取＋畫面標註（現價線本就獨立每 60s 抓，
         不因日線源短暫故障讓整頁被錯誤訊息取代），RETRY_REFRESH_SEC 後再試；
         無快取（首抓失敗）才拋給 run() 走重試/回上層。"""
@@ -185,11 +185,22 @@ class UniversalMonitor:
             quote.append(vol_line)
         # 口徑：近 N 日均量在「個股自身歷史同口徑均量」的排名（midrank 分位），**不是**量比倍數；
         # 盤中今日棒還沒累積完，均量只取已結算日（否則早盤把半天量拌進去，永遠顯示低分位）。
-        pct = vol_pctile(df, drop_last=forming)
-        if pct is not None:
-            tail = "；今日未結算不計" if forming else ""
-            quote.append(f"  量能分位      近{VOL_WINDOW}日均量 {pct * 100:.0f}分位"
-                         f"（個股自身歷史同口徑排名{tail}）")
+        # 分位與量比**並列兩行**：使用者會拿「今日量 ÷ N 日均量」去驗算分位（分母不同、不可
+        # 互推），只寫分位必再被誤讀，故兩個問題各給各的數字（見 `vol_snapshot` docstring）。
+        snap = vol_snapshot(df, drop_last=forming)
+        if snap is not None:
+            tail = "，今日未結算不計" if forming else ""
+            since = df.index[0].date() if len(df) else ""
+            quote.append(
+                f"  量能分位      近{VOL_WINDOW}日均量 {snap['ma']:,.0f} 股 → "
+                f"{snap['pctile'] * 100:.0f}分位"
+                f"（母體＝{since} 起每日的{VOL_WINDOW}日均量 {snap['n_pop']:,} 筆{tail}）")
+            ratio_line = (f"  量比          近{VOL_WINDOW}日均量 ÷ 近{snap['ref_window']}日均量"
+                          f" {snap['ratio']:.2f}x")
+            if live_vol:
+                ratio_line += (f"｜今日 {live_vol:,.0f} 股 ＝ 近{VOL_WINDOW}日均量的"
+                               f" {live_vol / snap['ma']:.2f}x")
+            quote.append(ratio_line)
         # 時間序列動能（3/6/12M 報酬）— 參考訊號，未計入加權（待回測）
         quote += momentum_ref_rows(df)
         # 風控框架（ATR 停損 + 近 60 日支撐壓力風報比）— 支撐用近期低（股票無動態地板）

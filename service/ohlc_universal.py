@@ -104,11 +104,25 @@ def _tw_candidates(yahoo_symbol: str) -> list:
     return candidates
 
 
-def fetch_ohlc(yahoo_symbol: str, rng: str = "2y") -> pd.DataFrame:
+def fetch_ohlc(yahoo_symbol: str, rng: str = "10y") -> pd.DataFrame:
     """
     Yahoo v8 chart JSON → 日線 OHLCV，欄位用 core 期望的 lowercase、index 去時區。
     同一函式吃 BTC-USD / ETH-USD / AAPL / NVDA / 2330.TW，與 Binance 無關。
     台股 `.TW`（上市）查無資料時自動改試 `.TWO`（上櫃）——classify 無法預知上市/上櫃。
+
+    ⚠️ `rng` 預設 **10y 不是 2y**：量能見頂維的分位母體就是本函式抓回來的這段歷史
+    （`core.relative_high_tw.vol_pctile` 拿最新值對整段排名），而校準它的
+    `scripts/tw_volwindow_calib.py` 用的是 **expanding 分位、面板自 2016-01-01 起**
+    （`tw_variant_extract.py` 的 `--min-date` 預設）——live 只餵 2 年就等於拿短記憶母體
+    去套長記憶母體量出來的門檻（0.95/0.85/0.70）。2026-08-11 使用者回報 6782 分位偏高，
+    實查即此：同一筆近5日均量 648,800 股，2 年母體 93.5 分位、10 年母體 83.5 分位，
+    量能維得分 12/18 vs 6/18。10y 起算約 2016-08，與校準面板起點對齊。
+    價格類指標不受影響（MA/RSI/ATR 皆為固定窗，52 週高低取 `tail(252)`）。
+
+    ⚠️ **不可用 `rng="max"`**：Yahoo 會自動降頻，實測 2330 的 max 只回 320 根、中位間隔
+    31 天（月線），6782 回 315 根、間隔 7 天（週線）——欄名照樣是日線那套，靜默失效，
+    量能分位會變成拿週/月量去比。10y 實測全市場皆為日線（2330/6509/2454/1101 各 2431 根、
+    AAPL/NVDA 2512 根、BTC-USD 3653 根，中位間隔皆 1 天）。
     """
     s = _session()
     res, last_err = None, None
@@ -131,6 +145,12 @@ def fetch_ohlc(yahoo_symbol: str, rng: str = "2y") -> pd.DataFrame:
         "close": q["close"], "volume": q["volume"],
     }, index=pd.to_datetime(res["timestamp"], unit="s"))
     df = df[df["close"].notna()].copy()   # 停牌/缺資料的列剔除
+    # Yahoo 對台股偶爾回「有價無量」的幽靈列（volume=0 但 OHLC 正常、當天實際有成交）：
+    # 實測近 10 年 6782 有 1 筆（2026-07-10）、2454 4 筆、1101 7 筆、6509 9 筆；美股/幣對 0 筆。
+    # 留著會混進量能分位母體，也會把含它的 N 日均量整段拉低。轉 NaN 而非刪列——價格那根是
+    # 真的，MA/RSI/ATR 不該因此少一天。量能消費端皆為 `mean()`（預設 skipna）或 `dropna()`
+    # （`relative_universal.avg_vol`/`_vol_ratio`、`relative_high_tw._vol_series`），NaN 不外溢。
+    df.loc[df["volume"] <= 0, "volume"] = float("nan")
     df.index = df.index.tz_localize(None)
     if df.empty:
         raise RuntimeError(f"無有效日線：{yahoo_symbol}")

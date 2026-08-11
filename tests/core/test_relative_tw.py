@@ -7,7 +7,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 import pandas as pd
 import pytest
 
-from core.relative_high_tw import compute_relative_high_tw, relative_high_tw_meta, vol_pctile
+from core.relative_high_tw import (compute_relative_high_tw, relative_high_tw_meta,
+                                   vol_pctile, vol_snapshot, VOL_WINDOW)
 from core.relative_low_tw import compute_relative_low_tw, relative_low_tw_meta
 
 
@@ -106,6 +107,31 @@ def test_vol_pctile_drop_last_excludes_forming_bar():
     assert vol_pctile(df, drop_last=True) == 0.5
     # 排除後母體不足 60 個均量 → 回 None（不硬湊）
     assert vol_pctile(df.iloc[:64], drop_last=True) is None
+
+
+def test_vol_series_drops_phantom_zero_before_last_bar():
+    """`fetch_ohlc` 把 Yahoo 的幽靈零量列（有價無量）轉 NaN → 分位母體與均量都不該看到它。
+    順序也在此鎖住：先剔最後一根、再 dropna；顛倒的話最後一根若為 NaN 會被多砍一根已結算日。"""
+    clean = _vol_df([1_000_000] * 70)
+    dirty = _vol_df([1_000_000] * 35 + [float("nan")] + [1_000_000] * 34)   # 中間一筆幽靈列
+    assert vol_pctile(dirty) == vol_pctile(clean)          # 定值序列 → 兩者皆 midrank 0.5
+    # 末根為 NaN + drop_last：只該砍掉「最後那根已結算日」，NaN 本身不佔額度
+    tail_nan = _vol_df([1_000_000] * 70 + [float("nan")])
+    assert vol_pctile(tail_nan, drop_last=True) == vol_pctile(clean)
+
+
+def test_vol_snapshot_ratio_is_not_the_pctile():
+    """量比與分位是兩個問題（使用者曾拿 今日量÷N日均量 去驗算分位）：
+    近 5 日均量在歷史高檔（高分位）與「今日縮量」可同時成立，snapshot 要兩個數字都給。"""
+    df = _vol_df([1_000_000] * 100 + [5_000_000] * 4 + [200_000])   # 前 4 天爆量、今日縮量
+    snap = vol_snapshot(df)
+    assert snap["pctile"] > 0.95                                     # 5 日均量仍在歷史高檔
+    assert snap["ma"] == pytest.approx((5_000_000 * 4 + 200_000) / 5)
+    assert snap["ratio"] > 1.5                                       # 5日/60日均量放大
+    assert snap["n_pop"] == len(df) - VOL_WINDOW + 1
+    # 今日量 ÷ 5 日均量 = 0.0098x，與 pctile>0.95 並存 → 兩者不可互推
+    assert 200_000 / snap["ma"] < 0.1
+    assert vol_snapshot(df.iloc[:40]) is None                        # 母體不足 ref_window → None
 
 
 def test_high_volume_dim_ignores_forming_bar():

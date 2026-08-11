@@ -50,12 +50,29 @@ VOL_WINDOW = 5
 _VOL_NOTE = f"{VOL_WINDOW}日均量個股自身分位（爆量見頂，swing AUC 0.648）"
 
 
+def _vol_series(df, *, drop_last: bool = False):
+    """量能母體用的成交量序列（單一清洗出口，`vol_pctile` 與 `vol_snapshot` 共用）。
+    **先剔最後一根、再 dropna**，順序不可顛倒：`fetch_ohlc` 會把 Yahoo 的幽靈零量列轉成
+    NaN，若先 dropna 而最後一根恰為 NaN，它已被拿掉，`drop_last` 會再多砍一根已結算日。
+    回傳 None 代表沒有 volume 欄（呼叫端一律當「資料不足」處理）。"""
+    if df is None or "volume" not in getattr(df, "columns", []):
+        return None
+    v = df["volume"]
+    if drop_last:
+        v = v.iloc[:-1]
+    return v.dropna()
+
+
 def vol_pctile(df, *, window: int = VOL_WINDOW, drop_last: bool = False) -> Optional[float]:
     """近 `window` 日均量在個股自身歷史的分位（0–1，midrank 處理 ties）。
     自包含、零外部依賴（用 df 本身的 volume 歷史）→ 與 watcher live 自包含原則一致。
-    回測對應 scripts 的 per_stock_pctile（expanding 分位，無 look-ahead）。
-    比較母體是 df 歷史上**每一天的同口徑 N 日均量**（live 為近 2 年），故這是「量能水準的
-    歷史排名」，不是 `vol/MA20` 那種量比倍數。
+    回測對應 scripts 的 per_stock_pctile（expanding 分位，無 look-ahead）——本式「最新值對
+    整段歷史排名」在最後一根上即 expanding 分位的當日值，故**只要 df 的歷史長度與校準面板
+    對齊，兩邊就同口徑**（`service.ohlc_universal.fetch_ohlc` 預設 `rng="10y"` 即為此，
+    改短會系統性推高分位，見該函式警語）。
+    比較母體是 df 歷史上**每一天的同口徑 N 日均量**，故這是「量能水準的歷史排名」，
+    **不是**「今日量 ÷ 近 N 日均量」那種量比倍數——兩者不可互相驗算（今日縮量與 N 日均量
+    仍在歷史高檔可同時成立）。量比另見 `vol_snapshot` 的 `ratio`。
 
     window=5（2026-08-10 `scripts/tw_volwindow_calib.py` 拍板，2079 檔 / 446 萬列 / OOS≥2024）：
     swing 逃頂 AUC 1日 0.648、3日 0.650、5日 0.648、10日 0.646、20日 0.638，抄底側全 ≤0.521
@@ -68,11 +85,9 @@ def vol_pctile(df, *, window: int = VOL_WINDOW, drop_last: bool = False) -> Opti
     到當下，混進均量會系統性偏低（早盤尤甚），而回測餵的一律是已結算 EOD 日量 → 盤中不排除
     就等於 live 與回測口徑不一致。代價是量能維盤中整天不動，與台股籌碼/估值本就對齊 EOD
     最後交易日的行為一致。"""
-    if df is None or "volume" not in getattr(df, "columns", []):
+    v = _vol_series(df, drop_last=drop_last)
+    if v is None:
         return None
-    v = df["volume"].dropna()
-    if drop_last:
-        v = v.iloc[:-1]
     if window > 1:
         v = v.rolling(window).mean().dropna()   # 母體＝歷史每一天的 N 日均量（同口徑才可比）
     if len(v) < 60:
@@ -83,6 +98,32 @@ def vol_pctile(df, *, window: int = VOL_WINDOW, drop_last: bool = False) -> Opti
     arr = v.to_numpy(dtype=float)
     # midrank：定值序列回 0.5（非「爆量」），避免常數 volume 誤判滿分
     return float(((arr < latest).sum() + 0.5 * (arr == latest).sum()) / len(arr))
+
+
+def vol_snapshot(df, *, window: int = VOL_WINDOW, ref_window: int = 60,
+                 drop_last: bool = False) -> Optional[dict]:
+    """量能顯示用快照（**純顯示，不參與計分**）——與 `vol_pctile` 共用 `_vol_series`，
+    畫面數字與計分分位不會漂移。回傳
+    `{ma, pctile, ref_ma, ratio, ref_window, n_pop}`，資料不足回 None。
+
+    存在理由：`pctile` 是「近 N 日均量在歷史的排名」，使用者卻自然會用「今日量 ÷ 近 N 日
+    均量」去驗算它（2026-08-11 實際回報：219,571 ÷ 648,800 = 0.34「應該是 33 分位」）。
+    兩者分母不同、不可互推，光改標籤文字擋不住誤讀（README v3.35 已修過一次仍再發生）→
+    改成把量比 `ratio` 一起算出來給畫面並列，讓「今天縮量」與「5 日均量仍在歷史高檔」
+    兩件事各自有數字，不必互相套用。
+    `ratio` = 近 `window` 日均量 ÷ 近 `ref_window` 日均量；`ref_window=60` 是判讀慣例，
+    **非校準值**（量能維計分只吃 `pctile`），改它不影響任何分數。"""
+    v = _vol_series(df, drop_last=drop_last)
+    if v is None or len(v) < ref_window:
+        return None
+    pct = vol_pctile(df, window=window, drop_last=drop_last)
+    if pct is None:
+        return None
+    ma, ref_ma = float(v.tail(window).mean()), float(v.tail(ref_window).mean())
+    if ma <= 0 or ref_ma <= 0:
+        return None
+    return {"ma": ma, "pctile": pct, "ref_ma": ref_ma, "ratio": ma / ref_ma,
+            "ref_window": ref_window, "n_pop": len(v) - window + 1}
 
 
 # W-7（2026-07-06）：升公開名 vol_pctile（watcher.py 曾直接 import 跨模組私名 _vol_pctile，
