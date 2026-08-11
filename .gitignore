@@ -23,7 +23,10 @@ config_private.py
 
 # Claude Code 本地設定
 .claude/
- 
+
+# 編輯器本地設定（僅本機 conda 直譯器指定，非可攜、與程式行為無關）
+.vscode/
+
 db/cache/
 
 # 新聞 Gemini 翻譯快取（執行時產生，勿追蹤）
