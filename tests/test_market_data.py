@@ -36,6 +36,7 @@ def test_yfinance_version():
     assert yf is not None, "yfinance 未安裝"
 
 
+@pytest.mark.yahoo
 def test_yfinance_download_short_range():
     """
     下載近 30 天 BTC 數據，驗證:
@@ -67,6 +68,7 @@ def test_yfinance_download_short_range():
     )
 
 
+@pytest.mark.yahoo
 def test_yfinance_ticker_history():
     """
     使用 Ticker().history() 備援下載，驗證欄位格式。

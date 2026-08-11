@@ -31,5 +31,14 @@ where = ["."]
 include = ["core*", "handler*", "service*", "strategy*", "config*"]
 
 [tool.pytest.ini_options]
+# yahoo 標記：公司 IP 對 Yahoo 恆 429，這兩支長期紅燈，每次 commit 都要人工判斷
+# 「是不是本次改動造成」——而長期紅燈會掩蓋真紅燈。**預設不跑**，家用網路想跑
+# 用 `pytest -m yahoo` 或 `pytest -m ""`。
+# network 只註冊不排除：Binance 那支公司網路通得到、目前是綠的，關掉會平白少一項覆蓋。
+markers = [
+    "network: 需要外網（仍會執行）",
+    "yahoo: 需要 Yahoo Finance，預設不跑（公司 IP 恆 429）",
+]
+addopts = "-m 'not yahoo'"
 # 只收集正規單元測試；scripts/test_*.py 是手動除錯工具（含 __main__），非 pytest 測試
 testpaths = ["tests"]
