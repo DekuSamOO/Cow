@@ -106,15 +106,27 @@ def _score_valuation_low(valuation) -> dict:
             "sub": {"pe": pe, "pb": pb, "pe_score": pe_s, "pb_score": pb_s}}
 
 
-def compute_relative_low_tw(row, df=None, *, chip=None) -> Tuple[int, Dict[str, dict]]:
-    """台股相對底部四維評分（0–100，clamp）。chip = service.tw_chip.get_chip_bundle 結果（可缺）。"""
+def compute_relative_low_tw(row, df=None, *, chip=None,
+                            forming_last: bool = False) -> Tuple[int, Dict[str, dict]]:
+    """台股相對底部四維評分（0–100，clamp）。chip = service.tw_chip.get_chip_bundle 結果（可缺）。
+
+    forming_last=True：df 最後一根是「今日進行式」日棒（live 盤中）→ **法人吸籌的均量分母**
+    改以已結算日為準（抄底側只有這一維吃量，逃頂側的對應說明見 `compute_relative_high_tw`）。
+    不排除的話 20 日均量分母混進「只累積到當下的今日量」又擠掉一根已結算日，早盤分母偏小
+    ~4.9%：實測 2022 年起 176.7 萬股票日，**買超日有 2.48% 整格跳動（平均 6.8 分）**，方向
+    近乎單向高估（早盤高估:低估 = 342:1），其中 4,358 筆從 0 分跳成有分。抄底分數被高估＝
+    更早喊「可以接」，是最危險的方向，且 6.8 分跨得過 65/45/30/15 階梯與 composite 的
+    LOW_VALUE 門檻。（2026-08-11 實測推翻「偏差跨不過門檻」的舊否決。）
+    價格類維度（技術回穩）仍用進行式那根＝當下價，語意本就該即時；槓桿/估值不吃 df。
+    回測/校準腳本餵的是 EOD 日線，維持預設 False（PiT 口徑不變）。"""
     chip = chip or {}
+    df_settled = df.iloc[:-1] if (forming_last and df is not None and len(df) >= 2) else df
     # leverage/technical 用 rescale_dim 提權（融資清洗 30→40、技術回穩 25→30，吸收 tdcc 移除的 15
     # 分），不動 _score_* 內部分級；institution/valuation 維持原配額。四維總分 100。
     signals = {
         "leverage": rescale_dim(_score_leverage_low(chip.get("margin")), WEIGHTS_LOW_TW["leverage"]),
         "technical": rescale_dim(_score_technical_low(row, df), WEIGHTS_LOW_TW["technical"]),
-        "institution": _score_institution_low(chip.get("institutional"), df),
+        "institution": _score_institution_low(chip.get("institutional"), df_settled),
         "valuation": _score_valuation_low(chip.get("valuation")),
     }
     score = max(0, min(100, int(sum(s["score"] for s in signals.values()))))

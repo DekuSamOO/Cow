@@ -121,6 +121,22 @@ def test_high_volume_dim_ignores_forming_bar():
     assert sig["sub"]["vol_window"] == 5
 
 
+def test_low_institution_dim_ignores_forming_bar():
+    """live 盤中：法人吸籌的均量分母只取已結算日（抄底側唯一吃量的維）。
+    不排除的話 20 日均量既混進「只累積到當下的今日量」又擠掉一根已結算日 → 分母偏小、
+    ratio 虛胖，早盤把「未達門檻」誤判成整格買超訊號（高估抄底分＝更早喊可以接）。"""
+    df = pd.DataFrame({"close": [100.0] * 31,
+                       "volume": [1_000_000] * 30 + [50_000]})   # 末根＝早盤只成交 5% 日量
+    row = pd.Series({"RSI_14": 50, "close": 100.0})
+    chip = {"institutional": {"total_net": 78_000}}
+    # 未排除：分母 (19×100萬 + 5萬)/20 = 952,500 → 8.19%均量 → 誤跨 8% 門檻進 13 分
+    assert compute_relative_low_tw(row, df, chip=chip)[1]["institution"]["score"] == 13
+    # 排除後：分母＝20 個已結算日均量 100 萬 → 7.8%均量 → 正確落在 6 分（與收盤後看到的一致）
+    sig = compute_relative_low_tw(row, df, chip=chip, forming_last=True)[1]["institution"]
+    assert sig["score"] == 6
+    assert sig["sub"]["ratio_pct"] == pytest.approx(7.8)
+
+
 def test_weights_sum():
     """v0.5/v0.4（2026-07-02 回測拍板）：
     逃頂 核心六維 100 + vol_price 8（已驗證疊加，clamp 100）= 理論 108；抄底四維恰 100。

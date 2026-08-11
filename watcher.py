@@ -212,7 +212,7 @@ class UniversalMonitor:
         ct_top = ct_low = ""
         if self.is_tw and self._chip is not None:
             high = compute_relative_high_tw(row, df, chip=self._chip, forming_last=forming)
-            low = compute_relative_low_tw(row, df, chip=self._chip)
+            low = compute_relative_low_tw(row, df, chip=self._chip, forming_last=forming)
             _, top_rows = _panel(high, relative_high_tw_meta, 100, "逃頂訊號（台股籌碼）",
                                  ("technical", "valuation", "volume", "leverage", "institution",
                                   "tdcc", "vol_price"))
