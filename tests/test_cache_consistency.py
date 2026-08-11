@@ -1,10 +1,11 @@
 """
 Cache 一致性契約測試（P2-1）
 
-CLAUDE.md 已記錄 cache 設計的兩個踩坑：
-  - 踩坑 2：fragment run_every=60 + cache_data ttl=60 → 永遠命中快取
-  - 踩坑 6：read_btc_15m 有 ttl=86400 快取，不可用於即時價格；
-           get_latest_local_price 不帶 cache，供即時備援
+CLAUDE.md 已記錄 cache 設計的兩個踩坑（**引標題不引序號，序號會隨增刪漂移**）：
+  - 陷阱〈`@st.cache_data(ttl=60)` + `run_every=60` 衝突〉：fragment 與 TTL 同為 60 秒
+           → 永遠命中快取
+  - 〈service 層 fallback chain〉來源追蹤慣例：read_btc_15m 有 ttl=86400 快取，
+           不可用於即時價格；get_latest_local_price 不帶 cache，供即時備援
 
 本檔以契約方式鎖定這些設計決策，防止未來改動意外破壞。
 """
@@ -33,20 +34,20 @@ def test_fetch_realtime_data_must_not_be_cached():
     from service.realtime import fetch_realtime_data
     assert not _is_cached(fetch_realtime_data), (
         "fetch_realtime_data 被加上 @st.cache_data — 會與 fragment 衝突，"
-        "請查看 CLAUDE.md 踩坑 2"
+        "請查看 CLAUDE.md 陷阱〈@st.cache_data(ttl=60) + run_every=60 衝突〉"
     )
 
 
 def test_get_latest_local_price_must_not_be_cached():
     """get_latest_local_price 不可掛 cache，供即時備援。
 
-    根因：CLAUDE.md 踩坑 6 明確指出此函數設計為即時備援，
+    根因：CLAUDE.md〈service 層 fallback chain〉來源追蹤慣例明確指出此函數設計為即時備援，
     不帶 @st.cache_data 才能在 Binance/Kraken 失敗時回傳本地 DB 最新一筆。
     """
     from service.local_db_reader import get_latest_local_price
     assert not _is_cached(get_latest_local_price), (
         "get_latest_local_price 被加上 cache，會破壞即時備援能力，"
-        "請查看 CLAUDE.md 踩坑 6"
+        "請查看 CLAUDE.md〈service 層 fallback chain〉來源追蹤慣例"
     )
 
 

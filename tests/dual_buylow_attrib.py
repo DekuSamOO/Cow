@@ -7,7 +7,7 @@ tests/dual_buylow_attrib.py — 雙幣 BUY_LOW 不行權歸因分解（交接信
 未分解：(a) is_bearish gate（EMA_20<SMA_50 時整段禁開 BUY_LOW）
 (b) strike 規則太深（min(BB_Lower,S1) − ATR×(1+risk)×dyn，1 天期）。
 
-方法（歸因不是調參；結論不得用於加碼——Cow 陷阱 22 照舊）：
+方法（歸因不是調參；結論不得用於加碼——CLAUDE.md〈受保護決策〉雙幣回測照舊）：
   臂0 baseline：原引擎原資料。
   臂1 gate-off：原引擎，df 的 EMA_20 欄改 = SMA_50（is_bearish 恆 False；
        回測迴圈中 EMA_20 僅用於 is_bearish，故此中和=純移除 gate、零引擎複製）。

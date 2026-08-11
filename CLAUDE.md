@@ -44,11 +44,17 @@ D:\Users\63191\AppData\Local\anaconda3\python.exe collector/btc_price_collector.
 
 ```
 歷史K線：本地DB → Yahoo → Binance → Kraken → CryptoCompare（五層）
-即時價格：Binance → Kraken → 本地DB（三層）
+即時價格：Binance 現貨 → Kraken Ticker → 本地 15m DB 最新一筆（三層）
 宏觀：FRED CSV → Yahoo → FRED 備援 → 靜態 _FALLBACK（四層）
 ```
+Kraken Ticker 端點 `api.kraken.com/0/public/Ticker?pair=XBTUSD`，取 `result['XXBTZUSD']['c'][0]`。
 資金費率三層見〈資金費率即時備援鏈〉；台股籌碼走 `tw_chip.get_chip_bundle`。
 `db/` 為年度分割 SQLite（`btcusdt_15m_YYYY.db`），**雲端直接讀 repo 內 db**。
+
+**來源追蹤慣例**：`fetch_realtime_data()` 回傳 dict 含 `price_source`／`funding_rate_source`／
+`tvl_source`；UI 層直接讀 `rt.get('price_source', '歷史收盤')`，**不在 UI 層做 `is not None`
+判斷**（leaky abstraction）。`get_latest_local_price()` 不帶快取供即時備援；
+`read_btc_15m()` 有 `ttl=86400`，**不可**用於即時價格。
 
 ---
 
@@ -117,6 +123,9 @@ dashboard（tab D2.5）**共用同一函式**，杜絕兩邊算法漂移。
 
 ## 已知陷阱（跨功能通用）
 
+> **序號會隨增刪漂移——本檔外部一律引「標題」不引序號。** 2026-08-10 清過一輪：治理文件 8 處
+> 序號引用已全改標題（歷史 plan／AUDIT 刻意留原樣）。刪條目時**留占位不重編**。
+
 ### 1. `@st.fragment` 靜默失效（現價停止自動更新）
 
 `@st.fragment(run_every=60)` 傳入 DataFrame/Series 時序列化失敗，**fragment 停止重跑但不報錯**。
@@ -127,18 +136,15 @@ dashboard（tab D2.5）**共用同一函式**，杜絕兩邊算法漂移。
 fragment 60 秒重跑、TTL 也 60 秒 → 永遠命中快取 → 數據不刷新。
 `fetch_realtime_data()` 不掛 `@st.cache_data`。
 
-### 3. 公司網路是 SSL 攔截，不是防火牆封鎖
+### 3. 分辨「fragment 沒跑」還是「連線問題」（公司網路是 SSL 攔截，非封鎖）
 
-判斷是「fragment 沒跑」還是「連線問題」：看 fragment 內「數據更新時間」有無每分鐘更新。
-即時價格備援鏈已實作：Binance 現貨 → Kraken Ticker（`api.kraken.com/0/public/Ticker?pair=XBTUSD`，
-取 `result['XXBTZUSD']['c'][0]`）→ 本地 15m DB 最新一筆。
+看 fragment 內「數據更新時間」有無每分鐘更新：沒更新＝fragment 停跑（見〈`@st.fragment` 靜默
+失效〉／〈`@st.cache_data(ttl=60)` + `run_every=60` 衝突〉）；有更新但值不動才是連線問題。
+SSL 攔截通則與 curl 解法見全域 `~\.claude\CLAUDE.md` §6，備援鏈見〈service 層 fallback chain〉。
 
 ### 4. service 層來源追蹤慣例
 
-`fetch_realtime_data()` 回傳 dict 含 `price_source`／`funding_rate_source`／`tvl_source`。
-UI 層直接讀 `rt.get('price_source', '歷史收盤')`，**不在 UI 層做 `is not None` 判斷**
-（leaky abstraction）。`get_latest_local_price()` 不帶快取供即時備援；
-`read_btc_15m()` 有 `ttl=86400`，**不可**用於即時價格。
+→ 已併入〈service 層 fallback chain〉。**編號保留占位，勿重編。**
 
 ### 5. `reindex(method='nearest')` 早於資料起點填充定值
 
