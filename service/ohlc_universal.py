@@ -117,7 +117,8 @@ def fetch_ohlc(yahoo_symbol: str, rng: str = "10y") -> pd.DataFrame:
     去套長記憶母體量出來的門檻（0.95/0.85/0.70）。2026-08-11 使用者回報 6782 分位偏高，
     實查即此：同一筆近5日均量 648,800 股，2 年母體 93.5 分位、10 年母體 83.5 分位，
     量能維得分 12/18 vs 6/18。10y 起算約 2016-08，與校準面板起點對齊。
-    價格類指標不受影響（MA/RSI/ATR 皆為固定窗，52 週高低取 `tail(252)`）。
+    價格類指標不受影響（MA/RSI/ATR 皆為固定窗；52 週高低由各消費端自訂窗——`watcher`
+    用 `tail(252)`、`scripts/stock_profile.py` 用日曆 365 天，兩者都是固定窗故不隨 rng 變）。
 
     ⚠️ **不可用 `rng="max"`**：Yahoo 會自動降頻，實測 2330 的 max 只回 320 根、中位間隔
     31 天（月線），6782 回 315 根、間隔 7 天（週線）——欄名照樣是日線那套，靜默失效，
@@ -186,6 +187,30 @@ def fetch_live_quote(yahoo_symbol: str) -> dict:
         return {"price": float(p), "ts": m.get("regularMarketTime"),
                 "prev_close": m.get("previousClose") or m.get("chartPreviousClose"),
                 "volume": m.get("regularMarketVolume")}
+    return {}
+
+
+def fetch_quote_meta(yahoo_symbol: str, timeout: int = 15) -> dict:
+    """Yahoo v8 chart 的整份 `meta` 區（名稱／交易所／幣別等基本資料）。失敗回 {}。
+
+    與 `fetch_live_quote` 打同一個端點但**回整份 meta**：呼叫端要的欄位（longName /
+    fullExchangeName / currency…）不在 `fetch_live_quote` 的四個回傳鍵裡，過去由
+    `scripts/stock_profile.py` 自己複製一份請求迴圈，並跨模組 import 本檔的私名
+    `_session`／`_tw_candidates`／`_YF_CHART`——與稽核 W-7（watcher 曾直接 import
+    `_vol_pctile`）同一個錯。候選清單／UA／`_RESOLVED` 語意的正本只能有一份，故升為公開名。
+    名稱屬加值資訊，取不到不該中斷整份 profile → 任何失敗都吞掉換下一個候選。
+
+    ⚠️ 刻意**不寫 `_RESOLVED`**：本函式的成功條件只是「拿得到 meta」，比
+    `fetch_ohlc`／`fetch_live_quote`（要有實際資料／有 `regularMarketPrice`）寬鬆，
+    用它去釘選候選會讓後續請求先試一個只有殼的 symbol。"""
+    for sym in _tw_candidates(yahoo_symbol):
+        try:
+            r = _session().get(_YF_CHART + sym, params={"range": "1d", "interval": "1d"},
+                               timeout=timeout)
+            r.raise_for_status()
+            return r.json()["chart"]["result"][0]["meta"] or {}
+        except Exception:      # noqa: BLE001
+            continue
     return {}
 
 

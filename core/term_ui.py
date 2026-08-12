@@ -425,7 +425,8 @@ def _ma_legend_segs(ma_data, close, pmin, pmax):
 
 def _pack_segs(segs, width, sep="  "):
     """把 [(plain, colored)] 依 plain 寬度裝進每列不超過 width 的多列 → [(plain, colored)]。
-    至少回一列（單段就超寬時該列自己溢出，由呼叫端以實際寬度撐開面板）。"""
+    單段本身就超寬時該段自成一列、不截斷，由呼叫端以實際寬度撐開面板。
+    `segs` 為空回 []（呼叫端不必自己先擋空）。"""
     lines, cur_p, cur_c = [], "", ""
     for plain, colored in segs:
         cand = plain if not cur_p else cur_p + sep + plain
@@ -463,7 +464,7 @@ def _kline_panel_lines(df, n_days, height, mas=KLINE_MAS):
 
     ma_data = _ma_series(df, n_days, mas)
     segs = _ma_legend_segs(ma_data, float(sub["close"].iloc[-1]), pmin, pmax)
-    legend = _pack_segs(segs, grid_w) if segs else []
+    legend = _pack_segs(segs, grid_w)
     # 扣：標題列 + 圖例列 + 日期軸列 + 底框
     n_rows = height - 3 - len(legend)
     if n_rows < 5:
@@ -485,6 +486,7 @@ def _kline_panel_lines(df, n_days, height, mas=KLINE_MAS):
                 ma_layer[i][_row_of(v)] = (ch, color)
 
     lines = [_title(f"K 線圖  近{n_days}日（綠漲／紅跌）", inner_w)]
+    grid_pad = " " * (inner_w - grid_w)      # inner_w ≥ grid_w（見上），故不必 max(0, …)
     for r in range(n_rows):
         if r in tick_rows:
             label = f"{_fmt_axis_price(tick_rows[r]):>{label_w - 1}}┤"
@@ -495,9 +497,9 @@ def _kline_panel_lines(df, n_days, height, mas=KLINE_MAS):
             cell = col[r] or ma_layer[i][r]       # K 棒優先，空格才讓給均線
             day_chars.append(" " if cell is None else f"{cell[1]}{cell[0]}{_ANSI_RESET}")
         body = label + "".join(day_chars)
-        lines.append("│" + body + " " * max(0, inner_w - grid_w) + "│")
+        lines.append("│" + body + grid_pad + "│")
     for plain, colored in legend:
-        lines.append("│" + colored + " " * max(0, inner_w - _dw(plain)) + "│")
+        lines.append("│" + colored + " " * (inner_w - _dw(plain)) + "│")
     d0 = sub.index[0].strftime("%m/%d")
     d1 = sub.index[-1].strftime("%m/%d")
     gap = max(1, n_days - len(d0) - len(d1))

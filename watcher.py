@@ -235,19 +235,19 @@ class UniversalMonitor:
         # 盤中今日棒還沒累積完，均量只取已結算日（否則早盤把半天量拌進去，永遠顯示低分位）。
         # 分位與量比**並列兩行**：使用者會拿「今日量 ÷ N 日均量」去驗算分位（分母不同、不可
         # 互推），只寫分位必再被誤讀，故兩個問題各給各的數字（見 `vol_snapshot` docstring）。
-        snap = vol_snapshot(df, drop_last=forming)
-        if snap is not None:
+        vol_snap = vol_snapshot(df, drop_last=forming)
+        if vol_snap is not None:
             tail = "，今日未結算不計" if forming else ""
             since = df.index[0].date() if len(df) else ""
             quote.append(
-                f"  量能分位      近{VOL_WINDOW}日均量 {snap['ma']:,.0f} 股 → "
-                f"{snap['pctile'] * 100:.0f}分位"
-                f"（母體＝{since} 起每日的{VOL_WINDOW}日均量 {snap['n_pop']:,} 筆{tail}）")
-            ratio_line = (f"  量比          近{VOL_WINDOW}日均量 ÷ 近{snap['ref_window']}日均量"
-                          f" {snap['ratio']:.2f}x")
+                f"  量能分位      近{VOL_WINDOW}日均量 {vol_snap['ma']:,.0f} 股 → "
+                f"{vol_snap['pctile'] * 100:.0f}分位"
+                f"（母體＝{since} 起每日的{VOL_WINDOW}日均量 {vol_snap['n_pop']:,} 筆{tail}）")
+            ratio_line = (f"  量比          近{VOL_WINDOW}日均量 ÷ 近{vol_snap['ref_window']}日均量"
+                          f" {vol_snap['ratio']:.2f}x")
             if live_vol:
                 ratio_line += (f"｜今日 {live_vol:,.0f} 股 ＝ 近{VOL_WINDOW}日均量的"
-                               f" {live_vol / snap['ma']:.2f}x")
+                               f" {live_vol / vol_snap['ma']:.2f}x")
             quote.append(ratio_line)
         # 時間序列動能（3/6/12M 報酬）— 參考訊號，未計入加權（待回測）
         quote += momentum_ref_rows(df)
@@ -258,7 +258,7 @@ class UniversalMonitor:
         # 距離以當下有效價計（有即時報價用即時、否則日線收盤）；檔案壞掉只出警示行不中斷監控。
         eff_price = live["price"] if live.get("price") else close
         plan = get_plan(self.display)
-        _, plan_errs = load_plans_cached()
+        plans_all, plan_errs = load_plans_cached()   # 一次取用，背景巡檢（E2）也吃這份
         plan_rows = plan_panel_rows(plan, eff_price, fmt=_fmt_price) if plan else []
         plan_rows += [f"  ⚠ {e}" for e in plan_errs]
         _, trend_rows = _panel_trend(trend, "趨勢方向（順勢）",
@@ -316,7 +316,6 @@ class UniversalMonitor:
                                           (act or {}).get("action"), st_sym)
         events += evs
         self._alert_state[sym_key] = st_sym
-        plans_all, _ = load_plans_cached()
         events += self._background_events(sym_key, plans_all)
         if events:
             self._alert_banner = banner_rows(events)   # 保留顯示直到下批事件覆蓋

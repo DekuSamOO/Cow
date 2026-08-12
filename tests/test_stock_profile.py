@@ -13,7 +13,9 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"))
 
-from stock_profile import _fmt_money, short_term_traits, _margin_chg   # noqa: E402
+from stock_profile import (_coverage, _dims, _fmt_money, _low_position_note,   # noqa: E402
+                           _margin_chg, _momentum_block, render, short_term_traits)
+from core.momentum import time_series_momentum                                 # noqa: E402
 
 
 def _df(n=300, close=100.0, vol=1_000_000, spread=0.02):
@@ -133,7 +135,6 @@ def test_render_labels_population_from_tech_df_not_yahoo():
     """分位母體必須標 tech_from/tech_bars（分位真的算在 tech_df 上），不可用 history_from。
     驗收實況：台股 tech_df 來自 climber 400 根（≈1.7 年），Yahoo 是 2,431 根，
     render 卻印「母體＝2016 起全史」——與這個 session 開場修掉的 bug 同一個病。"""
-    from stock_profile import render
     p = _fake_profile(history_from="2016-08-12", bars=2431,
                       tech_from="2024-12-12", tech_bars=400)
     out = render(p)
@@ -145,7 +146,6 @@ def test_render_labels_population_from_tech_df_not_yahoo():
 def test_render_has_no_unconditional_gap_verdict():
     """舊版有一句無條件樣板「ATR 明顯較大＝波動主要發生在開盤那一跳」，不看任何數字、
     對跳空僅 5% 的股票也照印＝用固定文字冒充判讀。刪掉後不得再出現。"""
-    from stock_profile import render
     out = render(_fake_profile())
     assert "波動主要發生在開盤" not in out
     assert "不可相減" in out                       # 改成講清楚兩者口徑不同
@@ -155,7 +155,6 @@ def test_coverage_flags_sparse_history():
     """「X 起 N 根」字面為真卻暗示連續性：climber 的 6782 首列 2021-01-13、893 根，
     看起來像 5.6 年，實際 2021 只有 1 列、2022 只有 25 列，2023 才完整（涵蓋率 66%）。
     低涵蓋率不影響分位算得對不對，但會讓母體標示騙人 → 必須在畫面警示。"""
-    from stock_profile import _coverage, render
     idx_full = pd.date_range("2021-01-13", "2026-08-11", freq="B")      # 連續營業日
     assert _coverage(pd.DataFrame(index=idx_full), is_tw=True) > 0.95
     assert _coverage(pd.DataFrame(index=idx_full[::2]), is_tw=True) < 0.6   # 只留一半
@@ -168,7 +167,6 @@ def test_coverage_flags_sparse_history():
 
 def test_render_shows_three_data_cutoffs_not_just_clock():
     """只標執行時鐘會產生假新鮮的時間戳：技術面是昨收、TDCC 更舊、現價才是即時。"""
-    from stock_profile import render
     out = render(_fake_profile())
     head = out.split("## 基本資訊")[0]
     assert "資料截止" in head and "2026-08-11" in head and "20260807" in head
@@ -225,7 +223,6 @@ def test_turnover_ratio_is_stationary_but_full_pctile_is_not():
 def test_low_position_note_fires_only_on_lopsided_score_at_high_position():
     """抄底位置交叉檢查下沉到引擎：leverage 佔總分過半 **且** 位置不低才示警。
     低位置的融資暴減正是該維回測到的情境，不該打擾。"""
-    from stock_profile import _low_position_note
     lopsided = (76, {"leverage": {"score": 40}})
     assert _low_position_note(lopsided, 91) is not None      # 高檔＋單維獨大 → 示警
     assert _low_position_note(lopsided, 20) is None          # 低檔 → 正是該維的情境
@@ -236,7 +233,6 @@ def test_low_position_note_fires_only_on_lopsided_score_at_high_position():
 def test_price_source_is_tracked_not_inferred():
     """來源追蹤比照 Cow service 慣例：2026-08-12 驗收時 2330 的 price 與 prev_close
     恰好同值、漲跌 0.00%，從輸出無從分辨是即時報價還是回退到收盤。"""
-    from stock_profile import render
     out = render(_fake_profile(price_source="日線收盤（即時報價取得失敗）"))
     assert "日線收盤" in out
 
@@ -245,7 +241,6 @@ def test_radar_dims_are_structured_not_rendered_strings():
     """`--json` 宣稱結構化輸出，dims 卻曾是 `"20/30 背離 🔴 …；RSI ⚪ 中性(53)"` 這種
     渲染字串——消費端要拿 20 與 30 得跨 emoji 與全形分號剖字串。改為結構化 dict，
     並帶出各維的 `sub`（原始數值）。"""
-    from stock_profile import _dims
     sig = {"institution": {"score": 13, "max": 20, "label": "法人 🟢 買超 +9%均量",
                            "note": "三大法人買賣超/均量〔弱 AUC 0.542〕",
                            "sub": {"total_net": 3691144.0, "ratio_pct": 9.2347792}}}
@@ -260,29 +255,29 @@ def test_radar_dims_are_structured_not_rendered_strings():
 def test_momentum_json_omits_backtest_rejected_stance():
     """`momentum` 只給 rets，**刻意不帶 `stance`/`label`**：TSM 當訊號在 BTC 上已回測否決
     （無預測力、打不贏 B&H），`momentum_ref_rows` 本來就刻意不掛燈號以免被讀成交易訊號。
-    JSON 若把 stance 放回去，等於從後門把否決掉的東西送到消費端手上。"""
-    import stock_profile as sp
-    captured = {}
+    JSON 若把 stance 放回去，等於從後門把否決掉的東西送到消費端手上。
 
-    def fake_tsm(df):
-        captured["called"] = True
-        return {"rets": {90: 0.3194, 180: 0.6557, 365: 1.2159},
-                "stance": "up", "label": "全期為正", "n": 3, "n_pos": 3}
+    ⚠️ 舊版此測試 monkeypatch 掉 `time_series_momentum` 後**自己組一個 dict 再對它斷言**，
+    完全沒執行到 stock_profile 的任何一行——`momentum` 真把 stance 加回去它照樣綠燈，
+    是假證據。改成真的呼叫 `_momentum_block`，並先確認引擎本身確實有 stance/label
+    （否則「輸出沒有 stance」可能只是因為引擎根本沒產生它，測不到剝除這個動作）。"""
+    n = 400
+    idx = pd.date_range("2024-01-01", periods=n, freq="D")
+    close = pd.Series(np.linspace(100.0, 200.0, n), index=idx)
+    df = pd.DataFrame({"close": close}, index=idx)
 
-    orig = sp.time_series_momentum
-    sp.time_series_momentum = fake_tsm
-    try:
-        m = {"returns_pct": {k: round(v * 100, 2)
-                             for k, v in fake_tsm(None)["rets"].items()}}
-    finally:
-        sp.time_series_momentum = orig
-    assert m["returns_pct"] == {90: 31.94, 180: 65.57, 365: 121.59}
+    raw = time_series_momentum(df)
+    assert raw["stance"] == "up" and raw["label"]        # 引擎確實有燈號可被誤用
+    assert set(raw["rets"]) == {90, 180, 365}
+
+    m = _momentum_block(df)
+    assert set(m) == {"returns_pct", "note"}             # 只有這兩把鑰匙出得去
     assert "stance" not in m and "label" not in m
+    assert m["returns_pct"] == {lb: round(r * 100, 2) for lb, r in raw["rets"].items()}
 
 
 def test_render_reads_structured_dims():
     """render 改吃結構化 dims 後仍印出「分數/上限 標籤」的原樣式。"""
-    from stock_profile import render
     p = _fake_profile()
     p["radar"]["high"]["dims"] = {"volume": {"score": 6, "max": 18,
                                              "label": "量能 🟡 偏高 73分位",

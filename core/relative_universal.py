@@ -28,6 +28,18 @@ def _nan(v) -> bool:
     return v is None or (isinstance(v, float) and math.isnan(v))
 
 
+def midrank_pctile(arr) -> float:
+    """序列最後一筆在該序列中的 midrank 分位（0–1）——**ties 各算半個**。
+
+    midrank 而非單純 `<` 計數：定值序列回 0.5（非「爆量」滿分），避免常數 volume 誤判。
+    本式為**分位口徑的單一真實來源**：台股量能維（`relative_high_tw.vol_pctile`）與
+    `scripts/stock_profile.py` 的成交額分位共用它，兩者在同一份報表上並列給使用者比較，
+    實作分家就會靜默漂移（ties 處理或門檻只要改一邊，畫面上看不出來）。
+    `arr` 需為非空的 1D float ndarray；最小長度門檻由呼叫端各自決定。"""
+    latest = arr[-1]
+    return float(((arr < latest).sum() + 0.5 * (arr == latest).sum()) / len(arr))
+
+
 def rescale_dim(sig: dict, new_max: int) -> dict:
     """按比例縮放子維分數到新配額（score/max 按比例換算，label/note/sub 不變）。
 

@@ -52,32 +52,31 @@ from core.relative_high_tw import (compute_relative_high_tw,        # noqa: E402
                                    relative_high_tw_meta, vol_snapshot)
 from core.relative_low_tw import (compute_relative_low_tw,          # noqa: E402
                                   relative_low_tw_meta)
+from core.relative_universal import midrank_pctile                  # noqa: E402
 from core.trend_direction import compute_trend_score, trend_meta    # noqa: E402
 from service.ohlc_universal import (classify_symbol, fetch_ohlc,    # noqa: E402
-                                    fetch_live_quote, _session, _tw_candidates, _YF_CHART)
+                                    fetch_live_quote, fetch_quote_meta)
 
 # 流動性分級門檻（**市場慣例，非回測值**）：日均成交金額，台股新台幣／美股美元。
 # 用途只是「這檔進得去出得來嗎」的量級感，不是選股訊號。
 _LIQ_TIERS_TW = ((1e8, "充裕"), (1e7, "中等"), (0, "偏薄"))
 _LIQ_TIERS_US = ((5e7, "充裕"), (5e6, "中等"), (0, "偏薄"))
 
+# 「近 2 年」滾動窗的根數＝2 × 243（台股實測交易日/年；美股 251、幣 365，見
+# `core/term_ui.py` 均線組註解）。**兩市場共用同一根數**：這個窗的用途是讓分位母體不被
+# 名目成交額的長期成長汙染，美股少算 16 根不影響該目的，故不為此分市場再開一組常數。
+_BARS_2Y = 486
+
+# climber daily_quotes 取幾根：**不是隨手取的數**。量能/成交額分位的母體就是這段歷史，
+# 餵 400 根等於拿 1.7 年的短母體去比，與 Cow 台股量能維的校準口徑（expanding，面板自
+# 2016-01-01）不一致——那正是 2026-08-11 修掉的同一個病（見 README v3.36）。
+# 3000 ≈ 12 年，涵蓋 climber DB 自 2016 起的全史。**改小此值＝改分位定義。**
+_CLIMBER_DAYS = 3000
+
 
 # ──────────────────────────────────────────────────────────────────────────
 # 資料源
 # ──────────────────────────────────────────────────────────────────────────
-
-def _yahoo_meta(yahoo_symbol: str) -> dict:
-    """Yahoo v8 chart 的 meta 區（名稱/交易所/幣別/52週高低）。失敗回 {}。"""
-    for sym in _tw_candidates(yahoo_symbol):
-        try:
-            r = _session().get(_YF_CHART + sym, params={"range": "1d", "interval": "1d"},
-                               timeout=15)
-            r.raise_for_status()
-            return r.json()["chart"]["result"][0]["meta"] or {}
-        except Exception:      # noqa: BLE001 — 名稱屬加值資訊，取不到不該中斷整份 profile
-            continue
-    return {}
-
 
 def _climber_conn():
     """climber DB 連線；找不到檔案回 None（美股本來就用不到，台股則降級並在輸出標明）。"""
@@ -86,8 +85,8 @@ def _climber_conn():
     return sqlite3.connect(f"file:{_CLIMBER_DB}?mode=ro", uri=True)
 
 
-def _climber_history(con, stock_id: str, days: int = 3000) -> pd.DataFrame:
-    """climber daily_quotes → 近 days 根，欄名轉 Cow 慣例的 lowercase。
+def _climber_history(con, stock_id: str) -> pd.DataFrame:
+    """climber daily_quotes → 近 `_CLIMBER_DAYS` 根，欄名轉 Cow 慣例的 lowercase。
 
     **close 用 Adj_Close**（climber T-10 世代慣例；未還原收盤會在除息前後造出假型態），
     且 **open/high/low 同乘 `Adj_Close/Close` 一起還原**——只還原 close 會讓
@@ -95,15 +94,15 @@ def _climber_history(con, stock_id: str, days: int = 3000) -> pd.DataFrame:
     0.9744 漂到 1.0000，等於憑空生出最多 2.6% 的假跳空與假 true range。
     climber 自己的 `build_price_panels` 只換 close 欄，本檔刻意不照抄那個混用。
 
-    ⚠️ `days` 預設 3000（≈12 年，涵蓋 climber DB 自 2016 起的全史）**不是隨手取的數**：
-    量能/成交額分位的母體就是這段歷史，餵 400 根等於拿 1.7 年的短母體去比，與 Cow 台股
-    量能維的校準口徑（expanding，面板自 2016-01-01）不一致——那正是 2026-08-11 修掉的
-    同一個病（見 README v3.36）。改小此值＝改分位定義。"""
+    取幾根是分位定義的一部分，故寫成模組常數而非可調參數（見 `_CLIMBER_DAYS`）。
+    SELECT 只取真的有人讀的欄位：估值 PE/PB/Yield、法人三欄、Margin_Balance。
+    （Dealer_BuySell／Short_Balance 曾在此但全檔無消費端，留著會讓人以為自營商與
+    券資比有被納入評分——實際沒有。要納入是加功能，不是改 SQL 就好。）"""
     q = ("SELECT Date, Open, High, Low, Close, Adj_Close, Volume, PE, PB, Yield, "
-         "Foreign_BuySell, Trust_BuySell, Dealer_BuySell, Total_Inst_BuySell, "
-         "Margin_Balance, Short_Balance FROM daily_quotes "
+         "Foreign_BuySell, Trust_BuySell, Total_Inst_BuySell, "
+         "Margin_Balance FROM daily_quotes "
          "WHERE Stock_ID = ? ORDER BY Date DESC LIMIT ?")
-    df = pd.read_sql_query(q, con, params=[stock_id, days])
+    df = pd.read_sql_query(q, con, params=[stock_id, _CLIMBER_DAYS])
     if df.empty:
         return df
     df = df.iloc[::-1].reset_index(drop=True)
@@ -143,12 +142,12 @@ def _tier(value, tiers):
 
 
 def _midrank(s):
-    """序列最後一筆在該序列中的 midrank 分位（0–1）；不足 60 點回 None。"""
+    """序列最後一筆在該序列中的 midrank 分位（0–1）；不足 60 點回 None。
+    公式走 `core.relative_universal.midrank_pctile`（與台股量能維同一份口徑）——本檔把
+    成交額分位與股數分位並列印給使用者比較，兩邊各寫一份就會靜默漂移。"""
     if s is None or len(s) < 60:
         return None
-    arr = s.to_numpy(dtype=float)
-    latest = arr[-1]
-    return round(float(((arr < latest).sum() + 0.5 * (arr == latest).sum()) / len(arr)), 4)
+    return round(midrank_pctile(s.to_numpy(dtype=float)), 4)
 
 
 def short_term_traits(df: pd.DataFrame, is_tw: bool, shares_out=None) -> dict:
@@ -205,8 +204,8 @@ def short_term_traits(df: pd.DataFrame, is_tw: bool, shares_out=None) -> dict:
     to60 = turnover.rolling(60).mean().dropna()
     out["turnover_ratio_5_60"] = (round(float(to5.iloc[-1] / to60.iloc[-1]), 3)
                                   if len(to60) and to60.iloc[-1] > 0 else None)
-    out["turnover_pctile"] = _midrank(to5)                  # 全史（名目，會隨股價漂）
-    out["turnover_pctile_2y"] = _midrank(to5.tail(486))     # 近 2 年滾動（較平穩）
+    out["turnover_pctile"] = _midrank(to5)                       # 全史（名目，會隨股價漂）
+    out["turnover_pctile_2y"] = _midrank(to5.tail(_BARS_2Y))     # 近 2 年滾動（較平穩）
 
     ret = (close / close.shift() - 1).tail(60).dropna() * 100
     out["limit_move_days_60"] = int((ret.abs() >= 9.5).sum()) if is_tw and len(ret) else None
@@ -255,7 +254,7 @@ def profile(raw_symbol: str) -> dict:
         raise SystemExit("本工具只評價股票；幣對請用 watcher.py / BTC_WATCH.py")
 
     yq = fetch_ohlc(info["yahoo"])                 # 10y 日線（Cow 單一價格路徑）
-    meta = _yahoo_meta(info["yahoo"])
+    meta = fetch_quote_meta(info["yahoo"])
     live = fetch_live_quote(info["yahoo"])
     con = _climber_conn() if is_tw else None
 
@@ -268,10 +267,14 @@ def profile(raw_symbol: str) -> dict:
     ind = calculate_technical_indicators(tech_df)
     row = ind.iloc[-1]
 
-    # 來源追蹤：比照 Cow service 層慣例（`fetch_realtime_data` 的 price_source），
-    # 消費端直接讀欄位、**不在消費端做 `is not None` 判斷**（leaky abstraction，見專案
-    # CLAUDE.md〈service 層 fallback chain〉）。2026-08-12 驗收：2330 的 price 與
-    # prev_close 恰好同值、chg 0.00%，從輸出無從分辨是即時報價還是回退到收盤。
+    # 來源追蹤：比照 Cow service 層慣例（`fetch_realtime_data` 的 price_source）——
+    # 退回判斷**只做一次、結果存成欄位**，下游（agent／`render`）直接讀 `price_source`，
+    # 不必各自對 `live` 再推論一遍（leaky abstraction，見專案 CLAUDE.md〈service 層
+    # fallback chain〉）。⚠️ 判斷本身目前落在本檔而非 service：`fetch_live_quote` 只回
+    # 原始欄位、不含來源標記，watcher 也各自判一次——真正的單一出口要等 service 層補
+    # `resolve_live_price`（比照既有的 `resolve_live_volume`）。
+    # 2026-08-12 驗收：2330 的 price 與 prev_close 恰好同值、chg 0.00%，從輸出無從分辨
+    # 是即時報價還是回退到收盤。
     price_source = "Yahoo 即時報價" if live.get("price") else "日線收盤（即時報價取得失敗）"
     price = live.get("price") or float(yq["close"].iloc[-1])
     # 52 週高低：用 **Yahoo 未還原序列 + 日曆 365 天**。
@@ -330,22 +333,16 @@ def profile(raw_symbol: str) -> dict:
         "short_term": short_term_traits(tech_df, is_tw, shares_out),
         "patterns": climber_patterns(tech_df, info["display"]),
         # 顯示用（含對齊空白）與機器用分開：`momentum_rows` 是預排版字串，消費端要拿
-        # 3M/6M/12M 三個數字得剖字串（2026-08-12 驗收）。
-        # ⚠️ `momentum` **只給 rets，刻意不帶 `stance`/`label`**：TSM 當訊號在 BTC 上已
-        # 回測否決（`tests/momentum_backtest.py` 2026-07，無預測力、打不贏 B&H），
-        # `momentum_ref_rows` 本來就刻意不掛燈號以免被讀成交易訊號——JSON 這邊要是把
-        # stance 放回去，等於從後門把否決掉的東西又送到消費端手上。
+        # 3M/6M/12M 三個數字得剖字串（2026-08-12 驗收）→ 機器用的走 `_momentum_block`
+        # （為何刻意不帶 stance 見該函式）。
         "momentum_rows": momentum_ref_rows(ind),
-        "momentum": {"returns_pct": {k: (None if v is None else round(v * 100, 2))
-                                     for k, v in (time_series_momentum(ind).get("rets")
-                                                  or {}).items()},
-                     "note": "過去報酬為中性事實；TSM 當訊號已回測否決，故不提供 stance"},
+        "momentum": _momentum_block(ind),
     }
 
-    score, sig = compute_trend_score(row, ind), None
-    out["trend"] = {"score": score[0], "label": trend_meta(score[0])[0],
+    trend = compute_trend_score(row, ind)
+    out["trend"] = {"score": trend[0], "label": trend_meta(trend[0])[0],
                     "detail": [f"{v['score']:+d}/±{v['max']} {v['label']}"
-                               for v in score[1].values()] if isinstance(score[1], dict) else []}
+                               for v in trend[1].values()] if isinstance(trend[1], dict) else []}
 
     if is_tw and con is not None:
         cdf_last = tech_df.iloc[-1]
@@ -432,14 +429,28 @@ def _low_position_note(low_result, pos_52w):
             "同樣拿高分。此處**不可讀成「跌深可接刀」**，請對照逃頂側的估值維再判。")
 
 
+def _momentum_block(df) -> dict:
+    """JSON 的 `momentum` 區塊：**只給 rets，刻意不帶 `stance`/`label`**。
+
+    TSM 當訊號在 BTC 上已回測否決（`tests/momentum_backtest.py` 2026-07，無預測力、
+    打不贏 B&H），`momentum_ref_rows` 本來就刻意不掛燈號以免被讀成交易訊號——JSON 這邊
+    要是把 stance 放回去，等於從後門把否決掉的東西又送到消費端手上。
+    獨立成函式是為了讓這個「不准送出去」的不變量能被直接測到（`tests/test_stock_profile.py`）；
+    內嵌在 `profile()` 的 dict literal 裡時，測試只能自己重打一份而驗不到真東西。"""
+    rets = time_series_momentum(df).get("rets") or {}
+    return {"returns_pct": {k: (None if v is None else round(v * 100, 2))
+                            for k, v in rets.items()},
+            "note": "過去報酬為中性事實；TSM 當訊號已回測否決，故不提供 stance"}
+
+
 def _coverage(df, is_tw: bool):
     """實際根數 ÷ 該起訖區間應有的交易日數（台股 243 根/年、美股 251、實測 Yahoo 10y）。
     <1 代表期間有整段缺漏，母體不如首列日期看起來那麼長。區間過短回 None（分母不穩）。"""
     span_days = (df.index[-1] - df.index[0]).days
-    if span_days < 120:
+    if span_days < 120:                 # 過濾後 expected 恆為正，無須再防除以零
         return None
     expected = span_days / 365.25 * (243 if is_tw else 251)
-    return round(min(len(df) / expected, 1.0), 3) if expected > 0 else None
+    return round(min(len(df) / expected, 1.0), 3)
 
 
 def _f(v):

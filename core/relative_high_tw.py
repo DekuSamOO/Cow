@@ -33,7 +33,7 @@ PE/PB **用絕對值非分位**（swing 重測：絕對 PE 0.626 大勝個股分
 from typing import Optional, Dict, Tuple
 
 from core.divergence import detect_top_divergence_combo
-from core.relative_universal import (score_volume_price_top, rescale_dim,
+from core.relative_universal import (score_volume_price_top, rescale_dim, midrank_pctile,
                                      _nan, high_meta_ladder, avg_vol as _avg_vol)
 
 WEIGHTS_HIGH_TW = {
@@ -63,6 +63,13 @@ def _vol_series(df, *, drop_last: bool = False):
     return v.dropna()
 
 
+def _vol_population(v, window: int):
+    """清洗後量序列 → 分位比較母體＝歷史上**每一天**的同口徑 `window` 日均量。
+    `vol_pctile` 的排名母體與 `vol_snapshot` 的 `n_pop` 都取自這裡（母體只能有一個定義，
+    畫面標的「共 N 筆」才不會與實際排名的母體對不上）。window<=1 時母體即原序列。"""
+    return v.rolling(window).mean().dropna() if window > 1 else v
+
+
 def vol_pctile(df, *, window: int = VOL_WINDOW, drop_last: bool = False) -> Optional[float]:
     """近 `window` 日均量在個股自身歷史的分位（0–1，midrank 處理 ties）。
     自包含、零外部依賴（用 df 本身的 volume 歷史）→ 與 watcher live 自包含原則一致。
@@ -88,23 +95,17 @@ def vol_pctile(df, *, window: int = VOL_WINDOW, drop_last: bool = False) -> Opti
     v = _vol_series(df, drop_last=drop_last)
     if v is None:
         return None
-    if window > 1:
-        v = v.rolling(window).mean().dropna()   # 母體＝歷史每一天的 N 日均量（同口徑才可比）
-    if len(v) < 60:
+    pop = _vol_population(v, window)
+    if len(pop) < 60 or float(pop.iloc[-1]) <= 0:
         return None
-    latest = float(v.iloc[-1])
-    if latest <= 0:
-        return None
-    arr = v.to_numpy(dtype=float)
-    # midrank：定值序列回 0.5（非「爆量」），避免常數 volume 誤判滿分
-    return float(((arr < latest).sum() + 0.5 * (arr == latest).sum()) / len(arr))
+    return midrank_pctile(pop.to_numpy(dtype=float))
 
 
 def vol_snapshot(df, *, window: int = VOL_WINDOW, ref_window: int = 60,
                  drop_last: bool = False) -> Optional[dict]:
-    """量能顯示用快照（**純顯示，不參與計分**）——與 `vol_pctile` 共用 `_vol_series`，
-    畫面數字與計分分位不會漂移。回傳
-    `{ma, pctile, ref_ma, ratio, ref_window, n_pop}`，資料不足回 None。
+    """量能顯示用快照（**純顯示，不參與計分**）——與 `vol_pctile` 共用 `_vol_series`
+    與 `_vol_population`，畫面數字、母體筆數與計分分位不會漂移。回傳
+    `{ma, pctile, ratio, ref_window, n_pop}`，資料不足回 None。
 
     存在理由：`pctile` 是「近 N 日均量在歷史的排名」，使用者卻自然會用「今日量 ÷ 近 N 日
     均量」去驗算它（2026-08-11 實際回報：219,571 ÷ 648,800 = 0.34「應該是 33 分位」）。
@@ -116,14 +117,14 @@ def vol_snapshot(df, *, window: int = VOL_WINDOW, ref_window: int = 60,
     v = _vol_series(df, drop_last=drop_last)
     if v is None or len(v) < ref_window:
         return None
-    pct = vol_pctile(df, window=window, drop_last=drop_last)
-    if pct is None:
+    pop = _vol_population(v, window)          # 與 vol_pctile 同一份母體，不重算清洗
+    if len(pop) < 60:
         return None
     ma, ref_ma = float(v.tail(window).mean()), float(v.tail(ref_window).mean())
-    if ma <= 0 or ref_ma <= 0:
+    if ma <= 0 or ref_ma <= 0:                # ma 即 pop.iloc[-1]，兼作分位的正值前提
         return None
-    return {"ma": ma, "pctile": pct, "ref_ma": ref_ma, "ratio": ma / ref_ma,
-            "ref_window": ref_window, "n_pop": len(v) - window + 1}
+    return {"ma": ma, "pctile": midrank_pctile(pop.to_numpy(dtype=float)),
+            "ratio": ma / ref_ma, "ref_window": ref_window, "n_pop": len(pop)}
 
 
 # W-7（2026-07-06）：升公開名 vol_pctile（watcher.py 曾直接 import 跨模組私名 _vol_pctile，

@@ -114,9 +114,10 @@ def test_prompt_interrupt_exits_cleanly(monkeypatch, exc):
 
 # ── 籌碼源故障不得中斷監控（2026-08-11，模擬 TWSE 逾時實測出來的洞）───────────
 
-def _tw_monitor(monkeypatch, n=60):
+def _tw_monitor(monkeypatch):
     """台股 monitor，日線來源 mock 成功；籌碼由各測試自行注入。"""
     m = UniversalMonitor(dict(_INFO_TW))
+    n = 60
     df = pd.DataFrame({"close": range(n), "volume": [100] * n},
                       index=pd.date_range("2026-01-01", periods=n, freq="D"))
     monkeypatch.setattr(watcher, "fetch_ohlc", lambda *a, **k: df)
@@ -140,7 +141,7 @@ def test_chip_failure_does_not_break_fetch(monkeypatch):
 def test_chip_failure_keeps_previous_bundle(monkeypatch):
     """已有上一輪籌碼時刷新失敗 → 保留舊的（TWSE 是 EOD 檔，舊一天仍是真資料，
     畫面的 as_of 會如實顯示是哪天），不要清成 None 讓面板整塊消失。"""
-    m, df = _tw_monitor(monkeypatch)
+    m, _ = _tw_monitor(monkeypatch)
     import service.tw_chip as tw_chip
     stale = {"as_of": "20260810", "valuation": {"pe": 13.0, "pb": 3.0}}
     monkeypatch.setattr(tw_chip, "get_chip_bundle", lambda *a, **k: stale)
@@ -156,7 +157,7 @@ def test_chip_failure_keeps_previous_bundle(monkeypatch):
 
 
 def test_chip_success_clears_error_flag(monkeypatch):
-    m, df = _tw_monitor(monkeypatch)
+    m, _ = _tw_monitor(monkeypatch)
     m._chip_err = "上一輪的錯"
     import service.tw_chip as tw_chip
     monkeypatch.setattr(tw_chip, "get_chip_bundle", lambda *a, **k: {"as_of": "20260811"})
