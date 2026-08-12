@@ -1,4 +1,4 @@
-# Cow — 比特幣投資戰情室 v3.41
+# Cow — 比特幣投資戰情室 v3.42
 
 > 比特幣多週期量化分析工具，整合技術指標、鏈上數據、期權與波段策略。
 
@@ -444,6 +444,34 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
      （`yield` vs `yield_pct`、`foreign` vs `foreign_net`、tdcc `as_of` vs `date`）、
      `is_tw: bool` 未改用 `kind` 查表、climber DB 路徑解析全 repo 已有 6 份、
      窄終端機下 K 線圖仍是「先畫完再丟棄」。
+
+### v3.42 (2026-08-12)
+修掉 closer 審查標記的兩項口徑漂移。**兩項都改變分數，非零行為變更。**
+- **fix（影響抄底 40 分維，已產出的報告因此作廢）**: `_margin_chg` 由「近 5 日變化」改為
+  **真正的日變化**，且**兩筆相隔 > 5 天即回 None**（fail-loud）。
+  該值直接餵 `compute_relative_low_tw` 的 `leverage` 維——抄底側**滿分 40 的最強維**，
+  門檻 −1/−3/−5% 是在**日變化**上校準的（AUC 0.564，正本 `tw_calib_extract` 用
+  `Margin_Balance.pct_change()`）。舊寫法踩兩層錯：①口徑本身不是日變化 ②更糟的是
+  `dropna()` 會**把資料斷層吃掉**——climber 的 `Margin_Balance` 自 2026-07-10 起整段斷掉、
+  只剩 07-31 孤立一筆（2026-08 起 13,652 列全 NULL），於是「近 5 個資料點」實際跨了
+  **28 天**。實測衝擊：
+  | | 抄底（修前） | 抄底（修後） |
+  |---|---|---|
+  | 2330 | 53「明確低估」（leverage 40/40「斷頭清洗」） | **13「🔴 無底部訊號」**（leverage 0/40 無資料） |
+  | 6782 | 76「強力低估」（leverage 40/40） | **36「🟡 偏冷觀察」**（leverage 0/40） |
+  這也解釋了 `_low_position_note` 一直警告的「leverage 單維獨大」——不只是配重問題，
+  **輸入本身就是錯尺度**。寧可整維無資料，也不要靜默餵一個跨月數字假裝是日變化。
+  ⚠️ **climber 的 `Margin_Balance` 資料斷層是 climber 管線問題**，本次未動 climber。
+- **fix**: `short_term_traits` 的 ATR 改**讀 `calculate_technical_indicators` 已算好的
+  `ATR` 欄**，不再自算。原本自算 `tr.rolling(14).mean()`（SMA）而 core 產出的是
+  pandas-ta 的 **Wilder RMA** → 同一支股票在 watcher 與 stock_profile 印出兩個不同的
+  「ATR(14) x.xx%/日」，而 `core/risk.py` 檔頭正是為了「避免公式在兩邊分別維護後漂移」
+  而存在。修後三檔對拍 watcher `compute_atr_risk` 逐位一致（2330 2.7973%／6782 3.1640%／
+  1101 2.2268%）。
+- **test**: 新增 3 項（日變化非累積／跨斷層回 None 且容連假 3 天／ATR 只讀欄不自算）；
+  `test_atr_and_intraday_amplitude_are_different_questions` 改寫為
+  `test_gap_ratio_and_amplitude_measure_different_things`——ATR 已不是本檔責任，
+  對它斷言等於在錯的層測試。`pytest tests/ -q` → **422 passed, 2 deselected**。
 
 ### v3.41 (2026-08-12)
 `stock-evaluator` 第三輪驗收：**兩支 agent 均回報「無實質缺陷」，判讀口徑已收斂**；

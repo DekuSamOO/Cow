@@ -100,20 +100,21 @@ def test_turnover_rate_needs_shares_outstanding():
     assert got == pytest.approx(1.0)
 
 
-def test_atr_and_intraday_amplitude_are_different_questions():
-    """ATR 含隔日跳空、盤中振幅不含。全程無跳空的合成資料兩者應相等；
-    加入跳空後只有 ATR 變大——報表把兩者並列就是要讓人看出「波動在哪裡發生」。"""
+def test_gap_ratio_and_amplitude_measure_different_things():
+    """盤中振幅（high−low）與隔夜跳空是兩件事，報表把兩者並列就是要讓人看出
+    「波動發生在哪裡」。**ATR 不在本檔的責任範圍**——它由 core/indicators 產出、
+    本檔只讀欄位（見 `test_atr_reads_precomputed_column_not_a_second_formula`），
+    所以這裡不再對 ATR 斷言，那是 core 的測試該管的事。"""
     flat = _df(spread=0.02)                       # high/low ±2%、無跳空
     st = short_term_traits(flat, is_tw=True)
-    assert st["atr14_pct"] == pytest.approx(st["amp_median_pct"], rel=0.01)
+    assert st["amp_median_pct"] == pytest.approx(4.0, rel=0.01)   # (1.02−0.98)/1.00
     assert st["gap_over_2pct_ratio"] == 0.0
 
     gapped = flat.copy()
     gapped.iloc[-1, gapped.columns.get_loc("open")] = 110.0    # 末根跳空 +10%
-    gapped.iloc[-1, gapped.columns.get_loc("high")] = 112.0
     st2 = short_term_traits(gapped, is_tw=True)
-    assert st2["atr14_pct"] > st["atr14_pct"]
     assert st2["gap_over_2pct_ratio"] > 0
+    assert st2["amp_median_pct"] == st["amp_median_pct"]        # 跳空不影響盤中振幅
 
 
 # ── 融資變化 ────────────────────────────────────────────────────────────────
@@ -123,10 +124,45 @@ def test_margin_chg_absent_column_returns_none():
     assert _margin_chg(_df()) is None
 
 
-def test_margin_chg_five_day_pct():
+def test_margin_chg_is_daily_not_multi_day():
+    """必須是**日**變化：抄底 leverage 是滿分 40 的最強維，門檻 −1/−3/−5% 在日變化上校準
+    （正本 `tw_calib_extract` 用 `Margin_Balance.pct_change()`）。餵別的口徑進去＝拿別的尺
+    去量校準好的門檻。"""
     df = _df(n=20)
-    df["Margin_Balance"] = [1000.0] * 14 + [1000, 1000, 1000, 1000, 1000, 900.0]
+    df["Margin_Balance"] = [1000.0] * 19 + [900.0]      # 只有最後一天 −10%
     assert _margin_chg(df) == pytest.approx(-10.0)
+    df2 = _df(n=20)
+    df2["Margin_Balance"] = list(range(1000, 1020))      # 每日 +0.1% 左右
+    got = _margin_chg(df2)
+    assert got == pytest.approx((1019 / 1018 - 1) * 100)  # 只看最後兩天，非累積
+
+
+def test_margin_chg_returns_none_across_data_gap():
+    """`dropna()` 會把資料斷層吃掉：climber 的 Margin_Balance 自 2026-07-10 起整段斷掉、
+    只剩 07-31 孤立一筆，舊式 `iloc[-1]/iloc[-6]` 於是跨了 **28 天**還自稱「近 5 日」，
+    2330 得 −15.13%、6782 −5.49% → 兩檔都拿 leverage 滿分 40 被標「斷頭清洗」，
+    直接撐起抄底 53／76 分。跨斷層寧可整維無資料，也不要靜默餵錯尺度的數字。"""
+    idx = pd.to_datetime(["2026-07-08", "2026-07-09", "2026-07-31"])
+    gapped = pd.DataFrame({"Margin_Balance": [34509.0, 34000.0, 29289.0]}, index=idx)
+    assert _margin_chg(gapped) is None                   # 最後兩筆相隔 22 天 → 不採用
+    ok = pd.DataFrame({"Margin_Balance": [34509.0, 34000.0]},
+                      index=pd.to_datetime(["2026-07-08", "2026-07-09"]))
+    assert _margin_chg(ok) == pytest.approx((34000 / 34509 - 1) * 100)
+    # 連假容忍：週五→週一相隔 3 天仍算相鄰
+    holiday = pd.DataFrame({"Margin_Balance": [100.0, 99.0]},
+                           index=pd.to_datetime(["2026-07-10", "2026-07-13"]))
+    assert holiday is not None and _margin_chg(holiday) == pytest.approx(-1.0)
+
+
+def test_atr_reads_precomputed_column_not_a_second_formula():
+    """ATR 必須讀 calculate_technical_indicators 算好的欄（pandas-ta Wilder RMA），
+    不可自算 SMA——`core/risk.py` 檔頭正是為了「避免公式在兩邊分別維護後漂移」而存在，
+    同一支股票在 watcher 與本檔印出兩個不同的 ATR 就是那個漂移。"""
+    df = _df(n=60)
+    assert short_term_traits(df, is_tw=True)["atr14_pct"] is None   # 無 ATR 欄 → None，不自算
+    df2 = _df(n=60)
+    df2["ATR"] = 5.0
+    assert short_term_traits(df2, is_tw=True)["atr14_pct"] == pytest.approx(5.0)
 
 
 # ── 2026-08-12 stock-evaluator 驗收抓到的缺陷 ──────────────────────────────

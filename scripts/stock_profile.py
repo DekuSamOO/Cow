@@ -170,10 +170,14 @@ def short_term_traits(df: pd.DataFrame, is_tw: bool, shares_out=None) -> dict:
                              if out["turnover_20d"] is not None else None)
     out["turnover_unit"] = "TWD" if is_tw else "USD"
 
-    tr = pd.concat([high - low, (high - close.shift()).abs(),
-                    (low - close.shift()).abs()], axis=1).max(axis=1)
-    atr14 = tr.rolling(14).mean().iloc[-1]
-    out["atr14_pct"] = float(atr14 / close.iloc[-1] * 100) if pd.notna(atr14) else None
+    # ATR 直接讀 `calculate_technical_indicators` 已算好的欄，**不自己再算一份**。
+    # 原本這裡自算 `tr.rolling(14).mean()`（SMA），但 core/indicators 產出的 `ATR` 是
+    # pandas-ta 的 **Wilder RMA** → 同一支股票在 watcher 與本檔會印出兩個不同的
+    # 「ATR(14) x.xx%/日」。`core/risk.py` 檔頭正是為了「避免公式在兩邊分別維護後漂移」
+    # 而存在，這裡再寫一份等於當面違反它（2026-08-12 closer 審查抓到）。
+    atr14 = df["ATR"].iloc[-1] if "ATR" in getattr(df, "columns", []) else None
+    out["atr14_pct"] = (float(atr14 / close.iloc[-1] * 100)
+                        if atr14 is not None and pd.notna(atr14) else None)
 
     amp = ((high - low) / close).tail(60).dropna() * 100
     out["amp_median_pct"] = float(amp.median()) if len(amp) else None
@@ -330,7 +334,9 @@ def profile(raw_symbol: str) -> dict:
         "market_cap": price * shares_out if shares_out else None,
         "shares_outstanding": shares_out,
         "tech_source": src_note,
-        "short_term": short_term_traits(tech_df, is_tw, shares_out),
+        # 傳 `ind` 不是 `tech_df`：ATR 要讀 calculate_technical_indicators 算好的欄
+        # （單一真實來源，見 short_term_traits 內註解）。其餘欄位 ind 都繼承自 tech_df。
+        "short_term": short_term_traits(ind, is_tw, shares_out),
         "patterns": climber_patterns(tech_df, info["display"]),
         # 顯示用（含對齊空白）與機器用分開：`momentum_rows` 是預排版字串，消費端要拿
         # 3M/6M/12M 三個數字得剖字串（2026-08-12 驗收）→ 機器用的走 `_momentum_block`
@@ -461,14 +467,37 @@ def _f(v):
         return None
 
 
+# 兩筆融資餘額相隔超過這麼多天就視為跨越資料斷層，不當成「日變化」用
+_MARGIN_MAX_GAP_DAYS = 5
+
+
 def _margin_chg(df):
-    """融資餘額近 5 日變化%（climber DB 才有 Margin_Balance）。"""
-    if "Margin_Balance" not in df.columns:
+    """融資餘額**日變化%**（climber DB 才有 Margin_Balance）。資料不可用時回 None。
+
+    ⚠️ 這個值會直接餵進 `compute_relative_low_tw` 的 `leverage` 維——**抄底側滿分 40 的
+    最強維**，門檻 −1/−3/−5% 是在**日變化**上校準的（AUC 0.564，正本
+    `scripts/tw_calib_extract.py` 用 `Margin_Balance.pct_change()`＝日變化）。
+    餵不同口徑進去就是拿別的尺去量校準好的門檻。
+
+    舊版寫 `m.iloc[-1] / m.iloc[-6]`（宣稱「近 5 日」）踩了兩層錯，2026-08-12 實查：
+      ① 口徑本身就不是日變化；
+      ② 更糟的是 `dropna()` 會**把資料斷層吃掉**——climber 的 Margin_Balance 自
+         2026-07-10 起整段斷掉、只剩 07-31 孤立一筆，於是「近 5 個資料點」實際跨了
+         **28 天**，2330 得到 −15.13%、6782 −5.49%，兩檔都因此拿到 leverage 滿分 40
+         並被標成「斷頭清洗」，直接撐起抄底 53／76 分。
+
+    修法：只認**相鄰兩筆**且日期相距 ≤ `_MARGIN_MAX_GAP_DAYS` 天（容連假）。跨斷層一律
+    回 None，寧可整維沒資料（該維會顯示「⚪ 無資料」給 0 分）也不要靜默餵錯尺度的數字。
+    """
+    if "Margin_Balance" not in getattr(df, "columns", []):
         return None
     m = pd.to_numeric(df["Margin_Balance"], errors="coerce").dropna()
-    if len(m) < 6 or m.iloc[-6] == 0:
+    if len(m) < 2 or m.iloc[-2] == 0:
         return None
-    return float((m.iloc[-1] / m.iloc[-6] - 1) * 100)
+    gap_days = (m.index[-1] - m.index[-2]).days
+    if gap_days > _MARGIN_MAX_GAP_DAYS:
+        return None                      # 跨資料斷層 → fail-loud，不假裝是日變化
+    return float((m.iloc[-1] / m.iloc[-2] - 1) * 100)
 
 
 # ──────────────────────────────────────────────────────────────────────────
