@@ -239,3 +239,52 @@ def test_price_source_is_tracked_not_inferred():
     from stock_profile import render
     out = render(_fake_profile(price_source="日線收盤（即時報價取得失敗）"))
     assert "日線收盤" in out
+
+
+def test_radar_dims_are_structured_not_rendered_strings():
+    """`--json` 宣稱結構化輸出，dims 卻曾是 `"20/30 背離 🔴 …；RSI ⚪ 中性(53)"` 這種
+    渲染字串——消費端要拿 20 與 30 得跨 emoji 與全形分號剖字串。改為結構化 dict，
+    並帶出各維的 `sub`（原始數值）。"""
+    from stock_profile import _dims
+    sig = {"institution": {"score": 13, "max": 20, "label": "法人 🟢 買超 +9%均量",
+                           "note": "三大法人買賣超/均量〔弱 AUC 0.542〕",
+                           "sub": {"total_net": 3691144.0, "ratio_pct": 9.2347792}}}
+    d = _dims(sig)["institution"]
+    assert d["score"] == 13 and d["max"] == 20
+    # 法人正規化比率原本只活在渲染字串的「+9%」裡，與融資維的 fin_chg_pct 數值欄不對稱；
+    # 帶出 sub 之後有全精度值，可回溯、可跨日程式化比較
+    assert d["sub"]["ratio_pct"] == pytest.approx(9.2347792)
+    assert _dims({"x": {"score": 1, "max": 2, "label": "L"}})["x"]["sub"] == {}   # 無 sub 不爆
+
+
+def test_momentum_json_omits_backtest_rejected_stance():
+    """`momentum` 只給 rets，**刻意不帶 `stance`/`label`**：TSM 當訊號在 BTC 上已回測否決
+    （無預測力、打不贏 B&H），`momentum_ref_rows` 本來就刻意不掛燈號以免被讀成交易訊號。
+    JSON 若把 stance 放回去，等於從後門把否決掉的東西送到消費端手上。"""
+    import stock_profile as sp
+    captured = {}
+
+    def fake_tsm(df):
+        captured["called"] = True
+        return {"rets": {90: 0.3194, 180: 0.6557, 365: 1.2159},
+                "stance": "up", "label": "全期為正", "n": 3, "n_pos": 3}
+
+    orig = sp.time_series_momentum
+    sp.time_series_momentum = fake_tsm
+    try:
+        m = {"returns_pct": {k: round(v * 100, 2)
+                             for k, v in fake_tsm(None)["rets"].items()}}
+    finally:
+        sp.time_series_momentum = orig
+    assert m["returns_pct"] == {90: 31.94, 180: 65.57, 365: 121.59}
+    assert "stance" not in m and "label" not in m
+
+
+def test_render_reads_structured_dims():
+    """render 改吃結構化 dims 後仍印出「分數/上限 標籤」的原樣式。"""
+    from stock_profile import render
+    p = _fake_profile()
+    p["radar"]["high"]["dims"] = {"volume": {"score": 6, "max": 18,
+                                             "label": "量能 🟡 偏高 73分位",
+                                             "note": None, "sub": {}}}
+    assert "volume：6/18 量能 🟡 偏高 73分位" in render(p)

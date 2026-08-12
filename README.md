@@ -1,4 +1,4 @@
-# Cow — 比特幣投資戰情室 v3.40
+# Cow — 比特幣投資戰情室 v3.41
 
 > 比特幣多週期量化分析工具，整合技術指標、鏈上數據、期權與波段策略。
 
@@ -386,6 +386,25 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 ---
 
 ## 版本紀錄
+
+### v3.41 (2026-08-12)
+`stock-evaluator` 第三輪驗收：**兩支 agent 均回報「無實質缺陷」，判讀口徑已收斂**；
+補掉最後兩個 `--json` 結構缺口。
+- **fix**: `radar.*.dims` 由**渲染字串**改為結構化 dict（`score`/`max`/`label`/`note`/`sub`）。
+  原本存的是 `"20/30 背離 🔴 RSI+MACD 雙頂；RSI ⚪ 中性(53)"`，消費端要拿 20 與 30 得跨
+  emoji 與全形分號剖字串——`--json` 宣稱結構化輸出，實際只是把終端排版塞進 JSON。
+- **fix**: 帶出各維的 `sub`（維度自算的原始數值），順帶補掉**法人維的不對稱**：融資維有
+  `chip.margin.fin_chg_pct` 數值欄，法人「+9% 均量」這個經 20 日均量正規化的比率卻只活在
+  渲染字串裡 → 現在 `dims.institution.sub.ratio_pct` 有全精度值（9.234779…），可回溯、
+  可跨日程式化比較。
+- **fix**: 新增結構化 `momentum.returns_pct`（`momentum_rows` 是含對齊空白的預排版字串）。
+  ⚠️ **刻意只給 rets、不帶 `stance`/`label`**：TSM 當訊號在 BTC 上已回測否決
+  （`tests/momentum_backtest.py` 2026-07，無預測力、打不贏 B&H），`momentum_ref_rows`
+  本來就刻意不掛燈號以免被讀成交易訊號——JSON 若把 stance 放回去，等於從後門把否決掉的
+  東西送到消費端手上。
+- **doc**: agent 定義 §四 標題「四個機械問題」→ 五個（v3.40 加了第 5 點卻漏改計數）。
+- **test**: 新增 3 項（dims 結構化且帶 sub／momentum 不含被否決的 stance／render 讀結構化
+  dims 後樣式不變）。`pytest tests/ -q` → **420 passed, 2 deselected**。
 
 ### v3.40 (2026-08-12)
 `stock-evaluator` 第二輪驗收：活躍度指標換成平穩量測，＋9 項修正。

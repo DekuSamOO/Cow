@@ -47,7 +47,7 @@ _CLIMBER_DB = os.getenv("TW_CLIMBER_DB") or os.path.join(
     _CLIMBER, "db", "twse_official_data.db")
 
 from core.indicators import calculate_technical_indicators          # noqa: E402
-from core.momentum import momentum_ref_rows                         # noqa: E402
+from core.momentum import momentum_ref_rows, time_series_momentum   # noqa: E402
 from core.relative_high_tw import (compute_relative_high_tw,        # noqa: E402
                                    relative_high_tw_meta, vol_snapshot)
 from core.relative_low_tw import (compute_relative_low_tw,          # noqa: E402
@@ -329,7 +329,17 @@ def profile(raw_symbol: str) -> dict:
         "tech_source": src_note,
         "short_term": short_term_traits(tech_df, is_tw, shares_out),
         "patterns": climber_patterns(tech_df, info["display"]),
+        # 顯示用（含對齊空白）與機器用分開：`momentum_rows` 是預排版字串，消費端要拿
+        # 3M/6M/12M 三個數字得剖字串（2026-08-12 驗收）。
+        # ⚠️ `momentum` **只給 rets，刻意不帶 `stance`/`label`**：TSM 當訊號在 BTC 上已
+        # 回測否決（`tests/momentum_backtest.py` 2026-07，無預測力、打不贏 B&H），
+        # `momentum_ref_rows` 本來就刻意不掛燈號以免被讀成交易訊號——JSON 這邊要是把
+        # stance 放回去，等於從後門把否決掉的東西又送到消費端手上。
         "momentum_rows": momentum_ref_rows(ind),
+        "momentum": {"returns_pct": {k: (None if v is None else round(v * 100, 2))
+                                     for k, v in (time_series_momentum(ind).get("rets")
+                                                  or {}).items()},
+                     "note": "過去報酬為中性事實；TSM 當訊號已回測否決，故不提供 stance"},
     }
 
     score, sig = compute_trend_score(row, ind), None
@@ -365,11 +375,9 @@ def profile(raw_symbol: str) -> dict:
         lo = compute_relative_low_tw(row, ind, chip=chip)
         out["radar"] = {
             "high": {"score": h[0], "label": relative_high_tw_meta(h[0])[0],
-                     "dims": {k: f"{v['score']}/{v['max']} {v['label']}"
-                              for k, v in h[1].items()}},
+                     "dims": _dims(h[1])},
             "low": {"score": lo[0], "label": relative_low_tw_meta(lo[0])[0],
-                    "dims": {k: f"{v['score']}/{v['max']} {v['label']}"
-                             for k, v in lo[1].items()},
+                    "dims": _dims(lo[1]),
                     # 位置交叉檢查**下沉到引擎**，不再只寫在 agent prompt 裡：抄底
                     # leverage 維（融資暴減，滿分 40、AUC 0.564）回測情境是「斷頭清洗」，
                     # 但該維**不看價格位置**——高檔獲利了結造成的融資減少同樣拿滿分，
@@ -391,6 +399,21 @@ def profile(raw_symbol: str) -> dict:
     if con is not None:
         con.close()
     return out
+
+
+def _dims(signals: dict) -> dict:
+    """雷達各維 → **結構化** dict，不是渲染字串。
+
+    2026-08-12 驗收：原本存的是 `"20/30 背離 🔴 RSI+MACD 雙頂；RSI ⚪ 中性(53)"`，
+    消費端要拿 20 與 30 得跨 emoji 與全形分號做字串剖析——`--json` 宣稱結構化輸出，
+    實際只是把終端排版塞進 JSON。
+
+    一併帶出各維的 `sub`（維度自己算出的原始數值），這也順帶補上法人維的不對稱：
+    融資維有 `chip.margin.fin_chg_pct` 數值欄，法人「+9% 均量」這個經 20 日均量正規化
+    的比率卻只存在渲染字串裡 → 現在在 `dims.institution.sub.ratio_pct` 有全精度值。"""
+    return {k: {"score": v.get("score"), "max": v.get("max"), "label": v.get("label"),
+                "note": v.get("note"), "sub": v.get("sub") or {}}
+            for k, v in signals.items()}
 
 
 def _low_position_note(low_result, pos_52w):
@@ -539,7 +562,7 @@ def render(p: dict) -> str:
             r = p["radar"][side]
             L.append(f"- **{zh} {r['score']}/100　{r['label']}**")
             for k, v in r["dims"].items():
-                L.append(f"  - {k}：{v}")
+                L.append(f"  - {k}：{v['score']}/{v['max']} {v['label']}")
             if r.get("position_note"):
                 L.append(f"  - {r['position_note']}")
         c = p["chip"]
