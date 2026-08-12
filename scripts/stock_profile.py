@@ -142,6 +142,15 @@ def _tier(value, tiers):
     return tiers[-1][1]
 
 
+def _midrank(s):
+    """序列最後一筆在該序列中的 midrank 分位（0–1）；不足 60 點回 None。"""
+    if s is None or len(s) < 60:
+        return None
+    arr = s.to_numpy(dtype=float)
+    latest = arr[-1]
+    return round(float(((arr < latest).sum() + 0.5 * (arr == latest).sum()) / len(arr)), 4)
+
+
 def short_term_traits(df: pd.DataFrame, is_tw: bool, shares_out=None) -> dict:
     """短線交易特性（**全部是描述性事實，非預測、未回測**）。
 
@@ -177,20 +186,27 @@ def short_term_traits(df: pd.DataFrame, is_tw: bool, shares_out=None) -> dict:
     snap = vol_snapshot(df)
     out["vol_pctile"] = round(snap["pctile"], 4) if snap else None
     out["vol_ratio_5_60"] = round(snap["ratio"], 3) if snap else None
-    # 成交「金額」分位——跨年代比較必須用金額不是股數。Yahoo/climber 的 volume 都已還原
-    # 股票分割，但**股數本身會隨股價長期漂移**：NVDA 分年日量中位數 2016 3.97 億股 →
-    # 2026 1.59 億股（同期收盤 1.7 → 195.7），股數分位因此顯示「十年最低 0 分位」，
-    # 讀起來像「沒人在交易」，實際上日成交額 $26B 是全市場最活躍的一檔。
-    # 股數分位保留是因為它是 Cow 台股量能維的**校準口徑**（AUC 0.648，不可換單位），
-    # 金額分位則是給人看「這檔現在活不活」的正確問法。兩者並列。
+    # ── 活躍度：三個指標，平穩性各不相同，**主指標只用平穩的那兩個** ──────────
+    #
+    # 走過的兩個彎路（留著當反例，不要再犯）：
+    #  ① **股數分位**：volume 雖已還原股票分割，但股數本身隨股價長期漂移——NVDA 分年
+    #     日量中位數 2016 3.97 億股 → 2026 1.59 億股（同期收盤 1.7 → 195.7），股數分位
+    #     顯示「十年最低 0 分位」讀起來像沒人交易，實際日成交額 $26B 是最活躍的一檔。
+    #  ② **全史成交額分位**：改用金額後方向相反但是同一種病——名目金額長期成長
+    #     （2330 分年日成交額中位數 2016 38.3 億 → 2026 834.5 億，21.8x），expanding
+    #     全史分位讓近年天數天然落在高分位。實測 2330 全史 94 vs 近 2 年滾動 68，
+    #     **差 25 個百分點**（1101 對照組亦差 19）。那 94 分有一大截是股價成長不是活躍度。
+    #
+    # → 主指標改用**天生平穩**的兩個：週轉率（量 ÷ 已發行股數，無量綱、不隨價格漂移）
+    #   與金額量比（自己比自己，分子分母同單位同期，通膨與股價成長自動相消）。
+    #   全史金額分位降級為「名目金額的歷史位置」參考欄，另出近 2 年滾動版。
+    #   股數分位維持不動——它是 Cow 台股量能維的**校準口徑**（AUC 0.648），不可換單位。
     to5 = turnover.rolling(5).mean().dropna()
-    if len(to5) >= 60:
-        latest = float(to5.iloc[-1])
-        arr = to5.to_numpy(dtype=float)
-        out["turnover_pctile"] = round(
-            float(((arr < latest).sum() + 0.5 * (arr == latest).sum()) / len(arr)), 4)
-    else:
-        out["turnover_pctile"] = None
+    to60 = turnover.rolling(60).mean().dropna()
+    out["turnover_ratio_5_60"] = (round(float(to5.iloc[-1] / to60.iloc[-1]), 3)
+                                  if len(to60) and to60.iloc[-1] > 0 else None)
+    out["turnover_pctile"] = _midrank(to5)                  # 全史（名目，會隨股價漂）
+    out["turnover_pctile_2y"] = _midrank(to5.tail(486))     # 近 2 年滾動（較平穩）
 
     ret = (close / close.shift() - 1).tail(60).dropna() * 100
     out["limit_move_days_60"] = int((ret.abs() >= 9.5).sum()) if is_tw and len(ret) else None
@@ -252,8 +268,18 @@ def profile(raw_symbol: str) -> dict:
     ind = calculate_technical_indicators(tech_df)
     row = ind.iloc[-1]
 
+    # 來源追蹤：比照 Cow service 層慣例（`fetch_realtime_data` 的 price_source），
+    # 消費端直接讀欄位、**不在消費端做 `is not None` 判斷**（leaky abstraction，見專案
+    # CLAUDE.md〈service 層 fallback chain〉）。2026-08-12 驗收：2330 的 price 與
+    # prev_close 恰好同值、chg 0.00%，從輸出無從分辨是即時報價還是回退到收盤。
+    price_source = "Yahoo 即時報價" if live.get("price") else "日線收盤（即時報價取得失敗）"
     price = live.get("price") or float(yq["close"].iloc[-1])
-    win = yq.tail(252)
+    # 52 週高低：用 **Yahoo 未還原序列 + 日曆 365 天**。
+    #  · 未還原：與上面的 `price`（即時成交價，本來就是未還原）同基準。拿 climber 的
+    #    還原序列算低點、再跟未還原現價比位置，才是真的混用口徑。
+    #  · 日曆 365 天而非 tail(252)：252 「根」對台股是 54 週、對幣對只有 36 週
+    #    （watcher 亦有同款潛在陷阱，見 README v3.37）。「52 週」就該用時間定義。
+    win = yq[yq.index >= yq.index[-1] - pd.Timedelta(days=365)]
     hi52, lo52 = float(win["high"].max()), float(win["low"].min())
 
     shares_out = None
@@ -271,14 +297,16 @@ def profile(raw_symbol: str) -> dict:
         "name": meta.get("longName") or meta.get("shortName"),
         "exchange": meta.get("fullExchangeName"),
         "currency": meta.get("currency"),
-        # ⚠️ `as_of` 是**執行時鐘**，不是資料時間。盤中跑，現價/漲跌%/52週位置/市值都會漂
+        # ⚠️ `run_at` 是**執行時鐘**，不是資料時間。盤中跑，現價/漲跌%/52週位置/市值都會漂
         # （實測同日 09:25 與 09:29 兩次：2,400.00 → 2,405.00）。真正的資料截止日看
         # `data_as_of`（技術面/型態/雷達）與 `chip.as_of`／`chip.tdcc.as_of`（籌碼）。
-        # 消費端標時間戳必須三個都標，只標 as_of 會產生「假新鮮」的時間戳。
+        # 消費端標時間戳必須三個都標，只標執行時鐘會產生「假新鮮」的時間戳。
+        # 舊欄位 `as_of` 已移除（語意曖昧、和 chip.as_of 同名不同義，留著遲早再騙人一次）。
         "run_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "as_of": datetime.now().strftime("%Y-%m-%d %H:%M"),   # 舊名保留，語意同 run_at
         "price": price,
+        "price_source": price_source,
         "prev_close": live.get("prev_close"),
+        "hi_lo_52w_basis": "Yahoo 未還原收盤，日曆 365 天（與即時現價同基準）",
         "chg_pct": ((price / live["prev_close"] - 1) * 100
                     if live.get("prev_close") else None),
         "hi_52w": hi52, "lo_52w": lo52,
@@ -316,7 +344,11 @@ def profile(raw_symbol: str) -> dict:
                           "yield": _f(cdf_last.get("Yield"))},
             "institutional": {"total_net": _f(cdf_last.get("Total_Inst_BuySell")),
                               "foreign": _f(cdf_last.get("Foreign_BuySell")),
-                              "trust": _f(cdf_last.get("Trust_BuySell"))},
+                              "trust": _f(cdf_last.get("Trust_BuySell")),
+                              # 單位比照 short_term.turnover_unit 的既有做法明寫出來：
+                              # climber daily_quotes 的三大法人買賣超存的是**股數**，
+                              # 不標的話消費端無從分辨是張/股/仟股（2026-08-12 驗收）。
+                              "unit": "股"},
             "margin": {"fin_chg_pct": _margin_chg(tech_df)},
             "tdcc": _climber_tdcc(con, info["display"]),
             "as_of": str(tech_df.index[-1].date()),
@@ -337,7 +369,19 @@ def profile(raw_symbol: str) -> dict:
                               for k, v in h[1].items()}},
             "low": {"score": lo[0], "label": relative_low_tw_meta(lo[0])[0],
                     "dims": {k: f"{v['score']}/{v['max']} {v['label']}"
-                             for k, v in lo[1].items()}},
+                             for k, v in lo[1].items()},
+                    # 位置交叉檢查**下沉到引擎**，不再只寫在 agent prompt 裡：抄底
+                    # leverage 維（融資暴減，滿分 40、AUC 0.564）回測情境是「斷頭清洗」，
+                    # 但該維**不看價格位置**——高檔獲利了結造成的融資減少同樣拿滿分，
+                    # 於是會出現「52週位置 90%、PB 判🔴偏貴，標籤卻寫『明確低估』」。
+                    # 配重經過回測不動，但機器要把矛盾講出來，不能靠讀者自己想起來。
+                    "position_note": _low_position_note(lo, out["pos_52w_pct"])},
+            # 涵蓋率警語也要掛在雷達：量能維吃的是同一個受涵蓋率影響的分位，
+            # 只看雷達區塊的讀者原本無從得知母體有缺漏（2026-08-12 驗收）。
+            "coverage_note": (
+                f"⚠ 量能維的分位母體涵蓋率僅 {out['tech_coverage']*100:.0f}%，"
+                "分位只能讀成「有資料那幾年內偏高/偏低」"
+                if (out.get("tech_coverage") or 1) < 0.9 else None),
         }
     else:
         out["chip"] = None
@@ -347,6 +391,22 @@ def profile(raw_symbol: str) -> dict:
     if con is not None:
         con.close()
     return out
+
+
+def _low_position_note(low_result, pos_52w):
+    """抄底分數的位置交叉檢查（純顯示，不改分數）。
+    `low_result` 為 `compute_relative_low_tw` 的 (score, signals)。
+    只有在「leverage 維佔了總分一大半」且「價格位置不低」時才示警——這正是該維會誤導的
+    組合；低位置的融資暴減本來就是它回測到的情境，不該打擾。"""
+    if pos_52w is None:
+        return None
+    score, sig = low_result
+    lev = (sig.get("leverage") or {}).get("score", 0)
+    if score <= 0 or lev / score < 0.5 or pos_52w < 60:
+        return None
+    return (f"⚠ 抄底 {score} 分中 {lev} 分來自 leverage（融資暴減）單一維，"
+            f"而 52 週位置 {pos_52w:.0f}%。該維不看價格位置——高檔獲利了結造成的融資減少"
+            "同樣拿高分。此處**不可讀成「跌深可接刀」**，請對照逃頂側的估值維再判。")
 
 
 def _coverage(df, is_tw: bool):
@@ -407,9 +467,10 @@ def render(p: dict) -> str:
     L.append("")
     L.append("## 基本資訊")
     chg = f"{p['chg_pct']:+.2f}%" if p["chg_pct"] is not None else "—"
-    L.append(f"- 現價 {p['price']:,.2f}（{chg}）")
+    L.append(f"- 現價 {p['price']:,.2f}（{chg}）　來源：{p.get('price_source', '—')}")
     L.append(f"- 52週高/低 {p['hi_52w']:,.2f} / {p['lo_52w']:,.2f}"
-             + (f"（位置 {p['pos_52w_pct']:.0f}%）" if p["pos_52w_pct"] is not None else ""))
+             + (f"（位置 {p['pos_52w_pct']:.0f}%）" if p["pos_52w_pct"] is not None else "")
+             + f"　〔{p.get('hi_lo_52w_basis', '')}〕")
     if p["market_cap"]:
         L.append(f"- 市值 {_fmt_money(p['market_cap'], st['turnover_unit'])}"
                  f"（已發行 {p['shares_outstanding']:,.0f} 股）")
@@ -438,14 +499,20 @@ def render(p: dict) -> str:
     cov = p.get("tech_coverage")
     if cov is not None and cov < 0.9:
         pop += f"，**但涵蓋率僅 {cov*100:.0f}%**（期間有整段缺漏，母體沒有起始日看起來那麼長）"
-    if st["turnover_pctile"] is not None:
-        L.append(f"- 活躍度　5日均**成交額** {st['turnover_pctile']*100:.0f} 分位"
-                 f"（{pop}）← 跨年代比較看這個")
+    if st["turnover_ratio_5_60"] is not None:
+        L.append(f"- **活躍度**　近5日/近60日**成交額**量比 {st['turnover_ratio_5_60']:.2f}x"
+                 "　← 判讀「現在活不活」看這個（自己比自己，不受股價成長汙染）")
+    if st["turnover_pctile_2y"] is not None:
+        L.append(f"- 金額位置　5日均成交額：近2年滾動 {st['turnover_pctile_2y']*100:.0f} 分位"
+                 f"｜全史 {st['turnover_pctile']*100:.0f} 分位（{pop}）")
+        L.append("　　　　　（**全史分位是名目金額的歷史位置，不是活躍度**——名目成交額長期"
+                 "成長，2330 分年中位數 2016 38 億→2026 835 億，全史 94 vs 近2年 68 差 25 個"
+                 "百分點，那一截是股價成長不是變活躍）")
     if st["vol_pctile"] is not None:
         L.append(f"- 量能　　5日均**股數** {st['vol_pctile']*100:.0f} 分位（{pop}）"
                  f"｜5日/60日**股數**量比 {st['vol_ratio_5_60']:.2f}x")
-        L.append("　　　　　（股數是 Cow 台股量能維的校準口徑 AUC 0.648，不可換單位；"
-                 "但股價長期上漲會讓股數分位失真 → 判讀活躍度看上一行的成交額）")
+        L.append("　　　　　（股數口徑僅供對照 Cow 台股量能維的校準值 AUC 0.648，不可換單位；"
+                 "股價長期漲跌會讓股數分位失真，判讀活躍度一律看上面的成交額量比）")
     if st["limit_move_days_60"] is not None:
         L.append(f"- 極端日　近60日單日 ±9.5% 以上 {st['limit_move_days_60']} 天（台股 ±10% 制度）")
     L.append("")
@@ -466,11 +533,15 @@ def render(p: dict) -> str:
     L.append("")
     if p["radar"]:
         L.append("## 已回測雷達（台股籌碼，AUC 見 FINDINGS-cow-radar-backtests）")
+        if p["radar"].get("coverage_note"):
+            L.append(f"- {p['radar']['coverage_note']}")
         for side, zh in (("high", "逃頂"), ("low", "抄底")):
             r = p["radar"][side]
             L.append(f"- **{zh} {r['score']}/100　{r['label']}**")
             for k, v in r["dims"].items():
                 L.append(f"  - {k}：{v}")
+            if r.get("position_note"):
+                L.append(f"  - {r['position_note']}")
         c = p["chip"]
         L.append(f"- 籌碼估值截至 {c['as_of']}：PE {c['valuation']['pe']}｜PB {c['valuation']['pb']}"
                  f"｜殖利率 {c['valuation']['yield']}")

@@ -181,21 +181,61 @@ def _fake_profile(**over):
           "turnover_unit": "TWD", "atr14_pct": 2.89, "amp_median_pct": 1.84,
           "amp_p90_pct": 3.19, "gap_over_2pct_ratio": 0.25, "vol_pctile": 0.20,
           "vol_ratio_5_60": 0.63, "turnover_pctile": 0.94, "limit_move_days_60": 1,
+          "turnover_pctile_2y": 0.68, "turnover_ratio_5_60": 0.64,
           "turnover_rate_pct": 0.15}
     p = {"symbol": "2330", "name": "台灣積體電路製造股份有限公司", "market": "台股",
          "exchange": "Taiwan", "currency": "TWD", "run_at": "2026-08-12 09:42",
-         "as_of": "2026-08-12 09:42", "data_as_of": "2026-08-11",
+         "data_as_of": "2026-08-11",
          "price": 2390.0, "chg_pct": -0.21, "hi_52w": 2535.0, "lo_52w": 1125.0,
          "pos_52w_pct": 90.0, "history_from": "2016-08-12", "bars": 2431,
          "tech_from": "2016-01-04", "tech_bars": 2573, "tech_coverage": 1.0,
          "market_cap": 6.198e13, "shares_outstanding": 25932370067,
          "tech_source": "climber DB Adj_Close（至 2026-08-11）", "short_term": st,
+         "price_source": "Yahoo 即時報價",
          "patterns": {"available": True, "patterns": {"has_ma_bloom": False}, "features": {}},
          "momentum_rows": ["  過去報酬      3M +30%"],
          "trend": {"score": 26, "label": "🟢 多頭趨勢", "detail": []},
          "chip": {"as_of": "2026-08-11", "valuation": {"pe": 32.0, "pb": 10.5, "yield": 0.92},
                   "tdcc": {"as_of": "20260807", "major_pct": 84.7, "retail_pct": 8.9}},
          "radar": {"high": {"score": 43, "label": "🟡 偏熱警戒", "dims": {}},
-                   "low": {"score": 40, "label": "🟡 偏冷觀察", "dims": {}}}}
+                   "low": {"score": 40, "label": "🟡 偏冷觀察", "dims": {},
+                           "position_note": None}, "coverage_note": None}}
     p.update(over)
     return p
+
+
+def test_turnover_ratio_is_stationary_but_full_pctile_is_not():
+    """活躍度主指標必須平穩。名目成交額長期成長（2330 分年中位 2016 38 億→2026 835 億，
+    21.8x）→ expanding 全史分位讓近年天數天然落在高分位（實測全史 94 vs 近2年滾動 68，
+    差 25 個百分點）。合成：成交額每年穩定成長、但**最近 60 天完全沒有變活躍**。"""
+    n = 900
+    idx = pd.date_range("2020-01-01", periods=n, freq="D")
+    price = pd.Series(10 * 20 ** (np.arange(n) / (n - 1)), index=idx)   # 名目 20 倍
+    df = pd.DataFrame({"open": price, "high": price * 1.02, "low": price * 0.98,
+                       "close": price, "volume": [1e6] * n}, index=idx)
+    st = short_term_traits(df, is_tw=False)
+    # 全史分位**飽和**到頂——名目只要單調成長，最後一天必然接近 100 分位，與活躍度無關
+    assert st["turnover_pctile"] > 0.95
+    # 量比只反映「5日窗與60日窗中心相隔約 27 天的那段成長」，量級小得多（此例約 1.09）。
+    # 不斷言恰為 1.0：資料本身確實還在成長，量比如實反映它才對；重點是**不會飽和**。
+    assert 1.0 < st["turnover_ratio_5_60"] < 1.2
+    assert st["turnover_pctile_2y"] < st["turnover_pctile"]            # 滾動窗較不受汙染
+
+
+def test_low_position_note_fires_only_on_lopsided_score_at_high_position():
+    """抄底位置交叉檢查下沉到引擎：leverage 佔總分過半 **且** 位置不低才示警。
+    低位置的融資暴減正是該維回測到的情境，不該打擾。"""
+    from stock_profile import _low_position_note
+    lopsided = (76, {"leverage": {"score": 40}})
+    assert _low_position_note(lopsided, 91) is not None      # 高檔＋單維獨大 → 示警
+    assert _low_position_note(lopsided, 20) is None          # 低檔 → 正是該維的情境
+    assert _low_position_note((76, {"leverage": {"score": 10}}), 91) is None  # 分數分散
+    assert _low_position_note(lopsided, None) is None        # 無位置資料不猜
+
+
+def test_price_source_is_tracked_not_inferred():
+    """來源追蹤比照 Cow service 慣例：2026-08-12 驗收時 2330 的 price 與 prev_close
+    恰好同值、漲跌 0.00%，從輸出無從分辨是即時報價還是回退到收盤。"""
+    from stock_profile import render
+    out = render(_fake_profile(price_source="日線收盤（即時報價取得失敗）"))
+    assert "日線收盤" in out
