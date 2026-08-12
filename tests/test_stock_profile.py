@@ -125,3 +125,77 @@ def test_margin_chg_five_day_pct():
     df = _df(n=20)
     df["Margin_Balance"] = [1000.0] * 14 + [1000, 1000, 1000, 1000, 1000, 900.0]
     assert _margin_chg(df) == pytest.approx(-10.0)
+
+
+# ── 2026-08-12 stock-evaluator 驗收抓到的缺陷 ──────────────────────────────
+
+def test_render_labels_population_from_tech_df_not_yahoo():
+    """分位母體必須標 tech_from/tech_bars（分位真的算在 tech_df 上），不可用 history_from。
+    驗收實況：台股 tech_df 來自 climber 400 根（≈1.7 年），Yahoo 是 2,431 根，
+    render 卻印「母體＝2016 起全史」——與這個 session 開場修掉的 bug 同一個病。"""
+    from stock_profile import render
+    p = _fake_profile(history_from="2016-08-12", bars=2431,
+                      tech_from="2024-12-12", tech_bars=400)
+    out = render(p)
+    assert "母體＝2024-12-12 起 400 根" in out
+    active_line = out.split("活躍度")[1].splitlines()[0]
+    assert "2016-08-12" not in active_line and "2,431" not in active_line
+
+
+def test_render_has_no_unconditional_gap_verdict():
+    """舊版有一句無條件樣板「ATR 明顯較大＝波動主要發生在開盤那一跳」，不看任何數字、
+    對跳空僅 5% 的股票也照印＝用固定文字冒充判讀。刪掉後不得再出現。"""
+    from stock_profile import render
+    out = render(_fake_profile())
+    assert "波動主要發生在開盤" not in out
+    assert "不可相減" in out                       # 改成講清楚兩者口徑不同
+
+
+def test_coverage_flags_sparse_history():
+    """「X 起 N 根」字面為真卻暗示連續性：climber 的 6782 首列 2021-01-13、893 根，
+    看起來像 5.6 年，實際 2021 只有 1 列、2022 只有 25 列，2023 才完整（涵蓋率 66%）。
+    低涵蓋率不影響分位算得對不對，但會讓母體標示騙人 → 必須在畫面警示。"""
+    from stock_profile import _coverage, render
+    idx_full = pd.date_range("2021-01-13", "2026-08-11", freq="B")      # 連續營業日
+    assert _coverage(pd.DataFrame(index=idx_full), is_tw=True) > 0.95
+    assert _coverage(pd.DataFrame(index=idx_full[::2]), is_tw=True) < 0.6   # 只留一半
+    assert _coverage(pd.DataFrame(index=idx_full[:20]), is_tw=True) is None   # 區間太短不猜
+
+    out = render(_fake_profile(tech_coverage=0.66))
+    assert "涵蓋率僅 66%" in out
+    assert "涵蓋率" not in render(_fake_profile(tech_coverage=0.99))
+
+
+def test_render_shows_three_data_cutoffs_not_just_clock():
+    """只標執行時鐘會產生假新鮮的時間戳：技術面是昨收、TDCC 更舊、現價才是即時。"""
+    from stock_profile import render
+    out = render(_fake_profile())
+    head = out.split("## 基本資訊")[0]
+    assert "資料截止" in head and "2026-08-11" in head and "20260807" in head
+    assert "現價為即時" in head
+
+
+def _fake_profile(**over):
+    """render() 用的最小 profile（合成，不打網路/DB）。"""
+    st = {"turnover_20d": 9.35e10, "turnover_60d": 9.49e10, "liquidity_tier": "充裕",
+          "turnover_unit": "TWD", "atr14_pct": 2.89, "amp_median_pct": 1.84,
+          "amp_p90_pct": 3.19, "gap_over_2pct_ratio": 0.25, "vol_pctile": 0.20,
+          "vol_ratio_5_60": 0.63, "turnover_pctile": 0.94, "limit_move_days_60": 1,
+          "turnover_rate_pct": 0.15}
+    p = {"symbol": "2330", "name": "台灣積體電路製造股份有限公司", "market": "台股",
+         "exchange": "Taiwan", "currency": "TWD", "run_at": "2026-08-12 09:42",
+         "as_of": "2026-08-12 09:42", "data_as_of": "2026-08-11",
+         "price": 2390.0, "chg_pct": -0.21, "hi_52w": 2535.0, "lo_52w": 1125.0,
+         "pos_52w_pct": 90.0, "history_from": "2016-08-12", "bars": 2431,
+         "tech_from": "2016-01-04", "tech_bars": 2573, "tech_coverage": 1.0,
+         "market_cap": 6.198e13, "shares_outstanding": 25932370067,
+         "tech_source": "climber DB Adj_Close（至 2026-08-11）", "short_term": st,
+         "patterns": {"available": True, "patterns": {"has_ma_bloom": False}, "features": {}},
+         "momentum_rows": ["  過去報酬      3M +30%"],
+         "trend": {"score": 26, "label": "🟢 多頭趨勢", "detail": []},
+         "chip": {"as_of": "2026-08-11", "valuation": {"pe": 32.0, "pb": 10.5, "yield": 0.92},
+                  "tdcc": {"as_of": "20260807", "major_pct": 84.7, "retail_pct": 8.9}},
+         "radar": {"high": {"score": 43, "label": "🟡 偏熱警戒", "dims": {}},
+                   "low": {"score": 40, "label": "🟡 偏冷觀察", "dims": {}}}}
+    p.update(over)
+    return p

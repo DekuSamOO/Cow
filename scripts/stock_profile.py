@@ -86,14 +86,19 @@ def _climber_conn():
     return sqlite3.connect(f"file:{_CLIMBER_DB}?mode=ro", uri=True)
 
 
-def _climber_history(con, stock_id: str, days: int = 400) -> pd.DataFrame:
+def _climber_history(con, stock_id: str, days: int = 3000) -> pd.DataFrame:
     """climber daily_quotes → 近 days 根，欄名轉 Cow 慣例的 lowercase。
 
     **close 用 Adj_Close**（climber T-10 世代慣例；未還原收盤會在除息前後造出假型態），
     且 **open/high/low 同乘 `Adj_Close/Close` 一起還原**——只還原 close 會讓
     `|high − close.shift()|` 這類跨欄比較吃到還原因子本身：2330 近 400 根的因子從
     0.9744 漂到 1.0000，等於憑空生出最多 2.6% 的假跳空與假 true range。
-    climber 自己的 `build_price_panels` 只換 close 欄，本檔刻意不照抄那個混用。"""
+    climber 自己的 `build_price_panels` 只換 close 欄，本檔刻意不照抄那個混用。
+
+    ⚠️ `days` 預設 3000（≈12 年，涵蓋 climber DB 自 2016 起的全史）**不是隨手取的數**：
+    量能/成交額分位的母體就是這段歷史，餵 400 根等於拿 1.7 年的短母體去比，與 Cow 台股
+    量能維的校準口徑（expanding，面板自 2016-01-01）不一致——那正是 2026-08-11 修掉的
+    同一個病（見 README v3.36）。改小此值＝改分位定義。"""
     q = ("SELECT Date, Open, High, Low, Close, Adj_Close, Volume, PE, PB, Yield, "
          "Foreign_BuySell, Trust_BuySell, Dealer_BuySell, Total_Inst_BuySell, "
          "Margin_Balance, Short_Balance FROM daily_quotes "
@@ -266,7 +271,12 @@ def profile(raw_symbol: str) -> dict:
         "name": meta.get("longName") or meta.get("shortName"),
         "exchange": meta.get("fullExchangeName"),
         "currency": meta.get("currency"),
-        "as_of": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        # ⚠️ `as_of` 是**執行時鐘**，不是資料時間。盤中跑，現價/漲跌%/52週位置/市值都會漂
+        # （實測同日 09:25 與 09:29 兩次：2,400.00 → 2,405.00）。真正的資料截止日看
+        # `data_as_of`（技術面/型態/雷達）與 `chip.as_of`／`chip.tdcc.as_of`（籌碼）。
+        # 消費端標時間戳必須三個都標，只標 as_of 會產生「假新鮮」的時間戳。
+        "run_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "as_of": datetime.now().strftime("%Y-%m-%d %H:%M"),   # 舊名保留，語意同 run_at
         "price": price,
         "prev_close": live.get("prev_close"),
         "chg_pct": ((price / live["prev_close"] - 1) * 100
@@ -275,6 +285,17 @@ def profile(raw_symbol: str) -> dict:
         "pos_52w_pct": (price - lo52) / (hi52 - lo52) * 100 if hi52 > lo52 else None,
         "history_from": str(yq.index[0].date()),
         "bars": len(yq),
+        # 分位母體＝tech_df（台股是 climber、美股是 Yahoo），與 history_from 可能不同來源、
+        # 不同長度。2026-08-12 驗收抓到 render 拿 history_from 去標分位母體 → 台股顯示
+        # 「2016 起全史」但實際只有 400 根 ≈1.7 年。**標示母體一律用這兩個欄位。**
+        "tech_from": str(tech_df.index[0].date()),
+        "tech_bars": len(tech_df),
+        # 涵蓋率＝實際根數 ÷ 該區間應有的交易日數。「X 起 N 根」字面為真卻會**暗示連續性**：
+        # climber 的 6782 首列是 2021-01-13、共 893 根，看起來像 5.6 年連續資料，實際
+        # 2021 年只有 1 列、2022 年 25 列，2023 才開始完整 → 分位母體其實是 3.6 年。
+        # 低涵蓋率不影響分位算得對不對，但會讓「母體＝2021 起」這個標示騙人。
+        "tech_coverage": _coverage(tech_df, is_tw),
+        "data_as_of": str(tech_df.index[-1].date()),   # 技術面/型態/雷達的資料截止日
         "market_cap": price * shares_out if shares_out else None,
         "shares_outstanding": shares_out,
         "tech_source": src_note,
@@ -302,7 +323,11 @@ def profile(raw_symbol: str) -> dict:
         }
         out["chip"] = chip
         name, market = _climber_name(con, info["display"])
-        out["name"] = out["name"] or name
+        # 台股**中文名優先**：Yahoo 對台股回的是英文登記名（6782 → "Visco Vision Inc."），
+        # 消費端要用中文名寫報告標題時，若只拿得到英文名就得憑記憶翻譯——而憑記憶陳述
+        # 正是規範禁止的。climber `stock_list` 有全名，有就蓋掉 Yahoo 的。
+        out["name_en"] = out["name"]
+        out["name"] = name or out["name"]
         out["tw_market"] = market
         h = compute_relative_high_tw(row, ind, chip=chip)
         lo = compute_relative_low_tw(row, ind, chip=chip)
@@ -322,6 +347,16 @@ def profile(raw_symbol: str) -> dict:
     if con is not None:
         con.close()
     return out
+
+
+def _coverage(df, is_tw: bool):
+    """實際根數 ÷ 該起訖區間應有的交易日數（台股 243 根/年、美股 251、實測 Yahoo 10y）。
+    <1 代表期間有整段缺漏，母體不如首列日期看起來那麼長。區間過短回 None（分母不穩）。"""
+    span_days = (df.index[-1] - df.index[0]).days
+    if span_days < 120:
+        return None
+    expected = span_days / 365.25 * (243 if is_tw else 251)
+    return round(min(len(df) / expected, 1.0), 3) if expected > 0 else None
 
 
 def _f(v):
@@ -363,7 +398,12 @@ def _fmt_money(v, unit):
 def render(p: dict) -> str:
     st, L = p["short_term"], []
     L.append(f"# {p['symbol']} {p['name'] or ''}（{p['market']}）")
-    L.append(f"資料時間 {p['as_of']}｜{p.get('exchange') or ''} {p.get('currency') or ''}")
+    L.append(f"執行時間 {p['run_at']}｜{p.get('exchange') or ''} {p.get('currency') or ''}")
+    tdcc_as_of = ((p.get("chip") or {}).get("tdcc") or {}).get("as_of")
+    L.append(f"**資料截止**：技術面/型態/雷達 {p['data_as_of']}"
+             + (f"｜籌碼估值 {p['chip']['as_of']}" if p.get("chip") else "")
+             + (f"｜TDCC {tdcc_as_of}" if tdcc_as_of else "")
+             + "｜現價為即時（盤中每次執行都會變）")
     L.append("")
     L.append("## 基本資訊")
     chg = f"{p['chg_pct']:+.2f}%" if p["chg_pct"] is not None else "—"
@@ -383,16 +423,29 @@ def render(p: dict) -> str:
         L.append(f"- 週轉率　20日均量 ÷ 已發行股數 = {st['turnover_rate_pct']:.2f}%/日")
     L.append(f"- 波動度　ATR(14) {st['atr14_pct']:.2f}%/日"
              f"｜近60日**盤中**振幅 中位 {st['amp_median_pct']:.2f}% / 90分位 {st['amp_p90_pct']:.2f}%")
-    L.append("　　　　　（ATR 含隔日跳空、振幅不含 → ATR 明顯較大＝這檔的波動主要發生在開盤那一跳）")
+    # 這兩個數字**不可相減當作跳空幅度**：ATR 是 14 日平均、振幅是 60 日中位數，窗口與
+    # 統計量都不同，且振幅右偏（中位 << 90 分位）本就讓均值高於中位。
+    # 舊版這裡有一句無條件樣板「ATR 明顯較大＝波動主要在開盤那一跳」，不看任何數字、
+    # 對跳空僅 5% 的 6782 也照印，等於用固定文字冒充判讀（2026-08-12 驗收抓到）。
+    # 要談跳空就直接看下一行的實測比率。
+    L.append("　　　　　（兩者窗口/統計量不同，不可相減；隔夜風險看下一行實測跳空比率）")
     L.append(f"- 跳空　　近60日開盤跳空 >2% 佔 {st['gap_over_2pct_ratio']*100:.0f}%"
              "（停損被跳過去的風險）")
+    # 母體一律標 tech_from/tech_bars（分位真正算在 tech_df 上），**不可用 history_from**
+    # ——台股 tech_df 來自 climber、Yahoo 只提供價格，兩者長度不同（2026-08-12 驗收抓到
+    # 台股顯示「2016 起全史」但實際只有 400 根 ≈1.7 年）。
+    pop = f"母體＝{p['tech_from']} 起 {p['tech_bars']:,} 根"
+    cov = p.get("tech_coverage")
+    if cov is not None and cov < 0.9:
+        pop += f"，**但涵蓋率僅 {cov*100:.0f}%**（期間有整段缺漏，母體沒有起始日看起來那麼長）"
     if st["turnover_pctile"] is not None:
         L.append(f"- 活躍度　5日均**成交額** {st['turnover_pctile']*100:.0f} 分位"
-                 f"（母體＝{p['history_from']} 起全史）← 跨年代比較看這個")
+                 f"（{pop}）← 跨年代比較看這個")
     if st["vol_pctile"] is not None:
-        L.append(f"- 量能　　5日均**股數** {st['vol_pctile']*100:.0f} 分位"
-                 f"｜5日/60日量比 {st['vol_ratio_5_60']:.2f}x"
-                 "（股數是 Cow 台股量能維的校準口徑；股價長期上漲會讓股數分位失真）")
+        L.append(f"- 量能　　5日均**股數** {st['vol_pctile']*100:.0f} 分位（{pop}）"
+                 f"｜5日/60日**股數**量比 {st['vol_ratio_5_60']:.2f}x")
+        L.append("　　　　　（股數是 Cow 台股量能維的校準口徑 AUC 0.648，不可換單位；"
+                 "但股價長期上漲會讓股數分位失真 → 判讀活躍度看上一行的成交額）")
     if st["limit_move_days_60"] is not None:
         L.append(f"- 極端日　近60日單日 ±9.5% 以上 {st['limit_move_days_60']} 天（台股 ±10% 制度）")
     L.append("")
@@ -430,6 +483,15 @@ def render(p: dict) -> str:
 
 
 def main():
+    # Windows 中文主控台預設 cp950，印不出 🟢🟡🔴 與 JSON 的非 ASCII → UnicodeEncodeError、
+    # exit 1、零輸出。2026-08-12 stock-evaluator 首次驗收時兩支 agent 都被這個擋住：
+    # 開發期每次測試都習慣性前綴 PYTHONIOENCODING=utf-8，等於每次都繞過了這個 bug，
+    # 要有人在乾淨環境跑才會現形。呼叫端不該需要記得設環境變數，故在此自理。
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except (AttributeError, ValueError):   # 已被重導向/包裝過的串流沒有此方法
+            pass
     ap = argparse.ArgumentParser(description="個股評價資料收集（台股／美股）")
     ap.add_argument("symbol", help="代號：2330 / 6782 / AAPL / NVDA")
     ap.add_argument("--json", action="store_true", help="輸出 JSON 供程式消費")
