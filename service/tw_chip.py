@@ -5,7 +5,8 @@ service/tw_chip.py
 資料源（TWSE 官方，市場全量單日檔 → 快取一小時 → filter 單一 symbol）：
   - MI_MARGN  融資融券彙總（融資餘額變化＝散戶槓桿；融券餘額＝放空）
   - T86       三大法人買賣超（外資/投信/三大法人；機構派發 vs 吸籌）
-  - BWIBBU    個股本益比/股價淨值比/殖利率（估值）
+  - BWIBBU    個股本益比/股價淨值比/殖利率＋**財報年/季**（估值與其基期）
+  - t187ap05  每月營收彙總（OpenAPI 家族，**僅最新一期、無歷史** → 見 get_monthly_revenue）
 
 ⚠️ 設計取捨（鏡像 tw_stock_climber 概念但**不 import**，Cow 保持自包含、雲端可跑）：
   - TWSE/TPEx 端點都是「市場全量單日檔」，非個股查詢 → 抓整檔快取，filter 該 symbol。
@@ -37,6 +38,12 @@ _TWSE_OPEN_T187 = "https://openapi.twse.com.tw/v1/opendata/t187ap03_L"
 _TPEX_OPEN_T187 = "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O"
 _SHARES_TTL = 86400  # 股本變動極不頻繁 → 日快取（非每小時）；全市場回應大，抓取實測 20-45s
 
+# 每月營收（MOPS 月營收彙總）：同上 OpenAPI 家族、同樣無 date 參數 → 只有「最新一期」。
+# TWSE 與 TPEx 兩端點的 JSON key 完全相同（2026-08-12 實測 1069 / 890 筆），故共用一套解析。
+_TWSE_OPEN_REV = "https://openapi.twse.com.tw/v1/opendata/t187ap05_L"
+_TPEX_OPEN_REV = "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap05_O"
+_REV_TTL = 86400  # 月更資料，日快取；每小時重抓純粹浪費
+
 # TDCC 集保分級門檻（鏡像 tw_stock_climber，單位：股）
 _MAJOR_MIN_SHARES = 1_000_000   # 大戶 ≥ 1000 張
 _MID_MIN_SHARES = 400_000       # 中實戶 ≥ 400 張
@@ -49,6 +56,8 @@ _cache: dict = {}
 _tdcc_cache: dict = {}
 # 已發行股數快取：{base_url: (ts, {symbol: shares})}
 _shares_cache: dict = {}
+# 月營收快取：{base_url: (ts, {symbol: row(dict)})}
+_rev_cache: dict = {}
 
 
 def _session() -> requests.Session:
@@ -74,6 +83,34 @@ def _num(v):
 def _tpex_date(date_yyyymmdd: str) -> str:
     """YYYYMMDD → TPEx 端點要的 yyyy/mm/dd。"""
     return f"{date_yyyymmdd[:4]}/{date_yyyymmdd[4:6]}/{date_yyyymmdd[6:8]}"
+
+
+# 民國年轉換：三個端點三種格式，各自的 raw 都一併保留給呼叫端，解析不出來一律回 None（不猜）。
+_ROC_Q_RE = re.compile(r"^(\d{2,3})\s*[/QqＱ]\s*([1-4])$")
+
+
+def _roc_quarter(raw) -> str | None:
+    """民國財報年季 → 西元 `2026Q2`。TWSE 給 `115/2`、TPEx 給 `115Q1`，兩種都收。"""
+    if raw is None:
+        return None
+    m = _ROC_Q_RE.match(str(raw).strip())
+    return f"{int(m.group(1)) + 1911}Q{m.group(2)}" if m else None
+
+
+def _roc_ym(raw) -> str | None:
+    """民國年月 `11507` → `2026-07`。"""
+    s = str(raw).strip() if raw is not None else ""
+    if not s.isdigit() or not 5 <= len(s) <= 6:
+        return None
+    return f"{int(s[:-2]) + 1911}-{s[-2:]}"
+
+
+def _roc_ymd(raw) -> str | None:
+    """民國年月日 `1150811` → `2026-08-11`。"""
+    s = str(raw).strip() if raw is not None else ""
+    if not s.isdigit() or not 6 <= len(s) <= 7:
+        return None
+    return f"{int(s[:-4]) + 1911}-{s[-4:-2]}-{s[-2:]}"
 
 
 def _fetch_market_file(endpoint: str, params: dict, key_idx: int = 0, base: str = _TWSE) -> dict:
@@ -193,17 +230,28 @@ def _get_institutional_tpex(symbol: str, date_yyyymmdd: str) -> dict | None:
 
 def get_valuation(symbol: str, date_yyyymmdd: str) -> dict | None:
     """
-    本益比/股價淨值比/殖利率。回傳 {pe, pb, yield_pct, close}；查無回 None。
-    上市走 TWSE BWIBBU；上市查無（上櫃股）→ fallback TPEx peQryDate。
+    本益比/股價淨值比/殖利率。回傳 {pe, pb, yield_pct, close,
+    pe_fiscal_quarter, pe_fiscal_quarter_raw}；查無回 None。
+    上市走 TWSE BWIBBU（欄 0代號 1名稱 2收盤價 3殖利率% 4股利年度 5本益比 6PB 7財報年/季）；
+    上市查無（上櫃股）→ fallback TPEx peQryDate。
     注意：TPEx 分支 close 為 None（peQryDate 無收盤價欄），呼叫端勿對 close 做算術。
+
+    `pe_fiscal_quarter`（2026-08-12 新增）＝這個 PE 是拿**哪一季**財報的 EPS 算出來的。
+    同一天不同股票的基期可以不同——實測 2026-08-11：6782 已是 `115/2`、2330 還停在 `115/1`。
+    沒有這一欄，「PE 13 不貴」就沒有基期可查，而循環股 PE 陷阱正是踩在基期上
+    （EPS 高峰時 PE 看起來最低，那是賣點不是買點）。欄位缺漏時回 None，不推測。
     """
     rows = _fetch_market_file(
         "afterTrading/BWIBBU_d",
         {"date": date_yyyymmdd, "selectType": "ALL", "response": "json"})
     row = rows.get(symbol)
     if row and len(row) >= 7:
+        # 財報年/季在 idx 7 → 需 len>=8 才讀得到；舊檔若只有 7 欄仍照常回其餘欄位（不因加值欄失效）。
+        raw_q = row[7] if len(row) >= 8 else None
         return {"close": _num(row[2]), "yield_pct": _num(row[3]),
-                "pe": _num(row[5]), "pb": _num(row[6])}
+                "pe": _num(row[5]), "pb": _num(row[6]),
+                "pe_fiscal_quarter": _roc_quarter(raw_q),
+                "pe_fiscal_quarter_raw": str(raw_q).strip() if raw_q is not None else None}
     return _get_valuation_tpex(symbol, date_yyyymmdd)
 
 
@@ -211,7 +259,8 @@ def _get_valuation_tpex(symbol: str, date_yyyymmdd: str) -> dict | None:
     """
     上櫃本益比/股價淨值比/殖利率（TPEx peQryDate）。欄位順序與 TWSE 不同：
     0代號 1名稱 2本益比 3每股股利 4股利年度 5殖利率% 6股價淨值比 7財報季（無收盤價）。
-    日期格式 yyyy/mm/dd。
+    日期格式 yyyy/mm/dd。財報年/季格式也與 TWSE 不同（TPEx `115Q1`、TWSE `115/2`），
+    兩種都由 `_roc_quarter` 吸收。
     """
     rows = _fetch_market_file(
         "www/zh-tw/afterTrading/peQryDate",
@@ -219,8 +268,11 @@ def _get_valuation_tpex(symbol: str, date_yyyymmdd: str) -> dict | None:
     row = rows.get(symbol)
     if not row or len(row) < 7:
         return None
+    raw_q = row[7] if len(row) >= 8 else None
     return {"close": None, "yield_pct": _num(row[5]),
-            "pe": _num(row[2]), "pb": _num(row[6])}
+            "pe": _num(row[2]), "pb": _num(row[6]),
+            "pe_fiscal_quarter": _roc_quarter(raw_q),
+            "pe_fiscal_quarter_raw": str(raw_q).strip() if raw_q is not None else None}
 
 
 # ── 已發行股數（週轉率用；2026-07 新增，資料源見 tests/core/test_relative_universal.py 同批調查）──
@@ -265,6 +317,79 @@ def get_shares_outstanding(symbol: str) -> float | None:
         return twse[symbol]
     tpex = _fetch_shares_outstanding_market(_TPEX_OPEN_T187, "SecuritiesCompanyCode", "IssueShares")
     return tpex.get(symbol)
+
+
+# ── 每月營收（MOPS 月營收彙總；2026-08-12 新增）────────────────────────────────
+def _fetch_revenue_market(base_url: str) -> dict:
+    """
+    抓全市場最新一期月營收快照 → {公司代號: row(dict)}，日快取（見 `_REV_TTL`）。
+    與股本端點同 API 家族，故沿用同兩個坑的處理：
+      1. 該 domain 的 requests 編碼偵測會猜錯 → 必須強制 `r.encoding = "utf-8"`
+      2. 回應為全市場（實測 TWSE 1069／TPEx 890 筆）→ timeout 拉長
+    抓取失敗退回舊快取而非清空（同 `_fetch_shares_outstanding_market` 的理由：
+    月營收一個月才變一次，舊的仍可信，且欄位本身自帶 `資料年月` 可供呼叫端判斷新舊）。
+    """
+    hit = _rev_cache.get(base_url)
+    if hit and time.time() - hit[0] < _REV_TTL:
+        return hit[1]
+    try:
+        r = _session().get(base_url, timeout=90)
+        r.raise_for_status()
+        r.encoding = "utf-8"
+        data = r.json()
+    except Exception as e:  # noqa: BLE001
+        print(f"[tw_chip] 月營收端點抓取失敗（{base_url}）：{e}")
+        return hit[1] if hit else {}
+    out = {}
+    for row in data:
+        code = str(row.get("公司代號", "")).strip()
+        if code:
+            out[code] = row
+    _rev_cache[base_url] = (time.time(), out)
+    return out
+
+
+def get_monthly_revenue(symbol: str) -> dict | None:
+    """
+    最新一期每月營收（MOPS 月營收彙總）。上市查 TWSE OpenAPI；查無（上櫃股）→ 轉 TPEx。
+    查無回 None。
+
+    ⚠️ **端點無 date 參數 → 只有最新一期快照，沒有歷史序列。**
+    因此本區塊一律只能當**描述性事實**陳述，**不得餵進逃頂/抄底雷達或任何評分**：
+    沒有歷史就跑不出回測，把未回測的維度加權進分數會產生虛假的驗證感
+    （CONSTITUTION 第 8-12 條）。真要做序列，得自行逐月歸檔累積，那是另一件事。
+
+    單位：金額欄一律為**仟元**（原始檔即為仟元），故 key 全帶 `_ktwd` 後綴——
+    千倍級的單位不寫進欄名，遲早有人當成元。
+    成長率一律**照抄來源的 `(%)` 欄**，不由三個金額自行回推（來源自算的才是官方口徑）。
+    `published_at`（出表日期）給的是這期資料的公布日，供呼叫端標 PiT 用。
+    """
+    for src, base in (("TWSE", _TWSE_OPEN_REV), ("TPEx", _TPEX_OPEN_REV)):
+        row = _fetch_revenue_market(base).get(symbol)
+        if not row:
+            continue
+        note = str(row.get("備註", "")).strip()
+        return {
+            "source": src,
+            "data_month": _roc_ym(row.get("資料年月")),
+            "data_month_raw": str(row.get("資料年月", "")).strip() or None,
+            "published_at": _roc_ymd(row.get("出表日期")),
+            "published_at_raw": str(row.get("出表日期", "")).strip() or None,
+            "company_name": str(row.get("公司名稱", "")).strip() or None,
+            "industry": str(row.get("產業別", "")).strip() or None,
+            "revenue_ktwd": _num(row.get("營業收入-當月營收")),
+            "revenue_prev_month_ktwd": _num(row.get("營業收入-上月營收")),
+            "revenue_last_year_ktwd": _num(row.get("營業收入-去年當月營收")),
+            "mom_pct": _num(row.get("營業收入-上月比較增減(%)")),
+            "yoy_pct": _num(row.get("營業收入-去年同月增減(%)")),
+            "cum_revenue_ktwd": _num(row.get("累計營業收入-當月累計營收")),
+            "cum_revenue_last_year_ktwd": _num(row.get("累計營業收入-去年累計營收")),
+            "cum_yoy_pct": _num(row.get("累計營業收入-前期比較增減(%)")),
+            "note": note if note and note != "-" else None,
+            "limitation": ("端點僅提供最新一期、無歷史序列 → 描述性事實，"
+                           "不可回測、不可入任何評分"),
+        }
+    return None
 
 
 # ── TDCC 集保大戶分布（鏡像 tw_stock_climber 的 GET→POST CSRF 爬法）─────────────

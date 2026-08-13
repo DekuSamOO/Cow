@@ -366,7 +366,15 @@ def profile(raw_symbol: str) -> dict:
             "tdcc": _climber_tdcc(con, info["display"]),
             "as_of": str(tech_df.index[-1].date()),
         }
+        # 財報基期跨源補欄（climber 沒有這欄，只有 TWSE/TPEx 估值日檔有）→ 見 `_pe_fiscal_quarter`。
+        chip["valuation"].update(
+            {"pe_fiscal_quarter": (fq := _pe_fiscal_quarter(
+                info["display"], chip["as_of"], chip["valuation"]["pe"]))["quarter"],
+             "pe_fiscal_quarter_raw": fq["raw"],
+             "pe_fiscal_quarter_note": fq["note"]})
         out["chip"] = chip
+        # 月營收**刻意放在 chip 外**：chip 會整包餵進雷達評分，而月營收無歷史序列不可回測。
+        out["revenue"] = _monthly_revenue(info["display"])
         name, market = _climber_name(con, info["display"])
         # 台股**中文名優先**：Yahoo 對台股回的是英文登記名（6782 → "Visco Vision Inc."），
         # 消費端要用中文名寫報告標題時，若只拿得到英文名就得憑記憶翻譯——而憑記憶陳述
@@ -397,6 +405,9 @@ def profile(raw_symbol: str) -> dict:
     else:
         out["chip"] = None
         out["radar"] = None
+        # 月營收是 MOPS 台股專有源；美股要等值資料得走付費財報 API → 明確給 None 而非省略欄位，
+        # 讓 --json 消費端兩個市場拿到同一組 key（省略欄位會逼消費端寫 `if "revenue" in p`）。
+        out["revenue"] = None
         out["radar_note"] = ("美股無免費籌碼/估值源；純 OHLCV 三維雷達 2026-07-02 回測 "
                              "50 檔 AUC~0.5 近雜訊，Cow 已撤下該面板 → 本報告不提供美股雷達分數")
     if con is not None:
@@ -500,6 +511,52 @@ def _margin_chg(df):
     return float((m.iloc[-1] / m.iloc[-2] - 1) * 100)
 
 
+def _pe_fiscal_quarter(symbol: str, as_of: str, climber_pe):
+    """
+    這份 PE 的**財報基期**（`2026Q2`）。回 {quarter, raw, note}，三欄都可能是 None。
+
+    為什麼要跨源對帳：`chip.valuation` 的 PE/PB/殖利率讀的是 **climber DB**，但基期欄
+    climber 沒有，只有 TWSE `BWIBBU_d`／TPEx `peQryDate` 的第 8 欄有。兩邊是不同資料源，
+    直接把 TWSE 的基期貼到 climber 的 PE 上，等於假設兩者必然同步——實測同日同值只證明
+    **那一天**一致，不構成通則。
+    故：兩邊 PE 差距 > 0.01 就**不給基期**，改回一句 note 說明不一致（fail-loud），
+    寧可「基期未知」也不要標一個可能屬於別份 PE 的季別。
+
+    基期本身的用途：同一天不同股票的基期可以不同（2026-08-11 實測 6782 `115/2`、
+    2330 `115/1`），而「PE 低＝便宜」在循環股高峰期會反過來——沒有基期就查不出這件事。
+    """
+    try:
+        from service.tw_chip import get_valuation
+        v = get_valuation(symbol, as_of.replace("-", ""))
+    except Exception as e:          # noqa: BLE001 — 基期屬加值欄位，抓不到不該讓整份報告掛掉
+        return {"quarter": None, "raw": None, "note": f"財報基期查詢失敗（{type(e).__name__}），基期未知"}
+    if not v:
+        return {"quarter": None, "raw": None,
+                "note": f"TWSE/TPEx 估值檔在 {as_of} 查無此檔 → 基期未知"}
+    live_pe = v.get("pe")
+    if climber_pe is not None and live_pe is not None and abs(float(climber_pe) - float(live_pe)) > 0.01:
+        return {"quarter": None, "raw": v.get("pe_fiscal_quarter_raw"),
+                "note": (f"⚠ 跨源 PE 不一致（climber {climber_pe} vs TWSE/TPEx {live_pe}，"
+                         f"同為 {as_of}）→ 不套用基期 {v.get('pe_fiscal_quarter_raw')}，基期未知")}
+    return {"quarter": v.get("pe_fiscal_quarter"),
+            "raw": v.get("pe_fiscal_quarter_raw"), "note": None}
+
+
+def _monthly_revenue(symbol: str):
+    """
+    最新一期月營收（MOPS 彙總）。抓不到回 None——與其他加值欄一致，不讓它拖垮整份報告。
+
+    ⚠️ 這是**描述性事實**，端點只有最新一期、無歷史序列 → 不可回測，因此
+    **絕不進雷達、不進趨勢分、不進任何加權**。放在 `out["revenue"]` 而不是 `out["chip"]`
+    也是這個原因：`chip` 底下的東西會被 `compute_relative_*_tw` 吃進去評分，月營收不該進那條路。
+    """
+    try:
+        from service.tw_chip import get_monthly_revenue
+        return get_monthly_revenue(symbol)
+    except Exception:               # noqa: BLE001
+        return None
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # 輸出
 # ──────────────────────────────────────────────────────────────────────────
@@ -523,9 +580,13 @@ def render(p: dict) -> str:
     L.append(f"# {p['symbol']} {p['name'] or ''}（{p['market']}）")
     L.append(f"執行時間 {p['run_at']}｜{p.get('exchange') or ''} {p.get('currency') or ''}")
     tdcc_as_of = ((p.get("chip") or {}).get("tdcc") or {}).get("as_of")
+    rev = p.get("revenue")
     L.append(f"**資料截止**：技術面/型態/雷達 {p['data_as_of']}"
              + (f"｜籌碼估值 {p['chip']['as_of']}" if p.get("chip") else "")
              + (f"｜TDCC {tdcc_as_of}" if tdcc_as_of else "")
+             # 月營收是第四個資料時間，且它有兩個日期（資料月份 vs 出表日）——兩個都要標，
+             # 只標資料月份會讓人以為月底就拿得到，實際隔月 10 號前才出表。
+             + (f"｜月營收 {rev['data_month']}（出表 {rev['published_at']}）" if rev else "")
              + "｜現價為即時（盤中每次執行都會變）")
     L.append("")
     L.append("## 基本資訊")
@@ -606,13 +667,39 @@ def render(p: dict) -> str:
             if r.get("position_note"):
                 L.append(f"  - {r['position_note']}")
         c = p["chip"]
-        L.append(f"- 籌碼估值截至 {c['as_of']}：PE {c['valuation']['pe']}｜PB {c['valuation']['pb']}"
-                 f"｜殖利率 {c['valuation']['yield']}")
+        v = c["valuation"]
+        # PE 一律連基期一起印。單獨一個 PE 數字讀者無從判斷它算的是哪一季的 EPS，
+        # 而循環股在 EPS 高峰時 PE 最低（那是賣點不是買點）——基期就是拆穿這件事的欄位。
+        fq = v.get("pe_fiscal_quarter")
+        L.append(f"- 籌碼估值截至 {c['as_of']}："
+                 f"PE {v['pe']}（財報基期 {fq or '未知'}）｜PB {v['pb']}｜殖利率 {v['yield']}")
+        if v.get("pe_fiscal_quarter_note"):
+            L.append(f"  - {v['pe_fiscal_quarter_note']}")
         if c["tdcc"]:
             L.append(f"  - TDCC {c['tdcc']['as_of']}：大戶 {c['tdcc']['major_pct']}%"
                      f"／散戶 {c['tdcc']['retail_pct']}%")
     else:
         L.append(f"## 已回測雷達\n- ⚠ {p['radar_note']}")
+
+    if rev:
+        L.append("")
+        L.append("## 月營收〔描述性事實〕")
+        # 這個警語不可省略：月營收長得很像可以拿來評分的東西，但端點只給最新一期，
+        # 沒有歷史就跑不出回測，加權進分數＝製造虛假的驗證感（CONSTITUTION 8-12）。
+        L.append(f"- ⚠ {rev['limitation']}")
+        unit = st["turnover_unit"]
+        L.append(f"- 資料年月 {rev['data_month']}（出表 {rev['published_at']}，來源 {rev['source']}）"
+                 + (f"｜產業別 {rev['industry']}" if rev.get("industry") else ""))
+        L.append(f"- 當月營收 {_fmt_money((rev['revenue_ktwd'] or 0) * 1000, unit)}"
+                 + (f"｜MoM {rev['mom_pct']:+.2f}%" if rev.get("mom_pct") is not None else "")
+                 + (f"｜YoY {rev['yoy_pct']:+.2f}%" if rev.get("yoy_pct") is not None else ""))
+        L.append(f"- 累計營收（年初至 {rev['data_month']}）"
+                 f"{_fmt_money((rev['cum_revenue_ktwd'] or 0) * 1000, unit)}"
+                 + (f"｜YoY {rev['cum_yoy_pct']:+.2f}%" if rev.get("cum_yoy_pct") is not None else ""))
+        # 成長率照抄來源欄位，不由三個金額回推——來源自己算的才是官方口徑。
+        L.append("　　　　　（金額原始單位為仟元，此處已換算；成長率為來源官方欄位，非本程式回推）")
+        if rev.get("note"):
+            L.append(f"- 備註：{rev['note']}")
     return "\n".join(L)
 
 

@@ -16,6 +16,13 @@
 | 三大法人 | `fund/T86` | `ALLBUT0999` |
 | 本益比／PB | `afterTrading/BWIBBU_d` | `ALL` |
 
+`BWIBBU_d` 欄序（2026-08-12 實查 8 欄）：
+`0證券代號 1證券名稱 2收盤價 3殖利率(%) 4股利年度 5本益比 6股價淨值比 7財報年/季`。
+**第 8 欄「財報年/季」是 PE 的基期**（民國制 `115/2`）——同一天不同股票基期可以不同，
+實測 2026-08-11：6782 `115/2`、2330 `115/1`。少了它「PE 13 不貴」沒有基期可查，
+而循環股 PE 陷阱正是踩在基期上。由 `get_valuation` 回 `pe_fiscal_quarter`（西元 `2026Q2`）
+＋ `pe_fiscal_quarter_raw`（原樣）。
+
 - 回應有時包在 `tables[]` → 需**深找含 `fields`+`data` 的 table**。
 - **Accept-Encoding 勿帶 `br`**：T86 回 brotli，requests 無 brotli 套件時解碼壞
   → 固定 `gzip, deflate`。
@@ -43,7 +50,7 @@
 
 | 函式 | TPEx 端點 | 欄序 |
 |---|---|---|
-| `_get_valuation_tpex` | `www/zh-tw/afterTrading/peQryDate` | PE=2／殖利率=5／PB=6，**無收盤價欄 → `close=None`**（呼叫端勿對 close 做算術） |
+| `_get_valuation_tpex` | `www/zh-tw/afterTrading/peQryDate` | PE=2／殖利率=5／PB=6／**財報年/季=7**，**無收盤價欄 → `close=None`**（呼叫端勿對 close 做算術）。財報年季格式與 TWSE 不同：TPEx `115Q1`、TWSE `115/2`，兩種都由 `_roc_quarter` 吸收 |
 | `_get_margin_tpex` | `www/zh-tw/margin/balance` | 2 前資餘額／6 資餘額／10 前券／14 券餘額（單位張，同 TWSE）；與 TWSE 共用 `_margin_dict` |
 | `_get_institutional_tpex` | `www/zh-tw/insti/dailyTrade`（`type=Daily`） | 4 外資(不含自營)／13 投信／22 自營合計／23 三大法人合計。**與 TWSE T86 的 4/10/11/18 不同**，故兩函式分開；評分只用 `total_net` |
 
@@ -78,3 +85,31 @@
 ## No.7 其他
 
 Cow **不 import tw_stock_climber**（保持自包含、雲端可跑），僅鏡像爬法／分級概念。
+
+## No.8 每月營收（`tw_chip.get_monthly_revenue`，2026-08-12 新增）
+
+MOPS 月營收彙總，與股本同 OpenAPI 家族（**不是** No.1 的 `rwd/zh` 系列）。
+
+| 市場 | 端點 | 實測筆數（2026-08-12） |
+|---|---|---|
+| 上市 | `https://openapi.twse.com.tw/v1/opendata/t187ap05_L` | 1,069 |
+| 上櫃 | `https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap05_O` | 890 |
+
+**兩端點 JSON key 完全相同** → 共用一套解析（`_fetch_revenue_market`），上市查無再轉上櫃。
+沿用 No.4 股本 API 的同兩坑：強制 `r.encoding = "utf-8"`、回應大故 timeout 90s、日快取、
+抓取失敗退回舊快取。
+
+> [!warning] **無 date 參數 → 只有最新一期，沒有歷史序列**
+> 因此月營收**只能當描述性事實，不得餵進逃頂/抄底雷達或任何評分**：沒有歷史就跑不出回測，
+> 未回測的維度加權成分數會產生虛假的驗證感（CONSTITUTION 第 8-12 條）。
+> 這也是 `stock_profile` 把它放在 `out["revenue"]` 而**不是** `out["chip"]` 的原因——
+> `chip` 會整包被 `compute_relative_*_tw` 吃進去評分，月營收不該進那條路。
+> 要做序列得自行逐月歸檔累積，那是另一件事。
+
+單位：金額欄原始即為**仟元** → key 一律帶 `_ktwd` 後綴（千倍級單位不寫進欄名遲早被當成元）。
+成長率**照抄來源的 `(%)` 欄**，不由三個金額回推（來源自算的才是官方口徑）。
+兩個日期都要標：`data_month`（資料年月）與 `published_at`（出表日期，PiT 用）——
+只標資料月份會讓人以為月底就拿得到，實際隔月 10 號前才出表。
+
+民國轉換由 `_roc_quarter`／`_roc_ym`／`_roc_ymd` 三支負責，解析不出來一律回 `None`（不猜），
+raw 值另存欄位。西元格式（如 `2026Q2`）會被正確拒絕，不會誤判成民國。
