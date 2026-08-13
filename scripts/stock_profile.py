@@ -513,7 +513,8 @@ def _margin_chg(df):
 
 def _pe_fiscal_quarter(symbol: str, as_of: str, climber_pe):
     """
-    這份 PE 的**財報基期**（`2026Q2`）。回 {quarter, raw, note}，三欄都可能是 None。
+    這份 PE 的**財報基期**＝近四季（TTM）EPS 的**截止季**（`2026Q2`），不是單季 EPS 的季別。
+    回 {quarter, raw, note}，三欄都可能是 None。
 
     為什麼要跨源對帳：`chip.valuation` 的 PE/PB/殖利率讀的是 **climber DB**，但基期欄
     climber 沒有，只有 TWSE `BWIBBU_d`／TPEx `peQryDate` 的第 8 欄有。兩邊是不同資料源，
@@ -668,7 +669,7 @@ def render(p: dict) -> str:
                 L.append(f"  - {r['position_note']}")
         c = p["chip"]
         v = c["valuation"]
-        # PE 一律連基期一起印。單獨一個 PE 數字讀者無從判斷它算的是哪一季的 EPS，
+        # PE 一律連基期一起印。單獨一個 PE 數字，讀者無從判斷它的近四季 EPS 算到哪一季為止，
         # 而循環股在 EPS 高峰時 PE 最低（那是賣點不是買點）——基期就是拆穿這件事的欄位。
         fq = v.get("pe_fiscal_quarter")
         L.append(f"- 籌碼估值截至 {c['as_of']}："
