@@ -1,4 +1,4 @@
-# Cow — 比特幣投資戰情室 v3.42
+# Cow — 比特幣投資戰情室 v3.43
 
 > 比特幣多週期量化分析工具，整合技術指標、鏈上數據、期權與波段策略。
 
@@ -88,8 +88,8 @@ strategy/
   notifier.py           LINE Bot 主動推播通知模組
 
 scripts/
-  daily_line_notify.py     GitHub Actions 雲端自動推播腳本（Kraken 備援，台灣 08:23 / 13:39 / 18:27 三時段，含新聞輿情、逃頂警報分級/分數Δ/遲滯狀態機、OI 快照過期警告、週日傍晚場次加推文字週報，時段閘門 hour<17 早退使本地/手動執行也僅傍晚才發）
-  price_alert.py           GitHub Actions 每小時價格警報（防守線＝config.ALERT_PRICE_LOW＝防守第 1 階觸發價；文案由 config.DEFENSE_LADDER 三階推移表動態組裝，含同日去重 + armed 遲滯：跌破推一次、回升門檻+$500 才重新武裝。觸發價/釋出量等真實數字自 2026-07-06 起改由私有來源載入，見 config_private.py.example）
+  daily_line_notify.py     GitHub Actions 雲端自動推播腳本（Kraken 備援，台灣 08:23 / 13:39 / 18:27 三時段，含新聞輿情、逃頂警報分級/分數Δ/遲滯狀態機、OI 快照過期警告、週日傍晚場次加推文字週報，時段閘門 hour<17 早退使本地/手動執行也僅傍晚才發；另含 maybe_send_mart_restart_alert 每日馬丁止盈重啟偵測，見下方 price_alert 說明）
+  price_alert.py           GitHub Actions 每小時價格警報（防守線＝config.ALERT_PRICE_LOW；文案由 config.DEFENSE_LADDER 三階推移表動態組裝，含同日去重 + armed 遲滯：跌破推一次、回升門檻+$500 才重新武裝。觸發價/釋出量等真實數字自 2026-07-06 起改由私有來源載入，見 config_private.py.example。**2026-08-21 起 ALERT_PRICE_LOW 與第 1 階觸發價解耦**——馬丁止盈重啟會讓階梯觸發價上飄並改變執行順序，警報價則刻意不跟漲，定位為「高於全部三階、留足台股 T+2 的獨立預警價」，守門判準為 >= 而非 ==）
   test_flex_message.py     本地端測試 LINE Flex Message 排版的除錯腳本
   test_compare_backtest.py 驗證腳本：對相同參數同時執行 swing.py 與 Walk-Forward，確認結果量級一致
   stock_profile.py         個股評價資料收集器（台股／美股通用，供 `stock-evaluator` agent；`--json` 供程式消費）：一支代號進、結構化 profile 出。**決定性資料收集在程式、判讀留給 agent**——同一支股票同一天跑兩次必須得到同一組數字。價格走 Yahoo（`service.ohlc_universal`，兩市場同一路徑）／台股技術面走 tw_stock_climber DB 的 **Adj_Close**（open/high/low 同乘還原因子一起還原）＋估值籌碼 TDCC／美股僅 OHLCV（無免費籌碼源，這是事實不是疏漏）／型態呼叫 climber `analyzers.panel_indicators` 純函式（兩市場共用同一份判定邏輯）。輸出含 `run_at`（執行時鐘）／`data_as_of`／`chip.as_of`／`chip.tdcc.as_of` 四個時間戳分明、`price_source` 來源追蹤、`tech_coverage` 母體涵蓋率、結構化 `radar.*.dims`（含各維 `sub` 原始數值）。**刻意不輸出綜合「可炒性總分」**（把未回測維度加權會讓人以為它經過驗證，CONSTITUTION 8-12）
@@ -118,7 +118,7 @@ tests/
   tw_dim_backtest.py          台股維度校準 S2：每日 ±18% 二分近似標註，各維單維 AUC（auc/per_stock_pctile 為 S2b 共用單一來源）。發現 PE/PB 絕對值勝個股分位
   tw_swing_backtest.py        台股維度校準 S2b：swing-only 標註（±10日 centered 窗轉折點）重測，更嚴格貼近實戰「在轉折點判真底/假底、真頂/假頂」。複用 tw_dim_backtest.auc。拍板配重：逃頂估值最強(AUC~0.63)、抄底融資清洗最強(0.564)、台股底部與加密非對稱
   funding_threshold_calib.py  資費門檻校準（離線手動跑，非 pytest）：以幣安資費史(2020-12+, ~2000日)回歸，各年化資費桶→其後60日最大回撤/反彈 + 頂/底單維 AUC + Youden 門檻，重訂逃頂正費率/抄底負費率給分階梯
-  test_alert_logic.py         逃頂警報分級/去重/遲滯與分數Δ狀態機測試（monkeypatch 攔截 LINE 發送，8 passed）
+  test_alert_logic.py         逃頂警報分級/去重/遲滯與分數Δ狀態機測試，含 P4 馬丁止盈重啟每日告警的去重狀態機與「已接進 __main__ 主流程」接線守門（monkeypatch 攔截 LINE 發送，17 passed）
   test_flex_size.py           build_flex_message 40KB 大小防線、OI 快照過期/ETF 過舊警告與今日行動行測試（5 passed）
   core/test_radar_replay.py   三雷達歷史回放單元測試（合成資料：序列因果性/F&G 與資費注入/門檻事件統計，4 passed）
   core/test_action_ensemble.py 三軸合成行動決策矩陣測試（多空盤整分流/11 行動分支/邊界與警報門檻對齊/None 缺料處理，14 passed）
@@ -391,6 +391,32 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 ---
 
 ## 版本紀錄
+
+### v3.43 (2026-08-21)
+1 BTC ROAD 防守階梯依派網 App 掛單詳情重算，並修補 P4 偵測器掛錯觸發點的缺口。
+**真實數字一律只在 `config_private.py`／`DEFENSE_CONFIG_JSON` secret／vault，本檔與所有公開檔不列。**
+- **fix(config)**: `DEFENSE_LADDER` 整表重算（私有來源）。兩台馬丁在高位連續止盈重啟，
+  最後加倉價上飄到台股階觸發價之下，**執行順序因此反轉、台股改為打頭陣**；
+  釋出量、加保後強平價、`LIQ_BASE`、`MART_TP_BASELINE` 與決策卡門檻同步連動。
+  舊表整組作廢。已跑 `scripts/defense_config_check.py` 與 Actions Secret 對拍一致
+  （指紋不落公開檔——取值空間有限有窮舉風險，同 `price_alert.yml` 既有政策）。
+- **fix(alerts)**: `ALERT_PRICE_LOW` 經使用者複審**維持原值不跟漲**，自此與第 1 階觸發價解耦，
+  語義改為「高於全部三階的獨立預警價」——留足台股 T+2 的賣股時間。
+  `tests/test_defense_ladder.py` 守門判準由 `==` 放寬為 `>=`，並加守「警報須高於全部階梯」。
+- **fix(notify)**: **P4 重啟偵測原本掛在錯的觸發點上**——`detect_mart_restart()` 只被
+  `notify_defense_line()` 呼叫，而後者只在價格跌破警報價才執行，等於「要用防守階梯的那一刻，
+  才發現階梯早就壞了」。實際後果：對帳基線失效一個多月無人知曉（價格從沒跌破警報價，
+  偵測邏輯就從沒跑過），最後靠人工對帳才發現。改由
+  `daily_line_notify.maybe_send_mart_restart_alert()` **每日驅動**，重啟後 24h 內告警；
+  去重 key＝（對帳基線日, 已重啟馬丁名單），人工更新基線後可再次告警。
+  **通則：偵測器的觸發條件不可與「它要保護的那件事」同時成立**（CLAUDE.md 陷阱 No.22）。
+- **fix(security)**: `config_private.py.example` 的 JSON schema 範例**原本抄了真實防守數字**，
+  2026-07-06 S-1 私有化只搬走 `config.py` 卻在隔壁公開檔的註解留了副本＝私有化做一半，
+  本次改為顯假值（99999/88888/77777）。禁令入 CLAUDE.md 陷阱 No.21：
+  `.example`／README／CLAUDE.md／測試檔／commit message 一律只寫假值，結構可真、數字不准真。
+- **test**: `tests/test_alert_logic.py` 新增 6 項守新告警（無重啟不推、偵測不可用不炸、
+  重啟推一次並記 key、同狀態不重推、更新基線後可再推、**已接進 `__main__` 主流程**）。
+  全套 **448 passed, 2 deselected**。
 
 ### v3.42 (2026-08-12)
 本 session 收尾的**零行為變更**整理（`/simplify`：四個角度平行審查 → 去重後套用）。

@@ -246,10 +246,32 @@ volume=0 但 OHLC 正常、當天實際有成交（近 10 年 6782 1／2454 4／
 
 ---
 
+### 21. 公開檔的「範例數字」曾是真數字（S-1 私有化做一半）
+
+`config_private.py.example` 進公開版控，其 docstring 的 JSON schema 範例在 2026-07-06
+S-1 私有化時**直接抄了真實防守數字**（觸發價／釋出量／加保後強平價），一年多來公開可讀，
+2026-08-21 才清掉。**S-1 的威脅模型是「repo 是 public」，不是「config.py 這個檔」**——
+搬走真值卻在隔壁檔案的註解裡留副本＝沒搬。
+
+**禁令**：`.example`、README、CLAUDE.md、測試檔、commit message **一律只寫顯假值**
+（99999/88888/77777）。結構可以真，數字不准真。測試要真值就 `from config_private import`
+＋缺檔 skip（見 `tests/test_defense_ladder.py`）。改任何公開檔前先問「這個數字是不是部位」。
+
+### 22. P4 重啟偵測曾掛在錯的觸發點上
+
+`detect_mart_restart()` 原本只被 `notify_defense_line()` 呼叫，而後者只在價格跌破
+`ALERT_PRICE_LOW` 才執行——**「要用防守階梯的那一刻，才發現階梯早就壞了」**。
+2026-07-13 的對帳基線在 8/19–8/21 上漲後失效（兩台馬丁各重啟 6~9 輪），
+價格從沒跌破警報價，偵測邏輯就從沒跑過，一個多月無人知曉，最後靠人工對帳發現。
+
+2026-08-21 改由 `scripts/daily_line_notify.py::maybe_send_mart_restart_alert()` 每日驅動，
+重啟後 24h 內告警（去重 key＝基線日＋已重啟名單，更新基線後可再告警）。
+**通則：偵測器的觸發條件不可與「它要保護的那件事」同時成立**，否則等於沒有偵測。
+
 ## 受保護決策（改動需使用者裁定）
 
 | 項目 | 規則 | 正本 |
 |---|---|---|
-| 防守通知數字 | 真實數字在 `config_private.py`（gitignored）或 Actions Secret `DEFENSE_CONFIG_JSON`，公開 `config.py` 只留載入邏輯（fail-loud）。**馬丁止盈重啟即整表作廢**（新最後加倉價＝新起始價×0.659，整表重算）。防守為**條件式**：每階執行前看 `final_low`/`ensemble_low` | vault「1b 1 BTC ROAD.md」；驗算見「1b 馬丁格爾數學稽核」；`_governance\STRESS-btc-three-tracks.md` |
+| 防守通知數字 | 真實數字在 `config_private.py`（gitignored）或 Actions Secret `DEFENSE_CONFIG_JSON`，公開 `config.py` 只留載入邏輯（fail-loud）。**馬丁止盈重啟即整表作廢**（新最後加倉價＝新起始價×0.659，整表重算；每日由 `maybe_send_mart_restart_alert` 偵測告警）。防守為**條件式**：每階執行前看 `final_low`/`ensemble_low`。**`ALERT_PRICE_LOW` 自 2026-08-21 起與第 1 階解耦**（獨立預警價，判準 `>=` 不再是 `==`）| vault「1b 1 BTC ROAD.md」；驗算見「1b 馬丁格爾數學稽核」；`_governance\STRESS-btc-three-tracks.md` |
 | 雙幣回測 | **舊曲線與據其做的結論全部作廢**（權利金曾在結算日才定價，全史 +1733%→−90%）。**雙幣加碼決策不可依據此回測模組** —— 實際用法是梯形建議＋偏保守權重。殘留已知偏差：σ 用 ATR/close proxy 高估 ~1.6×（方向已知、接受） | `calculate_ladder_strategy` docstring（2026-06-17 拍板） |
 | 四季論引擎 | `SEASON_ENGINE` 維持 `"v1"`，**切換 v2 需使用者裁定**。回放 2,992 天後不建議切換：v2 十二象限表對深熊嚴重度分級有結構性缺口。**不可回頭調參數讓驗收準則「看起來過」** | `Github\Cow\season_v2_replay_findings.md`；設計正本 `Github\Cow\season_v2_design.md`（皆在 vault） |

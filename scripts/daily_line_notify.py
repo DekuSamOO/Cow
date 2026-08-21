@@ -543,6 +543,70 @@ def maybe_send_action_alert(data: dict, dry_run: bool = False) -> None:
 _WEEKLY_CRON = "27 10 * * *"   # 台灣 18:27 場次（與 daily_line_notify.yml 第三個 cron 一致）
 
 
+def maybe_send_mart_restart_alert(dry_run: bool = False) -> None:
+    """P4 觸發點缺口修補（2026-08-21）：馬丁止盈重啟偵測改由「每日推播」驅動。
+
+    原設計只在 notify_defense_line（價格跌破 config.ALERT_PRICE_LOW）時才呼叫
+    detect_mart_restart——等於「要用防守階梯的那一刻，才發現階梯早就壞了」。
+    實際後果：2026-07-13 的對帳基線在 8/19–8/21 上漲後失效（馬1 由第14輪跑到第20輪、
+    馬2 由第12輪跑到第21輪，各重啟 6~9 次），偵測器一個多月未出聲，最後靠人工對帳發現。
+    價格從沒跌破警報價，偵測邏輯就從沒被執行過。
+
+    改為每日檢查後，任一馬丁止盈重啟 24 小時內即告警，不必等到防守事件。
+
+    去重：key =（對帳基線日, 已重啟馬丁名單），同 key 只推一次；
+    人工更新 MART_TP_BASELINE 後基線日改變 → key 改變 → 可再次告警。
+    """
+    from service.notification.facade import detect_mart_restart
+    import config as _config
+
+    baseline = getattr(_config, "MART_TP_BASELINE", None)
+    if not baseline:
+        # 下方 baseline["date"] 要用到本物件，故不倚賴 detect_mart_restart 內建的
+        # config 回退（基線缺席時那條路徑會 AttributeError 拖垮整趟每日推播）。
+        print("✓ 馬丁重啟偵測不可用（基線未設定），略過。")
+        return
+    info = detect_mart_restart(baseline)
+    if info is None:
+        print("✓ 馬丁重啟偵測不可用（行情取數失敗），略過。")
+        return
+
+    stale = [m for m in info if m["restarted"]]
+    if not stale:
+        print(f"✓ 馬丁重啟偵測：基線 {baseline['date']} 後高點 "
+              f"${info[0]['max_high']:,.0f} 未達推斷止盈，防守階梯仍有效。")
+        return
+
+    key = baseline["date"] + "|" + ",".join(sorted(m["name"] for m in stale))
+    state = _load_escape_state()
+    if state.get("last_mart_restart_key") == key:
+        print(f"✓ 馬丁重啟已告警過（{key}），略過。")
+        return
+
+    lines = ["🔁 防守階梯失效警告（P4 每日偵測）", "━━━━━━━━━━━━━━━━",
+             f"對帳基線：{baseline['date']}"]
+    for m in stale:
+        lines.append(f"⚠ {m['name']} 推斷已止盈重啟：基線後高點 ${m['max_high']:,.0f}"
+                     f" ≥ 推斷止盈 ${m['tp']:,.0f}")
+        lines.append(f"　→ 第{m['rung']}階觸發價／釋出量作廢")
+    lines += ["━━━━━━━━━━━━━━━━",
+              "➡ 開派網 App →兩台馬丁「掛單詳情」，取本輪起始價，",
+              "　依「最後加倉價 = 本輪起始價 × 0.92^5」重算 DEFENSE_LADDER，",
+              "　同步 config_private.py／DEFENSE_CONFIG_JSON secret／vault「1b 1 BTC ROAD」§4.2。"]
+    text = "\n".join(lines)
+
+    if dry_run:
+        print(text)
+        return
+    try:
+        send_line_message({"type": "text", "text": text})
+        state["last_mart_restart_key"] = key
+        _save_escape_state(state)
+        print("🔁 已發送馬丁重啟警告。")
+    except Exception as e:
+        print(f"❌ 馬丁重啟警告發送失敗: {e}")
+
+
 def maybe_send_weekly_summary(data: dict, now=None) -> None:
     """
     週日「傍晚 cron 場次」加推一則週報，每週一次。
@@ -623,5 +687,7 @@ if __name__ == "__main__":
     maybe_send_escape_alert(data)
     # 行動翻轉警報：三軸合成行動 key 變動才推一則（去重 + 首次只記錄）
     maybe_send_action_alert(data)
+    # 馬丁止盈重啟：每日檢查對帳基線是否失效（P4 觸發點缺口修補，2026-08-21）
+    maybe_send_mart_restart_alert()
     # 週報：週日傍晚場次加推一則（每週一次）
     maybe_send_weekly_summary(data)

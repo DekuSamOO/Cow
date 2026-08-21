@@ -5,7 +5,7 @@ tests/test_defense_ladder.py — 1 BTC ROAD 防守推移表守門（2026-07-04 C
 守三件事：
   1. 表內強平價與逆合約公式自洽（1/Liq' = 1/Liq + ΔM/Position_USD；
      常數正本 = vault「1b 馬丁格爾數學稽核.md」實測反推值）
-  2. 警報門檻 = 第 1 階觸發價（警報即行動訊號，C4 拍板）；階梯單調遞減
+  2. 警報門檻 >= 第 1 階觸發價（2026-08-21 改判，見該測試 docstring）；階梯單調遞減
   3. 推播文案由 DEFENSE_LADDER 動態組裝：含全部觸發價/強平價/條件式提醒，
      且已觸發階標 🔴、未觸發標 ⚪（防止舊版「寫死過時計畫數字」問題復發）
 """
@@ -39,9 +39,25 @@ def test_ladder_liq_prices_match_formula():
             f'第{i}階強平價不自洽：表值 {liq_after:,.0f} vs 公式 {computed:,.0f}（誤差 {err:.2%}）')
 
 
-def test_alert_threshold_is_stage1_trigger():
-    assert ALERT_PRICE_LOW == DEFENSE_LADDER[0][0], (
-        f'警報門檻 {ALERT_PRICE_LOW} 應等於第 1 階觸發價 {DEFENSE_LADDER[0][0]}（C4 拍板）')
+def test_alert_threshold_leads_stage1_trigger():
+    """警報門檻須不低於第 1 階觸發價（2026-08-21 判準修訂）。
+
+    C4 舊判準是嚴格相等（「警報即行動訊號」）——當時第 1 階正好是關馬丁1，
+    兩者天然同值。2026-08-21 兩台馬丁在高位連續止盈重啟，兩階最後加倉價上移後
+    雙雙落到台股階觸發價**之下**，第 1 階因此換成台股；警報價經使用者複審維持
+    原值不跟降，語義改為「高於全部三階、留足台股 T+2 的獨立預警價」
+    （vault「1b 1 BTC ROAD」§4.2 結論 No.3）。
+
+    （數字一律不寫進本檔——CLAUDE.md 陷阱 No.21：公開版控只寫顯假值。
+    真值在 config_private.py／DEFENSE_CONFIG_JSON secret／vault §4.2。）
+
+    故判準由 == 放寬為 >=；真正要守的不變量是「警報必須先於任何行動響起」。
+    """
+    assert ALERT_PRICE_LOW >= DEFENSE_LADDER[0][0], (
+        f'警報門檻 {ALERT_PRICE_LOW} 不得低於第 1 階觸發價 {DEFENSE_LADDER[0][0]}'
+        f'——低於即「該動手時才響」，台股 T+2 必然來不及')
+    assert all(ALERT_PRICE_LOW >= trig for trig, *_ in DEFENSE_LADDER), (
+        '警報須高於全部階梯觸發價，否則存在「行動已觸價但警報未響」的階')
 
 
 def test_ladder_monotonic():

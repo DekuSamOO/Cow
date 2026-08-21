@@ -5,16 +5,16 @@ import json
 import importlib.util
 from datetime import datetime, timezone, timedelta
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _REPO)
 
 import pytest
 from service.notification.builders import escape_alert_tier
 
 
 def _load_notify_module():
-    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     spec = importlib.util.spec_from_file_location(
-        "daily_line_notify", os.path.join(repo, "scripts", "daily_line_notify.py"))
+        "daily_line_notify", os.path.join(_REPO, "scripts", "daily_line_notify.py"))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -185,3 +185,83 @@ def test_weekly_summary_insufficient_data_skipped(notify, patched_state):
     _, sent = patched_state
     notify.maybe_send_weekly_summary({}, now=_SUN_EVE)   # 無價格也無分數史
     assert sent == []
+
+
+# ── P4 馬丁止盈重啟：每日偵測告警（2026-08-21 觸發點缺口修補）─────────────
+# 原本只在防守事件（跌破警報價）才偵測，等於「要用階梯時才知道階梯壞了」。
+# 以下守「每日跑、重啟才推、同狀態不重推、更新基線後可再推」四件事。
+
+# tp 一律用顯假值（CLAUDE.md 陷阱 No.21：本檔進公開版控，數字不准真）。
+# 本組測試驗的是「通知去重狀態機」，restarted 由 _info() 直接注入，
+# 與 tp／max_high 的大小比較無關——偵測數學另由 test_defense_ladder.py 對拍真邏輯。
+_FAKE_BASELINE = {"date": "2026-08-21",
+                  "marts": [{"name": "馬1", "tp": 99_999.0, "rung": 2},
+                            {"name": "馬2", "tp": 88_888.0, "rung": 3}]}
+
+
+def _patch_detect(monkeypatch, info, baseline=None):
+    import service.notification.facade as facade
+    import config as _config
+    monkeypatch.setattr(facade, "detect_mart_restart", lambda b=None: info)
+    monkeypatch.setattr(_config, "MART_TP_BASELINE", baseline or _FAKE_BASELINE,
+                        raising=False)
+
+
+def _info(*restarted_names, max_high=80_000.0):
+    return [{"name": m["name"], "tp": m["tp"], "rung": m["rung"],
+             "max_high": max_high, "restarted": m["name"] in restarted_names}
+            for m in _FAKE_BASELINE["marts"]]
+
+
+def test_mart_restart_none_detected_no_push(notify, patched_state, monkeypatch):
+    _, sent = patched_state
+    _patch_detect(monkeypatch, _info())          # 兩台都沒重啟
+    notify.maybe_send_mart_restart_alert()
+    assert sent == []
+
+
+def test_mart_restart_detection_unavailable_no_crash(notify, patched_state, monkeypatch):
+    _, sent = patched_state
+    _patch_detect(monkeypatch, None)             # 行情取數失敗 → 降級不阻斷
+    notify.maybe_send_mart_restart_alert()
+    assert sent == []
+
+
+def test_mart_restart_pushes_once_and_records_key(notify, patched_state, monkeypatch):
+    state_file, sent = patched_state
+    _patch_detect(monkeypatch, _info("馬2", max_high=90_000.0))
+    notify.maybe_send_mart_restart_alert()
+    assert len(sent) == 1
+    text = sent[0][0]["text"]
+    assert "馬2" in text and "第3階" in text and "作廢" in text
+    assert "0.92^5" in text, "文案須帶重算公式，否則收到警報也不知道怎麼補"
+    assert "馬1" not in text, "未重啟的馬丁不應出現在作廢清單"
+    st = json.loads(state_file.read_text())
+    assert st["last_mart_restart_key"] == "2026-08-21|馬2"
+
+
+def test_mart_restart_same_state_dedupe(notify, patched_state, monkeypatch):
+    _, sent = patched_state
+    _patch_detect(monkeypatch, _info("馬2"))
+    notify.maybe_send_mart_restart_alert()
+    notify.maybe_send_mart_restart_alert()      # 隔日同狀態不重推
+    assert len(sent) == 1
+
+
+def test_mart_restart_repushes_after_baseline_update(notify, patched_state, monkeypatch):
+    _, sent = patched_state
+    _patch_detect(monkeypatch, _info("馬2"))
+    notify.maybe_send_mart_restart_alert()
+    # 人工對帳後更新基線日 → key 改變 → 之後再重啟仍會告警
+    newer = {"date": "2026-09-30", "marts": _FAKE_BASELINE["marts"]}
+    _patch_detect(monkeypatch, _info("馬1", "馬2"), baseline=newer)
+    notify.maybe_send_mart_restart_alert()
+    assert len(sent) == 2 and "馬1" in sent[1][0]["text"]
+
+
+def test_mart_restart_wired_into_main():
+    """守「每日推播真的會呼叫它」——缺這條就等於改了函式卻沒接上流程。"""
+    with open(os.path.join(_REPO, "scripts", "daily_line_notify.py"), encoding="utf-8") as f:
+        src = f.read()
+    main_block = src.split('if __name__ == "__main__":')[1]
+    assert "maybe_send_mart_restart_alert()" in main_block

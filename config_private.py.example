@@ -9,11 +9,11 @@ config_private.py.example — S-1 覆蓋層範本（2026-07-06）
      內容為以下 JSON schema 的 minified 字串：
 
      {
-       "alert_price_low": 54223.0,
+       "alert_price_low": 99999.0,
        "defense_ladder": [
-         [54223.0, "關閉馬丁1號...", 0.056, 43379.0, "附註..."],
-         [50000.0, "台股換 BTC...", 0.127, 37060.0, "附註..."],
-         [44070.0, "關閉馬丁2號...", 0.165, 31180.0, "附註..."]
+         [99999.0, "範例：動作A...", 0.0, 0.0, "附註..."],
+         [88888.0, "範例：動作B...", 0.0, 0.0, "附註..."],
+         [77777.0, "範例：動作C...", 0.0, 0.0, "附註..."]
        ],
        "defense_decision_card": ["文案1", "文案2", "文案3", "文案4"],
        "mart_tp_baseline": {"date": "YYYY-MM-DD", "marts": [
@@ -28,6 +28,15 @@ config_private.py.example — S-1 覆蓋層範本（2026-07-06）
   兩個來源缺一即可（config.py 優先讀 DEFENSE_CONFIG_JSON 環境變數，
   找不到才 import 本模組）；兩者都缺時 config.py 會 raise（fail-loud，
   憲法第 3 條），不會 fallback 到下方的範例假數字。
+
+  🚫 **本檔一律只寫假數字（2026-08-21 立，違反＝資安事件）**
+  本檔進公開版控（repo 為 public）。2026-07-06 S-1 私有化把真值搬進 gitignored 的
+  config_private.py，但**本檔上方的 JSON schema 範例當時直接抄了真實的觸發價、釋出量
+  與加保後強平價**，等於私有化做了一半——真數字仍公開可讀，2026-08-21 才發現並清掉。
+  爾後新增/修改本檔的任何欄位範例，**數字一律用 99999/88888/77777 這類顯假值**，
+  結構可以真、數字不准真。同一禁令適用於 README、CLAUDE.md、測試檔與 commit message。
+  （測試若需真值驗算，走 `from config_private import ...` 並在缺檔時 skip，
+  勿把真值寫進測試——現行 tests/test_defense_ladder.py 即此模式。）
 
   ⚠️ 同步義務（2026-07-14 稽核 No.1 立，改 config_private.py 後必走四步）：
   1. python scripts/defense_config_check.py       → 記本地指紋
