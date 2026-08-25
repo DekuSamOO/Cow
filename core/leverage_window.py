@@ -176,8 +176,14 @@ def compact_rows(gate, d3, price, ahr_max, min_days, batch_days=None,
     if d3.get("ok") is None:
         rows.append("  熊底確認 D3   低點資料不足")
     else:
+        # 一定要把「低點的價與日期」印出來：反彈幅度與 price_req 都是相對它算的，
+        # 少了這個錨點，讀者會把 price_req 誤讀成「熊底要在這個價位」（實際是
+        # 「站上這個價才算確認那個低點是真底」）。2026-08-25 使用者實際踩過這個誤解。
+        d = d3.get("low_date") or ""
         rows.append(
-            "  熊底確認 D3   反彈 {:+.1f}% [{}]>=+{:.0f}%   距低 {}天 [{}]>={}   需 ${:,.0f}".format(
+            "  熊底確認 D3   低點 ${:,.0f} ({})  自低點 {:+.1f}% [{}]>=+{:.0f}%"
+            "（需 ${:,.0f}）  距今 {}天 [{}]>={}".format(
+                d3["low"], d[5:] if len(d) >= 10 else d,
                 d3["rebound"] * 100, ok(d3["c1"]), d3["rebound_req"] * 100,
-                d3["days"], ok(d3["c2"]), d3["days_req"], d3["price_req"]))
+                d3["price_req"], d3["days"], ok(d3["c2"]), d3["days_req"]))
     return rows

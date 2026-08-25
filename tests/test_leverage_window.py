@@ -149,6 +149,10 @@ def test_compact_rows_shape_and_width():
     assert "窗口開啟" in open_rows[0] and "2/6" in open_rows[0]
     for r in open_rows:
         assert _dw(r) <= limit
+    # D3 那行必須印出「低點的價與日期」——少了這個錨點，反彈幅度與確認價
+    # 都失去參照，讀者會把確認價誤讀成「熊底應該在這個價位」（實際踩過的誤解）
+    assert "58,000" in rows[1] and "06-30" in rows[1], "D3 行缺少低點錨點"
+    assert "87,000" in rows[1], "D3 行缺少確認價（低點 x 1.5）"
 
 
 def test_compact_rows_handles_missing():
