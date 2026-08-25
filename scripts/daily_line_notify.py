@@ -203,6 +203,23 @@ def get_decision_data():
                     summary["days_since_ath"] = (datetime.now() - _ath_naive).days
                 if cycle_ath > 0:
                     summary["from_high_pct"] = (current_price - cycle_ath) / cycle_ath * 100
+                    # 熊底確認哨兵 D3 用：自 ATH 之後、且「已跌逾 30%」之後的最低收盤。
+                    # 跌幅門檻由 core.leverage_window 統一（BTC_WATCH 走同一個函式），勿在此重寫。
+                    try:
+                        from core.leverage_window import find_bear_low
+                        _after = btc_df[btc_df.index >= _ath_naive] if cycle_ath_dt else None
+                        if _after is not None and len(_after):
+                            _lo_v, _lo_p = find_bear_low(_after["close"].values, cycle_ath)
+                            if _lo_v is not None:
+                                _lo_i = _after.index[_lo_p]
+                                summary["bear_low_since_ath"] = _lo_v
+                                summary["bear_low_date"] = str(_lo_i)[:10]
+                                # 距低點天數以日曆天計：cron 執行時當日 K 棒可能還沒收，
+                                # 用 K 棒位移會少算一天（BTC_WATCH 手上是完整日線，故用位移）。
+                                summary["days_since_bear_low"] = (
+                                    datetime.now() - _lo_i.to_pydatetime().replace(tzinfo=None)).days
+                    except Exception:
+                        pass   # 顯示/提醒用，取不到就讓 D3 哨兵自己 skip，不阻斷主推播
 
             # ── 最低價綜合評估（單一真實來源 core/bottom_floors，dashboard 共用）──
             now_utc = datetime.now(timezone.utc)
@@ -627,18 +644,23 @@ def maybe_send_leverage_window_alert(data: dict, dry_run: bool = False) -> None:
     from config import (LEVERAGE_AHR999_MAX, LEVERAGE_MIN_DAYS_FROM_ATH,
                         LEVERAGE_BATCH_DAYS, LEVERAGE_BATCH_COUNT)
 
-    ahr = data.get("ahr999")
-    dath = data.get("days_since_ath")
-    if ahr is None or dath is None:
+    from core.leverage_window import gate_status, advance_batches, trigger_price
+
+    gate = gate_status(data.get("ahr999"), data.get("days_since_ath"),
+                       LEVERAGE_AHR999_MAX, LEVERAGE_MIN_DAYS_FROM_ATH)
+    if gate["ok"] is None:
         print("OK 升槓桿哨兵：AHR999 或距 ATH 天數缺值，略過。")
         return
 
     state = _load_escape_state()
-    was_open = bool(state.get("lev_window_open"))
-    is_open = (ahr < LEVERAGE_AHR999_MAX) and (dath >= LEVERAGE_MIN_DAYS_FROM_ATH)
+    ahr, dath = gate["ahr"], gate["dath"]
     today = date.today()
     price = data.get("current_price") or 0
     n = LEVERAGE_BATCH_COUNT
+    prev_sent = int(state.get("lev_batches_sent") or 0)
+    state, batch, event = advance_batches(
+        state, gate["ok"], str(today), LEVERAGE_BATCH_DAYS, n)
+    sig = int(state.get("lev_signal_days") or 0)
 
     def _push(lines: list) -> bool:
         """訊息一律以行陣列組裝，換行交給 join——本檔既有慣用法，
@@ -653,69 +675,126 @@ def maybe_send_leverage_window_alert(data: dict, dry_run: bool = False) -> None:
             print(f"X 升槓桿哨兵發送失敗: {e}")
             return False
 
-    if is_open and not was_open:
+    # 發送失敗一律就地 return：state 不存檔，下次執行會重試同一批（不會跳批）
+    if event == "open" and batch:
         if not _push([
             "[開啟] 升槓桿窗口",
             f"AHR999 {ahr:.3f} < {LEVERAGE_AHR999_MAX}｜距 ATH {dath} 天 >= {LEVERAGE_MIN_DAYS_FROM_ATH}",
             f"BTC ${price:,.0f}",
             "",
-            f"投入第 1/{n} 批（每批 1/{n}，間隔 {LEVERAGE_BATCH_DAYS} 天）",
-            "開新 2x 前確認：預估強平價 <= 當時價 x 0.5",
-            "現價 >= No.6 盈虧平衡價 -> 可關 No.6 全額重開；低於 -> 保留 No.6 用「再開一單」",
+            f"投入第 1/{n} 批（每批 1/{n}，間隔 {LEVERAGE_BATCH_DAYS} 個「訊號日」）",
+            "配置：2X 無額外保證金，強平價 = 開單價 x 0.667（2026-08-24 拍板）",
+            "開單後務必讀 App 實際強平價比對，差 > 1% 立即停止",
+            "區間下限 = 前波新低下方；上限 = 下限 x 1.0074^格數（每格 0.74%）",
             "（資金費 30 日均 < 0 的日子歷史均價低 8.3pp，可提前投下一批）",
         ]):
             return
-        state.update({"lev_window_open": True, "lev_window_start": str(today),
-                      "lev_batches_sent": 1, "lev_last_batch_date": str(today)})
         print(f"! 升槓桿窗口開啟（AHR999 {ahr:.3f}／距 ATH {dath} 天），已發第 1 批。")
 
-    elif is_open and was_open:
-        sent = int(state.get("lev_batches_sent") or 0)
-        last = state.get("lev_last_batch_date")
-        if sent >= n:
-            print(f"OK 升槓桿窗口開啟中，{n} 批已發完，不再提醒。")
-            return
-        try:
-            # 無有效上批日期＝視為早已逾期，直接補發下一批
-            elapsed = (today - date.fromisoformat(last)).days if last else 999
-        except ValueError:
-            elapsed = 999
-        if elapsed < LEVERAGE_BATCH_DAYS:
-            print(f"OK 升槓桿窗口開啟中，距上批 {elapsed} 天 < {LEVERAGE_BATCH_DAYS}，不推。")
-            return
-        nxt = sent + 1
+    elif event == "reopen":
+        print(f"OK 升槓桿窗口重開（訊號日 {sig}，已投 {prev_sent}/{n} 批），批次計數延續不重置。")
+
+    elif event == "batch" and batch:
         if not _push([
-            f"[第 {nxt}/{n} 批] 升槓桿窗口",
+            f"[第 {batch}/{n} 批] 升槓桿窗口",
             f"AHR999 {ahr:.3f}｜距 ATH {dath} 天｜BTC ${price:,.0f}",
-            f"距上批 {elapsed} 天。窗口自 {state.get('lev_window_start')} 開啟。",
+            f"累計訊號日 {sig}（窗口自 {state.get('lev_window_start')} 開啟；期間關窗不重置）",
+            "配置同前：2X 無額外保證金，強平 = 開單價 x 0.667",
         ]):
             return
-        state["lev_batches_sent"] = nxt
-        state["lev_last_batch_date"] = str(today)
-        print(f"! 升槓桿第 {nxt}/{n} 批提醒已發送。")
+        print(f"! 升槓桿第 {batch}/{n} 批提醒已發送。")
 
-    elif (not is_open) and was_open:
-        sent = int(state.get("lev_batches_sent") or 0)
+    elif event == "close":
         why = (f"AHR999 {ahr:.3f} >= {LEVERAGE_AHR999_MAX}"
                if ahr >= LEVERAGE_AHR999_MAX
                else f"距 ATH {dath} 天 < {LEVERAGE_MIN_DAYS_FROM_ATH}")
         if not _push([
-            "[關閉] 升槓桿窗口",
+            "[暫停] 升槓桿窗口",
             f"{why}｜BTC ${price:,.0f}",
-            f"本窗口共發 {sent}/{n} 批（{state.get('lev_window_start')} 起）。",
-            "剩餘批次停止投入，留到下一個窗口（回測：停止優於補完）。",
+            f"本輪已投 {prev_sent}/{n} 批，累計訊號日 {sig}。",
+            f"批次計數保留不歸零：窗口重開會從第 {prev_sent + 1} 批續投。",
+            "連續關窗超過 90 天才視為換一個熊市階段、計數歸零。",
         ]):
             return
-        for k in ("lev_window_open", "lev_window_start", "lev_batches_sent", "lev_last_batch_date"):
-            state.pop(k, None)
-        print(f"! 升槓桿窗口關閉（{why}），已發收尾通知。")
+        print(f"! 升槓桿窗口暫停（{why}），批次計數保留。")
+
+    elif event == "reset":
+        print("OK 升槓桿：連續關窗逾 90 天，批次計數歸零。")
+
+    elif gate["ok"]:
+        # 窗口開啟中但未到下一批（或六批已發完）——與「窗口未開」語意不同，不可共用文案
+        if prev_sent >= n:
+            print(f"OK 升槓桿窗口開啟中，{n} 批已發完，不再提醒。")
+        else:
+            print(f"OK 升槓桿窗口開啟中（訊號日 {sig}／下批需 "
+                  f"{prev_sent * LEVERAGE_BATCH_DAYS}），已投 {prev_sent}/{n} 批。")
 
     else:
-        print(f"OK 升槓桿窗口未開（AHR999 {ahr:.3f}／距 ATH {dath} 天）。")
-        return
+        tp = trigger_price(price, ahr, LEVERAGE_AHR999_MAX)
+        gap = "" if not tp or not price else f"，需 {(tp / price - 1.0) * 100:+.1f}% -> ${tp:,.0f}"
+        print(f"OK 升槓桿窗口未開（AHR999 {ahr:.3f}／距 ATH {dath} 天{gap}）。")
 
     if not dry_run:
         _save_escape_state(state)
+
+
+def maybe_send_bear_bottom_confirm_alert(data: dict, dry_run: bool = False) -> None:
+    """熊底確認哨兵 D3（2026-08-25 立）：自最低點反彈 >= 50% 且距最低點 >= 90 天。
+
+    判準來源＝`_governance/PREREG-season-falsification.md` 的預簽定義。回測（三次熊底，
+    限「自 ATH 已跌逾 30%」後才評判）：中位延遲 +99 天、**提早喊底 0/2**；
+    而「站回 200 週均線」「自低點彈 30%」等快訊號提早 51~304 天、觸發價比真底高
+    40~197%（2026-05-10 就會在 82,210 喊底，之後跌到 58,625）——故不採用。
+
+    觸發語意：**本輪熊市視為結束 → 升槓桿窗口可能不再開** → 馬丁的 USDT 該考慮換現貨。
+    只推一次，狀態存 escape_alert_state.json 的 d3_confirmed。
+    """
+    from core.leverage_window import d3_status
+
+    lo = data.get("bear_low_since_ath")
+    price = data.get("current_price")
+    if lo is None or price is None:
+        print("OK 熊底確認 D3：低點資料缺值，略過。")
+        return
+    d3 = d3_status(price, lo, data.get("bear_low_date"),
+                   data.get("days_since_bear_low"))
+    if d3.get("ok") is None:
+        print("OK 熊底確認 D3：無法判定，略過。")
+        return
+    if not d3["ok"]:
+        print(f"OK 熊底確認 D3 未達成（反彈 {d3['rebound'] * 100:+.1f}%／需 "
+              f"+{d3['rebound_req'] * 100:.0f}%；距低 {d3['days']} 天／需 {d3['days_req']}）。")
+        return
+
+    state = _load_escape_state()
+    if state.get("d3_confirmed"):
+        print("OK 熊底確認 D3 已推播過，不重複。")
+        return
+
+    lines = [
+        "[熊底確認] D3 成立",
+        f"自 {d3['low_date']} 低點 ${d3['low']:,.0f} 反彈 {d3['rebound'] * 100:+.1f}%"
+        f"（需 +{d3['rebound_req'] * 100:.0f}%）",
+        f"距最低點 {d3['days']} 天（需 {d3['days_req']}）｜BTC ${price:,.0f}",
+        "",
+        "語意：本輪熊市視為結束 -> 升槓桿窗口可能不再開。",
+        "待辦：兩台馬丁的 USDT 是為窗口準備的彈藥，此刻應考慮全額換成現貨 BTC。",
+        "理由：幣本位計價下現貨是零變異資產；馬丁贏現貨的條件是",
+        "「幣價年漲幅 < 馬丁的 USDT 年報酬（中位 +7.8%）」，牛市不成立。",
+        "註：這是提醒不是自動執行；PREREG 亦要求同步評判四季論存活與否。",
+    ]
+    if dry_run:
+        print("[dry-run] 熊底確認 D3：" + lines[0] + "（未發送）")
+        return
+    try:
+        send_line_message({"type": "text", "text": "\n".join(lines)})
+    except Exception as e:
+        print(f"X 熊底確認 D3 發送失敗: {e}")
+        return
+    state["d3_confirmed"] = True
+    state["d3_confirmed_date"] = str(date.today())
+    _save_escape_state(state)
+    print("! 熊底確認 D3 已推播。")
 
 
 def maybe_send_weekly_summary(data: dict, now=None) -> None:
@@ -802,5 +881,6 @@ if __name__ == "__main__":
     maybe_send_mart_restart_alert()
     # 升槓桿窗口：AHR999 + 距 ATH 兩道閘門，開/關/分批提醒（2026-08-23）
     maybe_send_leverage_window_alert(data)
+    maybe_send_bear_bottom_confirm_alert(data)
     # 週報：週日傍晚場次加推一則（每週一次）
     maybe_send_weekly_summary(data)

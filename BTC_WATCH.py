@@ -93,6 +93,7 @@ class BitcoinMonitor:
         # 日線 DataFrame + 動態地板每小時刷新一次（避免 60s 迴圈重抓重算）
         self._daily_cache = None
         self._floors_cache = None
+        self._sentinel_cache = None   # (gate, d3)：升槓桿窗口／熊底 D3，隨日線刷新
         self._fng_cache = None
         self._ext_cache = None     # ETF/SOPR/BTC.D/macro 外部維度（每小時隨日線刷新一次）
         self._daily_ts = 0.0
@@ -228,6 +229,13 @@ class BitcoinMonitor:
                     self._floors_cache = None
             else:
                 self._floors_cache = None
+            try:
+                self._compute_sentinels()
+            except Exception as e:
+                # 印出原因而非靜默吞掉：欄位改名／常數搬家這類程式錯誤若無聲消失，
+                # 畫面只會長期少兩行、事後無從排查（沿用上方地板計算的錯誤慣例）。
+                print(f"哨兵計算失敗：{e}")
+                self._sentinel_cache = None
             self._fng_cache = self.get_fng()
             self._ext_cache = self._gather_externals()
             self._daily_ts = now
@@ -293,6 +301,52 @@ class BitcoinMonitor:
             return None, None, None
         return self.FALLBACK_SUPPORT, "fallback 靜態防線", None
 
+    def _compute_sentinels(self):
+        """升槓桿窗口閘門 + 熊底 D3 的判定（單一真實來源 core.leverage_window）。
+
+        **刻意隨日線每小時算一次、不放進 60s 的 render()**：這段只依賴日線
+        （argmax／布林遮罩／argmin 都是 O(n) 全表掃描，df 常態約 1500 列），
+        而 df 每 DAILY_REFRESH_SEC 才換一份——放在 render 裡等於每小時白算 59 次。
+        僅 BTC 有意義（AHR999／冪律為 BTC 校準），其他幣對留 None、不佔版面。
+        """
+        self._sentinel_cache = None
+        if not self.is_btc:
+            return
+        from core.leverage_window import gate_status, d3_status, find_bear_low
+        from config import LEVERAGE_AHR999_MAX, LEVERAGE_MIN_DAYS_FROM_ATH
+        df = self._daily_cache
+        if df is None or len(df) < 200 or "AHR999" not in df.columns:
+            return
+        ahr = df["AHR999"].iloc[-1]
+        if ahr is None or (isinstance(ahr, float) and math.isnan(ahr)):
+            return
+        hi = df["high"] if "high" in df.columns else df["close"]
+        ath_pos = int(hi.values.argmax())
+        closes = df["close"].values
+        # 低點門檻（自 ATH 跌逾 30%）由 core.leverage_window 統一，勿在此重寫
+        lo_val, lo_pos = find_bear_low(closes, float(hi.iloc[ath_pos]), ath_pos)
+        if lo_val is None:
+            d3 = {"ok": None}
+        else:
+            # 距低點天數以 K 棒位移計（此處手上就是完整日線快取）
+            d3 = d3_status(float(closes[-1]), lo_val,
+                           str(df.index[lo_pos])[:10], len(df) - 1 - lo_pos)
+        self._sentinel_cache = (
+            gate_status(float(ahr), len(df) - 1 - ath_pos,
+                        LEVERAGE_AHR999_MAX, LEVERAGE_MIN_DAYS_FROM_ATH),
+            d3,
+        )
+
+    def _sentinel_rows(self, price):
+        """把快取好的哨兵狀態排成兩行橫向摘要；算不出來就整段略過、不佔版面。"""
+        if not self._sentinel_cache:
+            return []
+        from core.leverage_window import compact_rows
+        from config import LEVERAGE_AHR999_MAX, LEVERAGE_MIN_DAYS_FROM_ATH
+        gate, d3 = self._sentinel_cache
+        return compact_rows(gate, d3, price,
+                            LEVERAGE_AHR999_MAX, LEVERAGE_MIN_DAYS_FROM_ATH)
+
     # ── 畫面 ────────────────────────────────────────────────────────────────────
     def render(self, md, funding, oi_stats, top, low, trend=None, mom=None):
         os.system("cls" if os.name == "nt" else "clear")
@@ -351,6 +405,10 @@ class BitcoinMonitor:
         quote += _atr_risk_rows(self._daily_cache, md["close"], support=sup)
         # A：即時項每 60s 更新；日線/地板/外部維度每小時刷新一次
         quote.append(f"  數據時效      即時 60s｜日線·地板·外部 {data_age}")
+        # 升槓桿窗口／熊底確認哨兵（2026-08-25）——刻意做成兩行橫向摘要塞進本區，
+        # 不另開面板：兩欄面板已把 W 撐到 >=102，而本區各行僅約 50-58 寬，
+        # 右側有約 44 字元的閒置橫向空間，放這裡不會撐寬版面、不增加垂直高度。
+        quote += self._sentinel_rows(md["close"])
 
         _, top_rows = _panel(top, escape_top_meta, self.TOP_CAP, "逃頂訊號（出貨）",
                              ("derivatives", "technical", "onchain", "sentiment", "macro"))

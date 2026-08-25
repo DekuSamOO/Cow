@@ -22,14 +22,34 @@ from service.notification.facade import build_defense_message
 # 正本：vault「1b 馬丁格爾數學稽核.md」的實測反推常數。
 try:
     from config_private import LIQ_BASE as _LIQ_BASE, POSITION_USD as _POSITION_USD
+    _HAS_PRIVATE = True
 except ImportError:
     _LIQ_BASE = _POSITION_USD = None
+    _HAS_PRIVATE = False
 
 
 def test_ladder_liq_prices_match_formula():
-    """逐階重算強平價，與表值誤差須 < 0.5%（表值來自 vault，捨入差可容忍）。"""
+    """逐階重算強平價，與表值誤差須 < 0.5%（表值來自 vault，捨入差可容忍）。
+
+    三種狀態分開處理（2026-08-24 修：舊版把後兩者混為一談，
+    訊息寫「config_private.py 缺失」但其實檔案在，只是無部位）：
+      (a) config_private 不存在（公開 repo／Actions）→ skip
+      (b) 存在但 LIQ_BASE is None ＝ **無槓桿部位** → 改驗「無部位」的不變量
+      (c) 存在且有部位 → 原本的逆合約公式自洽驗算
+    """
+    if not _HAS_PRIVATE:
+        pytest.skip("config_private.py 不存在（公開 repo／Actions 環境屬正常），跳過驗算")
     if _LIQ_BASE is None:
-        pytest.skip("config_private.py 缺失，跳過需要真實驗算常數的測試（S-1 覆蓋層）")
+        # 2026-08-24：網格 No.6 止盈平倉後無槓桿部位，強平價不存在。
+        # 約定以 liq_after = 0.0 表示「無部位」；若有非 0 值，代表設定又描述了
+        # 一個不存在的部位——那正是本次改版要根除的錯誤，必須擋下。
+        assert _POSITION_USD is None, \
+            'LIQ_BASE 為 None（無部位）時 POSITION_USD 也須為 None，否則兩者不一致'
+        bad = [(i, row[3]) for i, row in enumerate(DEFENSE_LADDER, 1) if row[3] != 0.0]
+        assert not bad, (
+            f'無槓桿部位（LIQ_BASE=None）時階梯的 liq_after 必須全為 0.0，'
+            f'但第 {[i for i, _ in bad]} 階仍有非 0 值——設定正在描述不存在的部位')
+        return
     inv_liq = 1.0 / _LIQ_BASE
     for i, (trig, action, add_btc, liq_after, note) in enumerate(DEFENSE_LADDER, 1):
         inv_liq += add_btc / _POSITION_USD
@@ -166,7 +186,7 @@ def test_message_embeds_restart_detection():
 
 if __name__ == '__main__':
     test_ladder_liq_prices_match_formula()
-    test_alert_threshold_is_stage1_trigger()
+    test_alert_threshold_leads_stage1_trigger()   # 2026-08-24 修：舊名已於 2026-08-21 改名，此處未同步
     test_ladder_monotonic()
     test_message_contains_all_stages_and_conditions()
     test_message_stage_marks_follow_price()

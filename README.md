@@ -1,4 +1,4 @@
-# Cow — 比特幣投資戰情室 v3.43
+# Cow — 比特幣投資戰情室 v3.45
 
 > 比特幣多週期量化分析工具，整合技術指標、鏈上數據、期權與波段策略。
 
@@ -25,7 +25,7 @@
 app.py              入口點（組合各層，不含業務邏輯；今日大盤速覽 6 大 Metric 以 @st.fragment(run_every=60) 每 60 秒自動更新）
 config.py           集中設定（均線週期、交易成本、倉位風控參數、WALK_FORWARD_EXIT_MODES、警報門檻/分級/遲滯常數、升槓桿窗口哨兵閘門 `LEVERAGE_AHR999_MAX`/`LEVERAGE_MIN_DAYS_FROM_ATH`/`LEVERAGE_BATCH_DAYS`/`LEVERAGE_BATCH_COUNT`、底部模型演算法參數：可靠度權重/礦工電價/效率 anchors 等單一可調來源）
 data_manager.py     根層級數據管理器（TVL/穩定幣/資金費率歷史 SQLite 快取、指數退避重試、增量模式）
-BTC_WATCH.py        BTC 雙向監控終端儀表板**正本**（2026-06-10 起由 Crypto repo 移入本 repo 維護）：純幣安 fapi/dapi + path import core 的逃頂五維/抄底六維/趨勢方向四維評分，60 秒刷新。頂部「操作訊號（三軸融合）」banner 由 core/action_ensemble.compute_composite_action 算出（傳 cycle 子分；三軸皆有才顯示，含建議倉位）。`BitcoinMonitor` 已參數化（symbol/coin_symbol/is_btc/top_cap/low_cap/title/oi_unit/nav，全部預設 BTC 向後相容）：非 BTC 時停用 ETF/SOPR/BTC.D/四季論/礦工/冪律等 BTC 專屬維度、地板改 Mayer 估值底；nav=True（由 watcher 進入）時 interruptible_wait 偵測鍵盤 b 回上層／q 結束／e 執行標記（e 的日誌行為僅 UniversalMonitor 有，本檔 run 忽略；單獨執行 nav=False 純 sleep，行為不變）。右側全高 **K 線側欄**（近 30 日日線，取自既有 _daily_cache 零額外請求；ANSI 綠漲紅跌、實體█/影線│，色碼不進 _dw 版寬計算；終端機過窄或資料不足時自動退回單欄畫面，非 BTC 幣對亦適用）
+BTC_WATCH.py        BTC 雙向監控終端儀表板**正本**（2026-06-10 起由 Crypto repo 移入本 repo 維護）：純幣安 fapi/dapi + path import core 的逃頂五維/抄底六維/趨勢方向四維評分，60 秒刷新。頂部「操作訊號（三軸融合）」banner 由 core/action_ensemble.compute_composite_action 算出（傳 cycle 子分；三軸皆有才顯示，含建議倉位）。`BitcoinMonitor` 已參數化（symbol/coin_symbol/is_btc/top_cap/low_cap/title/oi_unit/nav，全部預設 BTC 向後相容）：非 BTC 時停用 ETF/SOPR/BTC.D/四季論/礦工/冪律等 BTC 專屬維度、地板改 Mayer 估值底；nav=True（由 watcher 進入）時 interruptible_wait 偵測鍵盤 b 回上層／q 結束／e 執行標記（e 的日誌行為僅 UniversalMonitor 有，本檔 run 忽略；單獨執行 nav=False 純 sleep，行為不變）。右側全高 **K 線側欄**（近 30 日日線，取自既有 _daily_cache 零額外請求；ANSI 綠漲紅跌、實體█/影線│，色碼不進 _dw 版寬計算；終端機過窄或資料不足時自動退回單欄畫面，非 BTC 幣對亦適用）。**升槓桿／熊底哨兵兩行摘要**（2026-08-25）：`_compute_sentinels` 隨日線每小時算一次（judgment 全部委由 `core/leverage_window`，此處不重寫任何門檻），`_sentinel_rows` 只做排版並塞進「即時行情」區右側的閒置橫向空間——刻意不另開面板：兩欄面板已把版寬撐到 `2*_MIN_COL_W+2`，而該區各行僅約 50-58 寬，放這裡不撐寬版面也不增加垂直高度（`tests/test_leverage_window.py::test_compact_rows_shape_and_width` 守住寬度上限）。僅 BTC 有意義（AHR999／冪律為 BTC 校準），其他幣對留空不佔版面
 watcher.py          通用標的監控入口：`python watcher.py` 輸入代號 → classify_symbol 自動判市場路由 —— BTC→完整 BitcoinMonitor；其他幣對→參數化 BitcoinMonitor(is_btc=False, top_cap=68/low_cap=72) 跑逃頂/抄底；台股→UniversalMonitor 台股分支（趨勢方向±100＋台股逃頂/抄底**七維/四維面板**〔v0.5/v0.4，2026-07-02 全市場 swing 回測拍板：逃頂核心六維＋量價背離疊加、抄底四維，反指標/雜訊維已移除〕＋三軸融合操作訊號 banner，籌碼/估值隨日線每小時隨 service.tw_chip.get_chip_bundle 刷新）；美股→UniversalMonitor 美股分支（趨勢方向±100＋純 OHLCV 三維逃頂/抄底 v0.1〔技術背離+量價背離+結構轉折，個股槓桿/法人/IV 無免費源改走通用軸〕＋三軸融合 banner）。即時成交量＋台股週轉率（成交量÷已發行股數，`service.tw_chip.get_shares_outstanding`）與量能分位（**近 5 日均量**在個股自身歷史同口徑均量的 midrank 排名，非量比倍數；盤中排除尚未結算的今日棒）隨現價同步顯示。main 為 while 迴圈（儀表板內 b 重選代號／e 記錄已執行／q 結束）；畫框/面板/操作訊號 helper（_panel/_panel_stance/_composite_panel 等）重用 BTC_WATCH 單一來源；右側全高 **K 線側欄**同 BTC_WATCH（`_print_with_kline` 共用 helper，近 30 日日線、終端機過窄/資料不足自動退回單欄）。**波段執行可靠度三件套（2026-07-04，v3.30）**：①「交易計畫」面板——`watch_plan.json`（已入 .gitignore，範本 `watch_plan.example.json`）預寫進場區/停損/目標/倉位/有效期，面板顯示各價位距現價 % 與風報比 R，盤中改檔下一輪 60s 生效；②警戒引擎（core/watch_alerts）——觸價（入進場區/破停損/達目標）與 composite 訊號變化本地響鈴＋橫幅，遲滯防抖（觸發解除武裝、回撤 0.5% 才重武裝），每輪並順帶檢查 watch_plan 其餘標的觸價（背景警戒，盯一檔不漏他檔，上限 8 檔）；③觸發/執行日誌 `logs/watch_journal.jsonl`（gitignore；事件含觸發當下 trend/逃頂/抄底/action 快照，e 鍵記「已依計畫執行」）。穩定性（2026-07-04 稽核批1/2）：代號打錯（永久失敗）直接回選單不無限重試、暫時性失敗 3 次自動回上層且重試等待期間 b/q 可用、日線刷新失敗沿用 <1h 舊快取＋畫面標註（現價線獨立每 60s 不受影響）、prompt Ctrl+C/EOF 乾淨結束；上櫃股 resolved symbol 快取（不再每輪白打 .TW 404）
 
 docs/
@@ -59,6 +59,7 @@ core/
   watch_plan.py       交易計畫檔（watch_plan.json）載入/驗證/衍生計算，純函數零網路（E1，2026-07-04）：TradePlan dataclass（entry 區間/stop/targets/size_pct/valid_until）＋載入即擋的價位順序驗證（long 須 stop<entry≤targets 遞增、short 鏡像；壞計畫收 errors 不拋，監控不因打錯字中斷）＋R 風報比＋過期判定；`load_plans_cached` mtime 快取（watcher 60s 輪詢、檔案沒動不重讀、盤中改檔下輪生效）＋`plan_panel_rows` 面板列。watch_plan.json 必留在 .gitignore（公開 repo，個人部位計畫不入庫）
   watch_alerts.py     警戒引擎（E2/E3，2026-07-04）純函數核心：`check_price_events`（入進場區/破停損/達目標，各自獨立武裝；遲滯防抖沿用 scripts/price_alert.py 實戰 pattern——觸發解除武裝、離開觸發價位 0.5% 才重武裝，免費源延遲價震盪不狂響；過期計畫不觸發）＋`check_signal_change`（composite action_key 變化、同 key 去重、首次觀測不觸發）＋`journal_append`/`journal_record`（logs/watch_journal.jsonl 一行一事件，含觸發當下訊號快照；寫入失敗靜默不干擾盯盤）＋`notify_beep`（winsound 兩短音、非 Windows 退終端 bell）。通知本地 only，LINE 推播明確不在 v1
   relative_high_us.py／relative_low_us.py 美股相對高低點（逃頂/抄底雷達）純函數 v0.1〔2026-07 新建〕：美股個股槓桿/法人/IV 無免費源，改用純 OHLCV 三維（技術背離50＋量價背離30＋結構轉折20，理論/實際總分皆 100）——技術維度複用 `relative_high_tw._score_technical_high`／`relative_low_tw._score_technical_low`（跨市場外插）並以 `rescale_dim` 換算到本框架宣告的 max 50（原函式固定 max 30/25，須 rescale 才不會讓實際上限被鎖在 80/75）；量價/結構維度來自 `core.relative_universal`。全數規則式、尚未在美股資料上跑過回測。compute_relative_high_us/low_us + relative_high_us_meta/relative_low_us_meta
+  leverage_window.py  升槓桿窗口 + 熊底確認 D3 **單一真實來源**（2026-08-25 立，`scripts/daily_line_notify.py` 的 LINE 哨兵與 `BTC_WATCH.py` 的終端機摘要共用；純計算、零 IO、零 Streamlit 依賴）：`gate_status`（AHR999／距 ATH 兩道閘門，缺值回 ok=None 不可判定）＋`trigger_price`（AHR999 對價格是二次式 → 門檻價 = P×sqrt(ahr_max/ahr)，**是下界**，真跌下去 SMA200 會跟著下移故實際觸發價更高，只作「還差多少」的量級顯示不作下單價）＋`advance_batches`（分批推進，見下）＋`find_bear_low`（自 ATH 之後、且**已跌逾 `BEAR_DRAWDOWN`=30%** 的區間裡取最低收盤；不加這道跌幅門檻，熊市初期價格還在高檔就會被當成低點而誤判 D3。只回「值與位置」不回天數——兩個呼叫端的天數基準本就不同：BTC_WATCH 手上是完整日線用 K 棒位移，LINE 哨兵是 cron 執行、當日 K 棒可能還沒收故用日曆天）＋`d3_status`（熊底確認＝自最低點反彈 ≥50% 且距最低點 ≥90 天，PREREG 預簽定義）＋`compact_rows`（兩行橫向摘要，見 BTC_WATCH 版面說明）。**`advance_batches` 以「訊號日」累計而非日曆日**：回測 `D1_batching.py` 的 gap 是訊號日索引，閘門暫時不成立的日子只是不計數、不重置建構；舊版用「日曆日＋開窗即重置」，2018 那段窗口被 2~6 天的小反彈切成 7 截＝重置 6 次、六批永遠投不完。關窗只暫停不歸零，連續關窗超過 `WINDOW_RESET_DAYS`=90 天才視為換一個熊市階段而重置
 
 service/
   local_db_reader.py  讀取本地 SQLite（15m 原始 / 重採樣日線），TTL 快取，全面 UTC 時區
@@ -88,7 +89,7 @@ strategy/
   notifier.py           LINE Bot 主動推播通知模組
 
 scripts/
-  daily_line_notify.py     GitHub Actions 雲端自動推播腳本（Kraken 備援，台灣 08:23 / 13:39 / 18:27 三時段，含新聞輿情、逃頂警報分級/分數Δ/遲滯狀態機、OI 快照過期警告、週日傍晚場次加推文字週報，時段閘門 hour<17 早退使本地/手動執行也僅傍晚才發；另含 maybe_send_mart_restart_alert 每日馬丁止盈重啟偵測，見下方 price_alert 說明；另含 maybe_send_leverage_window_alert 每日升槓桿窗口哨兵，AHR999 與距 ATH 兩道閘門同時成立才開窗、分批提醒）
+  daily_line_notify.py     GitHub Actions 雲端自動推播腳本（Kraken 備援，台灣 08:23 / 13:39 / 18:27 三時段，含新聞輿情、逃頂警報分級/分數Δ/遲滯狀態機、OI 快照過期警告、週日傍晚場次加推文字週報，時段閘門 hour<17 早退使本地/手動執行也僅傍晚才發；另含 maybe_send_mart_restart_alert 每日馬丁止盈重啟偵測，見下方 price_alert 說明；另含 maybe_send_leverage_window_alert 每日升槓桿窗口哨兵，AHR999 與距 ATH 兩道閘門同時成立才開窗、**分批以「訊號日」累計、關窗只暫停不歸零**；另含 maybe_send_bear_bottom_confirm_alert 熊底確認 D3 哨兵，成立即只推一次、語意為「本輪熊市視為結束→升槓桿窗口可能不再開，馬丁的 USDT 該考慮換現貨」。兩者的判定邏輯與門檻皆委由 `core/leverage_window`，本檔只負責取數與組推播文案）
   price_alert.py           GitHub Actions 每小時價格警報（防守線＝config.ALERT_PRICE_LOW；文案由 config.DEFENSE_LADDER 三階推移表動態組裝，含同日去重 + armed 遲滯：跌破推一次、回升門檻+$500 才重新武裝。觸發價/釋出量等真實數字自 2026-07-06 起改由私有來源載入，見 config_private.py.example。**2026-08-21 起 ALERT_PRICE_LOW 與第 1 階觸發價解耦**——馬丁止盈重啟會讓階梯觸發價上飄並改變執行順序，警報價則刻意不跟漲，定位為「高於全部三階、留足台股 T+2 的獨立預警價」，守門判準為 >= 而非 ==）
   test_flex_message.py     本地端測試 LINE Flex Message 排版的除錯腳本
   test_compare_backtest.py 驗證腳本：對相同參數同時執行 swing.py 與 Walk-Forward，確認結果量級一致
@@ -120,6 +121,7 @@ tests/
   funding_threshold_calib.py  資費門檻校準（離線手動跑，非 pytest）：以幣安資費史(2020-12+, ~2000日)回歸，各年化資費桶→其後60日最大回撤/反彈 + 頂/底單維 AUC + Youden 門檻，重訂逃頂正費率/抄底負費率給分階梯
   test_alert_logic.py         逃頂警報分級/去重/遲滯與分數Δ狀態機測試，含 P4 馬丁止盈重啟每日告警的去重狀態機與「已接進 __main__ 主流程」接線守門（monkeypatch 攔截 LINE 發送，17 passed）
   test_flex_size.py           build_flex_message 40KB 大小防線、OI 快照過期/ETF 過舊警告與今日行動行測試（5 passed）
+  test_leverage_window.py     升槓桿窗口／熊底確認 D3 純函數守門（11 passed，零網路、數字全用顯假值）：兩道閘門判定與缺值 ok=None、trigger_price 的二次式關係、**分批以訊號日累計且短暫關窗不重置**（核心迴歸，另守同日重跑不重複計數與逾 90 天才歸零）、find_bear_low 的 30% 跌幅門檻（含同值取最早、start_pos 之前不入選）、D3 兩條件須同時成立，以及 **compact_rows 兩行不得超過 `2*_MIN_COL_W+2` 顯示寬度**（撐寬會毀掉 BTC_WATCH 全螢幕版面）
   core/test_radar_replay.py   三雷達歷史回放單元測試（合成資料：序列因果性/F&G 與資費注入/門檻事件統計，4 passed）
   core/test_action_ensemble.py 三軸合成行動決策矩陣測試（多空盤整分流/11 行動分支/邊界與警報門檻對齊/None 缺料處理，14 passed）
   core/test_relative_tw.py    台股逃頂/抄底評分純函數測試（固定輸入零網路：缺料全灰燈/v0.4 抄底四維校準高分＋tdcc 已移除斷言/估值絕對值分級/meta 分級/逃頂核心六維 sum=100＋vol_price 疊加理論 108、抄底四維恰 100/score clamp 100）
@@ -391,6 +393,51 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 ---
 
 ## 版本紀錄
+
+### v3.45 (2026-08-25)
+升槓桿哨兵抽出**單一真實來源** `core/leverage_window.py`，修三個會讓哨兵「該響時不響、
+響了也說錯話」的缺陷，並新增熊底確認 D3 哨兵與 BTC_WATCH 終端機兩行摘要。
+**真實部位數字一律只在 `config_private.py`／`DEFENSE_CONFIG_JSON` secret／vault，本檔與所有公開檔不列。**
+- **fix(notify)**: **分批計數會被小反彈整組重置**（本次最嚴重）。回測 `D1_batching.py` 的
+  gap 用的是**訊號日**索引——閘門暫時不成立的日子只是不計數、不重置建構；而 v3.44 實作用
+  「日曆日 ＋ 開窗即 `lev_batches_sent=1`」，兩者不一致。實際後果：2018 那段窗口被 2~6 天的
+  小反彈切成 7 截＝重置 6 次，**六批永遠投不完**。改為累計 `lev_signal_days`，關窗只暫停
+  不歸零，連續關窗逾 `WINDOW_RESET_DAYS`=90 天才視為換一個熊市階段而重置。
+- **fix(notify)**: **推播文案已過時**。舊文案寫「開新 2x 前確認：預估強平價 ≤ 當時價 × 0.5」
+  與一整段 No.6 的去留指示——2026-08-24 已拍板改 2X 無額外保證金（強平價＝開單價 × 0.667）、
+  且 No.6 已平倉。文案照舊等於在窗口真的開啟時給出錯誤的下單參數。已全數改寫並加上
+  「開單後務必讀 App 實際強平價比對，差 > 1% 立即停止」。
+- **fix(notify)**: `event is None` 同時涵蓋「窗口沒開」與「窗口開啟中但未到下一批」，
+  會在窗口開啟時誤印「窗口未開」。兩者語意不同、不可共用文案，已拆成獨立分支；
+  窗口未開時順帶用 `trigger_price` 印出「還差多少 % 到門檻價」。
+- **feat(core)**: 新增 `core/leverage_window.py`——閘門、觸發價、分批推進、熊底低點、D3 判定、
+  兩行摘要全部收在此處，純計算零 IO，供 LINE 哨兵與 BTC_WATCH 共用（詳見「架構」段）。
+- **feat(notify)**: 新增 `maybe_send_bear_bottom_confirm_alert()`（熊底確認 D3）並掛進
+  `__main__`。判準取 `_governance/PREREG-season-falsification.md` 的**預簽**定義：自最低點
+  反彈 ≥50% 且距最低點 ≥90 天。回測三次熊底（限「自 ATH 已跌逾 30%」後才評判）中位延遲
+  +99 天、**提早喊底 0/2**；而「站回 200 週均線」「自低點彈 30%」等快訊號提早 51~304 天、
+  觸發價比真底高 40~197%（2026-05-10 就會喊底，之後還跌了三成）——**故不自創更快的條件**。
+  觸發語意＝本輪熊市視為結束 → 升槓桿窗口可能不再開 → 馬丁的 USDT 該考慮換現貨。
+- **feat(watch)**: `BTC_WATCH.py` 新增哨兵兩行橫向摘要，塞進「即時行情」區右側的閒置空間
+  （不另開面板、不增加垂直高度）。判定隨日線每小時算一次而非每 60s 重算——那串
+  argmax／布林遮罩／argmin 都是 O(n) 全表掃描（df 常態約 1500 列），放進 render 等於
+  每小時白算 59 次。
+- **fix(test)**: `tests/test_defense_ladder.py` 的 skip 邏輯把「`config_private.py` 不存在」
+  與「存在但 `LIQ_BASE is None`＝無槓桿部位」混為一談，訊息寫「檔案缺失」但其實檔案在。
+  拆成三態，且無部位時改驗**無部位的不變量**（`POSITION_USD` 須同為 None、階梯 `liq_after`
+  須全為 0.0）——若有非 0 值，代表設定正在描述一個不存在的部位，必須擋下。
+  同時修 `__main__` 直呼舊測試名（該函式已於 2026-08-21 改名，此處未同步）。
+- **refactor(simplify)**: 收尾 `/simplify` 四角度平行審查後套用，**零行為變更**（已用舊
+  pandas 寫法獨立重算對拍 ATH 天數／低點值／低點日期／距低天數四項，全部一致）：
+  ①「自 ATH 跌逾 30% 後的最低收盤」原本在 `BTC_WATCH` 與 `daily_line_notify` 各手刻一份、
+  30% 門檻硬編兩處，抽成 `find_bear_low()` 收進單一來源；②`d3_status` 的首參原名
+  `close_series` 卻只讀 `[-1]`，害呼叫端得包 `[price]` 這種殼子，改為誠實的 `current_price`；
+  ③`maybe_send_leverage_window_alert` 隔空 60 行的 `ok` 旗標改為就地 `if not _push(...): return`；
+  ④`BTC_WATCH._sentinel_rows` 整段吞光一切的 `except Exception` 會讓欄位改名／常數搬家這類
+  程式錯誤靜默消失，改為在每小時的日線刷新路徑印出原因。
+- **test**: 新增 `tests/test_leverage_window.py`（11 項，零網路、數字全用顯假值），
+  全套 **459 passed, 2 deselected**。`scripts/defense_config_check.py` schema OK、
+  指紋與 Actions Secret 對拍一致（指紋不落公開檔，同 v3.43 既有政策）。
 
 ### v3.44 (2026-08-23)
 幣本位網格 No.5（2x、強平距現價僅 −39%）已關閉改開 No.6（1x＋額外保證金，強平 −64.4%），
