@@ -122,12 +122,28 @@ def advance_batches(state, is_open, today_iso, batch_days, batch_count):
 
 
 def d3_status(current_price, low_since, low_date_iso, days_since_low,
-              rebound_req=0.50, days_req=90):
+              rebound_req=0.50, days_req=90, cycle_ath=None,
+              bear_drawdown=BEAR_DRAWDOWN):
     """熊底確認（D3＝PREREG 預簽定義）：自最低點反彈 >= 50% 且距最低點 >= 90 天。
 
     回測（三次熊底、限「自 ATH 已跌逾 30%」後才評判）：中位延遲 +99 天、
     **提早喊底 0/2**；而「站回 200 週均線」「自低點彈 30%」等快訊號提早 51~304 天、
     觸發價比真底高 40~197%。故採用 D3、不自創更快的條件。
+
+    ── c3：仍在熊市（2026-08-25 新增）────────────────────────────────────────
+    原定義只要求「過去存在一個自 ATH 跌逾 30% 的低點」，**沒有要求觸發當下仍在熊市**。
+    用生產的 season_forecast.cycle_ath 逐日重放，D3 歷史觸發 5 次，其中
+    **2021-10-18 在 62,010 觸發、距 cycle ATH 僅 −2.5%**，一個月後見 69k 大頂，
+    隨後跌至 15,781（−74.6%）並於 2022-05-11 跌破當時所用的低點 ——
+    照 SOP 那天要把全部 USDT 換成現貨，是最糟的時點。
+
+    分辨點很乾淨（觸發當下距 cycle ATH）：
+        真觸發 −74.6% / −64.4% / −64.1% / −22.6%　vs　誤報 **−2.5%**
+    → 加一道「觸發當下仍需距 cycle ATH >= bear_drawdown」的閘門。
+    **刻意重用既有的 BEAR_DRAWDOWN(30%)，不引入新參數**——它本來就是本檔對「熊市」的定義，
+    只是原本只用來找低點、沒用在觸發當下。
+
+    cycle_ath=None → 不套用 c3（向後相容；但生產端一律要傳，否則等於沒有這道閘門）。
     """
     if not low_since or not current_price:
         return {"ok": None}
@@ -135,12 +151,19 @@ def d3_status(current_price, low_since, low_date_iso, days_since_low,
     reb = cur / float(low_since) - 1.0
     c1 = reb >= rebound_req
     c2 = (days_since_low or 0) >= days_req
+    dd = None
+    c3 = True
+    if cycle_ath:
+        dd = cur / float(cycle_ath) - 1.0
+        c3 = dd <= -float(bear_drawdown)
     return {
-        "ok": bool(c1 and c2), "c1": bool(c1), "c2": bool(c2),
+        "ok": bool(c1 and c2 and c3), "c1": bool(c1), "c2": bool(c2), "c3": bool(c3),
         "rebound": reb, "rebound_req": rebound_req,
         "days": int(days_since_low or 0), "days_req": days_req,
         "low": float(low_since), "low_date": low_date_iso,
         "price_req": float(low_since) * (1.0 + rebound_req),
+        "drawdown_from_ath": dd, "drawdown_req": -float(bear_drawdown),
+        "cycle_ath": (None if cycle_ath is None else float(cycle_ath)),
     }
 
 

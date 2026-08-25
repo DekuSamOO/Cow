@@ -118,7 +118,9 @@ def get_decision_data():
         latest_funding = 0.0
         if not funding_df.empty:
             latest_funding = funding_df['fundingRate'].iloc[-1]
-            f_is_hot = latest_funding >= 0.03
+            # 門檻收回 core 單一來源（原硬編 0.03；見 core.relative_high.FUNDING_HOT_8H）
+            from core.relative_high import FUNDING_HOT_8H
+            f_is_hot = latest_funding >= FUNDING_HOT_8H
             summary["funding_text"] = f"{'🔴' if f_is_hot else '🟢'} {latest_funding:.4f}%"
             summary["funding_color"] = "#ff4b4b" if f_is_hot else "#00ff88"
 
@@ -254,6 +256,12 @@ def get_decision_data():
             summary["trend_color"] = "#00ff88" if is_bull_trend else "#ff4b4b"
 
             rsi = curr.get('RSI_14', 0)
+            # 套保建倉哨兵（G3）需要數值與「近 90 日是否曾 >75」
+            summary["rsi14"] = float(rsi) if rsi else None
+            try:
+                summary["rsi_max_90d"] = float(btc["RSI_14"].tail(90).max())
+            except Exception:
+                summary["rsi_max_90d"] = None
             summary["rsi_text"] = f"{'🟢' if rsi > 50 else '🔴'} ({rsi:.1f})"
             summary["rsi_color"] = "#00ff88" if rsi > 50 else "#ff4b4b"
 
@@ -381,10 +389,23 @@ def _compute_radars(btc_df, curr, latest_funding, price) -> dict:
     except Exception:
         pass
 
+    # 資費歷史（抄底負費率子項的 PiT 分位用）；抓不到回 None → 退回絕對階梯，不影響推播
+    try:
+        from service.funding_history import funding_ann_hist as _fah
+        _funding_hist = _fah(window=400) or None
+    except Exception:
+        _funding_hist = None
     common = dict(funding_8h=latest_funding, oi_stats=None, etf_summary=etf,
-                  sopr=sopr, fng=fng, btc_d_trend=btcd, macro=macro, mvrv_z=mvrv_z)
+                  sopr=sopr, fng=fng, btc_d_trend=btcd, macro=macro, mvrv_z=mvrv_z,
+                  funding_ann_hist=_funding_hist)
     rh = compute_relative_high(price, curr, btc_df, **common)
-    rl = compute_relative_low(price, curr, btc_df, **common)
+    # SOPR / F&G 歷史只有抄底側吃（逃頂側已否決分位法）→ 不放進共用的 common
+    try:
+        from service.metric_history import sopr_hist as _sh, fng_hist as _fh
+        _mh = {'sopr_hist': _sh() or None, 'fng_hist': _fh() or None}
+    except Exception:
+        _mh = {}
+    rl = compute_relative_low(price, curr, btc_df, **common, **_mh)
     td = compute_trend_direction(curr, btc_df)
     ct_state = rh["cycle_top"]
 
@@ -756,14 +777,20 @@ def maybe_send_bear_bottom_confirm_alert(data: dict, dry_run: bool = False) -> N
     if lo is None or price is None:
         print("OK 熊底確認 D3：低點資料缺值，略過。")
         return
+    # cycle_ath 必傳：沒有它就等於少掉 c3「仍在熊市」閘門（2026-08-25 新增）
     d3 = d3_status(price, lo, data.get("bear_low_date"),
-                   data.get("days_since_bear_low"))
+                   data.get("days_since_bear_low"),
+                   cycle_ath=(data.get("cycle_ath") or None))
     if d3.get("ok") is None:
         print("OK 熊底確認 D3：無法判定，略過。")
         return
     if not d3["ok"]:
+        _dd = d3.get("drawdown_from_ath")
+        _c3 = "" if d3.get("c3", True) else (
+            f"；**c3 未過：距 cycle ATH {_dd * 100:+.1f}%／需 <= "
+            f"{d3['drawdown_req'] * 100:.0f}%（仍在 ATH 附近，不視為熊底）**")
         print(f"OK 熊底確認 D3 未達成（反彈 {d3['rebound'] * 100:+.1f}%／需 "
-              f"+{d3['rebound_req'] * 100:.0f}%；距低 {d3['days']} 天／需 {d3['days_req']}）。")
+              f"+{d3['rebound_req'] * 100:.0f}%；距低 {d3['days']} 天／需 {d3['days_req']}{_c3}）。")
         return
 
     state = _load_escape_state()
@@ -795,6 +822,64 @@ def maybe_send_bear_bottom_confirm_alert(data: dict, dry_run: bool = False) -> N
     state["d3_confirmed_date"] = str(date.today())
     _save_escape_state(state)
     print("! 熊底確認 D3 已推播。")
+
+
+def maybe_send_hedge_batch_alert(data: dict, dry_run: bool = False) -> None:
+    """
+    套保分批建倉哨兵（2026-08-25 立）— G3 觸發，分三批。
+
+    規則正本：`Work/BTC幣本位網格去留評估/升槓桿窗口執行清單.md` 附錄 E-1／E-2。
+      規模 0.1285 BTC（現貨的一半）｜產品＝**全倉套保**（非分段/網格套保）
+      G3 前提：日線 RSI **曾 >75**（近 90 日）後回落
+      三批：RSI <65 / <55 / <50，各 0.0428 BTC
+      平倉（優先於一切）：AHR999<0.40 開窗，或 D3 熊底確認 → **全部平倉**
+
+    為什麼要哨兵：這三個觸發原本只寫在附錄裡，靠人每天自己看 RSI，漏看就錯過批次。
+    每批只推一次，狀態存 escape_alert_state.json 的 hedge_batch_{n}。
+    """
+    rsi = data.get("rsi14")
+    rsi_max = data.get("rsi_max_90d")
+    price = data.get("current_price")
+    if rsi is None or rsi_max is None:
+        print("OK 套保建倉：RSI 資料缺值，略過。")
+        return
+    if rsi_max <= 75:
+        print(f"OK 套保建倉：G3 前提未成立（近 90 日 RSI 最高 {rsi_max:.1f}，需 >75）。")
+        return
+
+    state = _load_escape_state()
+    batches = [(1, 65, 0.0428), (2, 55, 0.0428), (3, 50, 0.0429)]
+    due = [(n, thr, qty) for n, thr, qty in batches
+           if rsi < thr and not state.get(f"hedge_batch_{n}")]
+    if not due:
+        print(f"OK 套保建倉：無新批次（RSI {rsi:.1f}）。")
+        return
+
+    n, thr, qty = due[0]          # 一次只推一批，避免同日連推三則
+    lines = [
+        f"[套保建倉] 第 {n} 批觸發",
+        f"日線 RSI {rsi:.1f} < {thr}｜近 90 日曾達 {rsi_max:.1f}（G3 前提成立）",
+        f"BTC ${price:,.0f}" if price else "",
+        "",
+        f"動作：開 {qty} BTC 的**全倉套保**（幣本位 1x 做空）。",
+        "不要用分段/網格套保：它是漲上去才逐格賣，跌下來等於沒避險。",
+        "",
+        "平倉條件（優先於一切）：AHR999<0.40 開窗、或 D3 熊底確認 -> 全部平倉。",
+        "用途只有一個：保住開窗時的購買力，不是賺資金費。",
+    ]
+    if dry_run:
+        print(f"[dry-run] 套保建倉第 {n} 批（未發送）")
+        return
+    try:
+        send_line_message({"type": "text",
+                           "text": "\n".join(x for x in lines if x != "")})
+    except Exception as e:
+        print(f"X 套保建倉發送失敗: {e}")
+        return
+    state[f"hedge_batch_{n}"] = True
+    state[f"hedge_batch_{n}_date"] = str(date.today())
+    _save_escape_state(state)
+    print(f"! 套保建倉第 {n} 批已推播。")
 
 
 def maybe_send_weekly_summary(data: dict, now=None) -> None:
@@ -882,5 +967,6 @@ if __name__ == "__main__":
     # 升槓桿窗口：AHR999 + 距 ATH 兩道閘門，開/關/分批提醒（2026-08-23）
     maybe_send_leverage_window_alert(data)
     maybe_send_bear_bottom_confirm_alert(data)
+    maybe_send_hedge_batch_alert(data)
     # 週報：週日傍晚場次加推一則（每週一次）
     maybe_send_weekly_summary(data)

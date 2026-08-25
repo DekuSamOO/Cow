@@ -22,6 +22,12 @@ tests/funding_threshold_calib.py
   逃頂正費率(max 20)：≥50→20 | ≥40→17 | ≥30→14 | ≥20→6 | ≥12→2 | <12→0
   抄底負費率(max 10)：≤-20→10 | ≤-10→8 | ≤-5→6 | ≤-2→3 | <0→1 | ≥0→0
   資料長大後重跑本腳本，據新分布/轉折微調。
+
+⚠️ 2026-08-25 後續：本腳本訂的**抄底側絕對階梯已不再是唯一計分路徑**。
+   幣安自 2024-12-10 起 623 日未越過利率基準 0.01%/8h，上列負費率門檻在該環境幾近失效
+   （≤-20% 命中 0 日）→ core/relative_low 改為「絕對階梯 ∪ PiT 滾動分位」取大值。
+   逃頂側則維持本腳本的絕對階梯不變（分位法在 train/holdout/新環境三處全輸，已否決）。
+   詳見 tests/funding_percentile_calib.py。
 """
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

@@ -193,13 +193,24 @@ LEVERAGE_MIN_DAYS_FROM_ATH: int = 300
 LEVERAGE_BATCH_DAYS: int = 14
 LEVERAGE_BATCH_COUNT: int = 6
 
-ESCAPE_ALERT_THRESHOLD: int = 60
+# 逃頂警報的**主閘門**（擋在分級之前；分級見下方 ESCAPE_ALERT_TIERS）。
+# 2026-08-25：原值 60 也在實測上限 55 之上 → 就算分級門檻改對了，這道閘門仍會把警報整個擋死。
+# 一律與 ESCAPE_ALERT_TIERS 的最低級對齊，**不要各訂各的**（兩處漂移正是這次沒一次修對的原因）。
+ESCAPE_ALERT_THRESHOLD: int = 45
 
 # 逃頂警報分級（降冪）：(下限分數, 等級名)。顏色與標題映射見 notification/builders.py。
-ESCAPE_ALERT_TIERS: tuple = ((85, "危急"), (75, "警報"), (60, "預警"))
+# 2026-08-25 重校：原本是 ((85,"危急"),(75,"警報"),(60,"預警"))，但實測 2019-09~2026-08
+# 共 2542 日，逃頂總分**最高只到 55** → 三級**全部永遠不會觸發**，這個 LINE 警報等於一直關著
+# （與資費階梯、冪律子項、分級門檻同型的「死檔位」問題，見 tests/radar_subitem_audit.py）。
+# 新門檻直接對齊 core.relative_high.escape_top_meta 的重校值（51/49/45），**不另訂數字**，
+# 兩邊共用同一組刻度：稀有度 0.55% / 1.18% / 2.05%（約一年數次，適合推播頻率）。
+ESCAPE_ALERT_TIERS: tuple = ((51, "危急"), (49, "警報"), (45, "預警"))
 
 # 跨日再推條件：連續多日超門檻時，分數較上次推播 ≥ 此差值（或升級）才再推，避免每天重複。
-ESCAPE_ALERT_REPUSH_DELTA: int = 5
+# 2026-08-25：隨 ESCAPE_ALERT_TIERS 一併收斂。原值 5 是配合舊的 60/75/85（級距間隔 15/10）；
+# 新級距 45/49/51 的最小間隔只有 2 → delta=5 會讓「跨日同級再推」這條規則**永遠用不到**
+# （同級內移動 5 分必然已經升級），又是一個死規則。**delta 一律 <= 最小級距間隔。**
+ESCAPE_ALERT_REPUSH_DELTA: int = 2
 
 # ==============================================================================
 # 底部模型演算法參數（單一可調來源；core/bottom_floors、core/miner_cost 讀此處）

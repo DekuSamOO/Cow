@@ -39,7 +39,7 @@ from core.season_forecast import (
 from core.bottom_floors import compute_all_bottom_estimates
 from core.action_ensemble import compute_composite_action, POSITION_NOTE
 from core.relative_high import (compute_relative_high, compute_cycle_top_estimates,
-                                compute_cycle_top_state)
+                                compute_cycle_top_state, FUNDING_HOT_8H, FUNDING_BASELINE_8H)
 from core.relative_low import compute_relative_low
 from core.trend_direction import compute_trend_direction
 from service.bottom_metrics import get_latest_bottom_metrics, fetch_hashrate_history_ths
@@ -244,6 +244,31 @@ def _render_trend_banner(btc, curr):
     return td
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _radar_metric_hist():
+    """SOPR / F&G 歷史（抄底 PiT 分位子項用）。抓不到回 {} → 退回絕對階梯。"""
+    try:
+        from service.metric_history import sopr_hist, fng_hist
+        return {'sopr': sopr_hist() or None, 'fng': fng_hist() or None}
+    except Exception:
+        return {}
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _radar_funding_hist():
+    """
+    抄底負費率子項的 PiT 滾動分位所需歷史（2026-08-25 補）。
+    背景：改動當初只有 BTC_WATCH 餵歷史，dashboard 與 LINE 推播仍跑純絕對階梯
+    → 新環境 623 日中有 232 日（37.2%）三方分數不同、最大差 7 分（獨立檢核 🟠 No.2）。
+    抓不到回 None → core 端自動退回絕對階梯，不讓面板掛掉。
+    """
+    try:
+        from service.funding_history import funding_ann_hist
+        return funding_ann_hist(window=400) or None
+    except Exception:
+        return None
+
+
 def _render_escape_block(btc, curr, funding_rate, fng_val, realtime_data):
     """逃頂評分段（過熱該止盈）— 波段雷達上半。與 LINE 推播、BTC_WATCH 同源 core/relative_high。"""
     st.markdown('##### 🚨 逃頂評分（過熱該止盈）')
@@ -255,6 +280,7 @@ def _render_escape_block(btc, curr, funding_rate, fng_val, realtime_data):
         rh = compute_relative_high(
             price, btc.iloc[-1], btc,
             funding_8h=funding_rate,
+            funding_ann_hist=_radar_funding_hist(),
             oi_stats=oi_stats,
             etf_summary=ext.get('etf'),
             sopr=ext.get('sopr'),
@@ -342,6 +368,9 @@ def _render_dip_block(btc, curr, funding_rate, fng_val, realtime_data):
         rl = compute_relative_low(
             price, btc.iloc[-1], btc,
             funding_8h=funding_rate,
+            funding_ann_hist=_radar_funding_hist(),
+            sopr_hist=_radar_metric_hist().get('sopr'),
+            fng_hist=_radar_metric_hist().get('fng'),
             oi_stats=oi_stats,
             etf_summary=ext.get('etf'),
             sopr=ext.get('sopr'),
@@ -723,7 +752,11 @@ def render(btc, chart_df, tvl_hist, stable_hist, fund_hist, curr, dxy, ov, proxi
             fig_main.add_trace(go.Bar(x=fund_sub.index[valid_mask], y=fund_sub.loc[valid_mask, 'fundingRate'], marker_color=fr_colors, name='Funding Rate %'), row=3, col=1)
         if 'RSI_14' in _cdf.columns and _cdf['RSI_14'].notna().any():
             fig_main.add_trace(go.Scatter(x=_cdf.index, y=(_cdf['RSI_14'] - 50) * 0.001, line=dict(color='#a32eff', width=1.5), name='RSI (scaled)'), row=3, col=1)
-        fig_main.add_hline(y=0.03, line_color='#ff4b4b', line_width=0.8, line_dash='dot', annotation_text='過熱 0.03%', row=3, col=1)
+        # 門檻收回 core 單一來源：原硬編 0.03 與同頁文字燈號（FUNDING_HOT_8H≈0.0274）不一致
+        fig_main.add_hline(y=FUNDING_HOT_8H, line_color='#ff4b4b', line_width=0.8, line_dash='dot',
+                           annotation_text=f'過熱 {FUNDING_HOT_8H:.4f}%', row=3, col=1)
+        fig_main.add_hline(y=FUNDING_BASELINE_8H, line_color='#888888', line_width=0.8, line_dash='dot',
+                           annotation_text=f'利率基準 {FUNDING_BASELINE_8H}%', row=3, col=1)
         if not tvl_hist.empty:
             _th = tvl_hist.copy()
             if _th.index.tz is not None:
@@ -765,7 +798,11 @@ def render(btc, chart_df, tvl_hist, stable_hist, fund_hist, curr, dxy, ov, proxi
     ahr_val = curr.get('AHR999', float('nan'))
     mvrv_z = curr.get('MVRV_Z_Proxy', 0) or 0
     etf_flow = proxies['etf_flow']
-    fr_state = '🔥 多頭過熱' if funding_rate > 0.03 else '🟢 情緒中性' if funding_rate > 0 else '❄️ 空頭主導'
+    # 門檻收回 core 單一來源（原硬編 0.03 與 FUNDING_ANN_YELLOW 換算值漂移）；
+    # 0.01%/8h 是幣安利率基準＝真中性，貼基準與明顯溢價要分得出來。
+    fr_state = ('🔥 多頭過熱' if funding_rate > FUNDING_HOT_8H
+                else '🟡 溢價偏多' if funding_rate > FUNDING_BASELINE_8H
+                else '🟢 情緒中性' if funding_rate >= 0 else '❄️ 空頭主導')
     ahr_state = '🟢 抄底區間' if ahr_val < 0.45 else '🟡 合理區間' if ahr_val < 1.2 else '🔴 高估區間'
     mvrv_state = '🔥 過熱頂部' if mvrv_z > 3.0 else '🟢 價值低估' if mvrv_z < 0 else '中性區域'
     _tvl_source = getattr(realtime_data, 'tvl_source', None) or 'DeFiLlama'

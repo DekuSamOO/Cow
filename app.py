@@ -101,12 +101,16 @@ def render_realtime_overview(
     _c2.caption(f"來源：{_fng_source}")
 
     if m.funding_is_real:
-        _fr_delta = "🔥 多頭過熱" if _funding_rate > 0.03 else ("🟢 中性" if _funding_rate > 0 else "❄️ 空頭")
+        # 門檻收回 core 單一來源（原硬編 0.03）；0.01%/8h＝幣安利率基準，貼基準是真中性不是偏多
+        from core.relative_high import FUNDING_HOT_8H, FUNDING_BASELINE_8H
+        _fr_delta = ("🔥 多頭過熱" if _funding_rate > FUNDING_HOT_8H
+                     else "🟡 溢價偏多" if _funding_rate > FUNDING_BASELINE_8H
+                     else "🟢 中性" if _funding_rate >= 0 else "❄️ 空頭")
         _c3.metric(
             "💸 資金費率",
             f"{_funding_rate:.4f}%",
             _fr_delta,
-            delta_color="inverse" if _funding_rate > 0.03 else "normal",
+            delta_color="inverse" if _funding_rate > FUNDING_HOT_8H else "normal",
         )
         _c3.caption(f"來源：{m.funding_source}")
     else:

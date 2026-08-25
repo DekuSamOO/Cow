@@ -29,6 +29,7 @@ import pandas as pd
 
 from core.divergence import detect_bottom_divergence_combo
 from core.relative_high import annualize_funding
+from core.pit_ladder import pit_percentile, percentile_score, percentile_label
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -41,13 +42,35 @@ from core.relative_high import annualize_funding
 FUNDING_ANN_LOW_YELLOW = -5.0    # 年化 % — 明顯空方付費（主判別帶；黃）
 FUNDING_ANN_LOW_RED    = -20.0   # 年化 % — 極端空方付費（危機級洗盤；紅）
 
+# ── PiT 滾動分位（2026-08-25 提出 → 同日**撤回計分**，僅留觀測值）────────────
+# 動機：2024-12-10 之後幣安 BTCUSDT 資費再未越過 0.01%/8h 基準（=年化 10.95%），
+# 全分布壓在 [-11%, +11%] 年化 → 下方絕對門檻在此環境命中率崩壞（≤-20% 命中 0 日、
+# ≤-10% 僅 3 日），負費率子項 623 日只有 15.4% 的日子非零。
+# 曾改為「絕對階梯 ∪ PiT 分位」取大值，但**獨立檢核後撤回**，經過如下：
+#   初版宣稱 holdout 混合 0.546 vs 絕對 0.487 → 修掉兩個缺陷後翻盤：
+#     (a) 未來窗不足 60 日的樣本未剔除（holdout 16 個正樣本有 3 個只有 11~55 日窗）
+#     (b) 第五檔 cutoff 寫 25.0，**不是**稀有度預算換算值（ann<0 的 train 稀有度是 12.96%）
+#   歸因（只改其一）：(a) 單獨修 → 混合仍贏（holdout 0.610 vs 0.499）；
+#                    (b) 單獨修 → 混合就輸（0.509 vs 0.521）→ **優勢全來自那個自選參數**。
+#   兩項都修後：train 混合 0.640 vs 絕對 0.601（train 是選參數的那份，不算證據），
+#              holdout 混合 0.486 vs 絕對 0.499，且**換 8 個對照抽樣種子 0/8 混合勝**。
+# → 依 CONSTITUTION 第 11 條（樣本少不 grid search、0.55 收案門檻）**不予採用**：
+#   負費率子項維持純絕對階梯。分位僅作為 sub["funding_pct"] 的觀測值輸出，
+#   **不計分、不進面板 label**（避免變成第 11 條所禁的誤導性「參考顯示」）。
+#   ⚠️ 這不代表分位法錯，只代表「用現有樣本證明不了」。資料長大後重跑
+#   tests/funding_percentile_calib.py 再議；**重議前不要只看 train 就改回去**。
+FUNDING_PCT_WINDOW  = 180     # 觀測用滾動視窗（日）
+FUNDING_PCT_MIN_OBS = 90      # 視窗內最少樣本，不足則不輸出分位
+# 五檔全部由 train 稀有度換算（僅供未來重議時參考，目前不計分）：
+FUNDING_PCT_LOW_CUTS = (1.0, 3.3, 5.5, 9.3, 13.0)   # → 10 / 8 / 6 / 3 / 1 分
+
 # 六維權重（各維最高分；理論總和 106，compute_relative_low_score clamp 到 100）
 # — 經 relative_low_backtest 拍板（實證導向）
 WEIGHTS_LOW = {
-    "cycle":       25,   # 一、長週期深跌（Mayer 10 + 200週 9 + 冪律 6）← AUC 最強
+    "cycle":       25,   # 一、長週期深跌（Mayer 13 + 200週 12）← 冪律 2026-08-25 移除，6 分按比例併回
     "derivatives": 20,   # 二、合約超冷（負費率 10 + OI 滾動清洗 10）
-    "technical":   20,   # 三、技術回穩（底背離 14 + RSI 超賣 6）
-    "sentiment":   15,   # 四、情緒恐慌（F&G 10 + BTC.D 上升 5）
+    "technical":   20,   # 三、技術回穩（底背離 14 + RSI 超賣 6，RSI 2026-08-25 改絕對∪分位）
+    "sentiment":   15,   # 四、情緒恐慌（F&G 10 + BTC.D 上升 5，F&G 2026-08-25 改絕對∪分位）
     "onchain":     16,   # 五、鏈上吸籌（ETF 連續流入 6 + SOPR 割肉 4 + MVRV-Z 深度低估 6，見下方 2026-07 驗證）
     "macro":       10,   # 六、總經順風（降息/鴿派 7 + 事件臨近 3）灰燈
 }
@@ -79,7 +102,12 @@ UNFITTED_DIMS_LOW = ()
 RULE_BASED_DIMS_LOW = ("macro",)
 # dovish flags 回測已完成（2026-07，弱維/落後確認）→ 不再列「待回補」；保留鍵供文件追溯。
 PENDING_FIT_SUBDIMS_LOW = {}
-WEAK_SUBDIMS_LOW = {"macro": "dovish flags（通膨/就業）FRED 回測=弱/落後確認（全期 AUC 0.45、費率era 0.56），維持低權規則式"}
+WEAK_SUBDIMS_LOW = {
+    "macro": "dovish flags（通膨/就業）FRED 回測=弱/落後確認（全期 AUC 0.45、費率era 0.56），維持低權規則式",
+    "derivatives": ("負費率子項＝純絕對階梯；holdout AUC 0.499（n_pos=13）＝無訊號。"
+                    "PiT 分位混合版已於 2026-08-25 撤回（優勢全來自未揭露的自選 cutoff，"
+                    "修正後 8 個種子 0/8 勝）→ 待樣本長大重測"),
+}
 
 
 def _nan(v) -> bool:
@@ -91,7 +119,19 @@ def _nan(v) -> bool:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _score_cycle(row) -> dict:
-    """長週期深跌（max 25）= Mayer(10) + 200週均比(9) + 冪律比(6)。實證最強維度。"""
+    """
+    長週期深跌（max 25）= Mayer(13) + 200週均比(12)。
+
+    2026-08-25 **移除冪律子項**（原 6 分），理由三條，任一條單獨都夠：
+      1. 觸發率 100%、滿分率 92.8%、AUC 0.500 → 是常數不是訊號
+      2. 「0 分」需 PowerLaw_Ratio >= 5.0，而全期最大僅 3.12 → **該檔結構上不可觸及**
+      3. 標籤誤導：`PowerLaw_Ratio = close / PowerLaw_Support`，2026-08-25 實值 0.47
+         （support 約 $169,824、價格 $79,744 ＝價格只有那條線的 47%），面板卻寫「🟢 貼近冪律支撐」
+    重訂階梯也救不了：混合版 0.516/0.500、純分位取代版 0.499/0.414（都不優於現行）
+    → 情境同 CONSTITUTION 第 11 條處理 Hash Ribbons 的前例（顯示本身就在誤導）→ 整段移除。
+    原 6 分**按比例併回同維度**（10:9 → 13:12），維持 cycle=25 不動總分刻度。
+    `PowerLaw_Ratio` 仍在 sub 保留原始值供機器讀取，但不計分、不進面板文字。
+    """
     def _v(k):
         v = row.get(k) if hasattr(row, "get") else None
         return None if _nan(v) else float(v)
@@ -103,52 +143,86 @@ def _score_cycle(row) -> dict:
         m_s, m_lbl, m_val = 0, "⚪ 累積中(需730日)", "—"
     else:
         m_val = f"{mayer:.2f}x"
-        if   mayer < 0.8: m_s, m_lbl = 10, "🟢 低於2年均線×0.8 (極度低估)"
-        elif mayer < 1.0: m_s, m_lbl = 6,  "🟡 低於2年均線"
-        elif mayer < 1.2: m_s, m_lbl = 3,  "⚪ 略低於均線"
+        if   mayer < 0.8: m_s, m_lbl = 13, "🟢 低於2年均線×0.8 (極度低估)"
+        elif mayer < 1.0: m_s, m_lbl = 8,  "🟡 低於2年均線"
+        elif mayer < 1.2: m_s, m_lbl = 4,  "⚪ 略低於均線"
         else:             m_s, m_lbl = 0,  "⚪ 高於均線"
 
     if sma200w is None:
         s_s, s_lbl, s_val = 0, "⚪ 累積中(需200週)", "—"
     else:
         s_val = f"{sma200w:.2f}x"
-        if   sma200w < 1.0: s_s, s_lbl = 9, "🟢 跌破200週均 (歷史絕對底)"
-        elif sma200w < 1.3: s_s, s_lbl = 6, "🟡 接近200週均"
-        elif sma200w < 2.0: s_s, s_lbl = 3, "⚪ 正常範圍"
-        else:               s_s, s_lbl = 0, "⚪ 偏高"
-
-    if pl is None:
-        p_s, p_lbl, p_val = 0, "⚪ 累積中", "—"
-    else:
-        p_val = f"{pl:.1f}x"
-        if   pl < 2.0: p_s, p_lbl = 6, "🟢 貼近冪律支撐"
-        elif pl < 5.0: p_s, p_lbl = 3, "🟡 略高於冪律支撐"
-        else:          p_s, p_lbl = 0, "⚪ 遠高於支撐"
+        if   sma200w < 1.0: s_s, s_lbl = 12, "🟢 跌破200週均 (歷史絕對底)"
+        elif sma200w < 1.3: s_s, s_lbl = 8,  "🟡 接近200週均"
+        elif sma200w < 2.0: s_s, s_lbl = 4,  "⚪ 正常範圍"
+        else:               s_s, s_lbl = 0,  "⚪ 偏高"
 
     return {
-        "value": f"Mayer {m_val}｜200週 {s_val}｜冪律 {p_val}",
-        "score": m_s + s_s + p_s, "max": WEIGHTS_LOW["cycle"],
-        "label": f"Mayer {m_lbl}；200週 {s_lbl}；冪律 {p_lbl}",
-        "note": "長週期估值深跌（Mayer/200週/冪律）— 敏感度測試 AUC 最強維度",
+        "value": f"Mayer {m_val}｜200週 {s_val}",
+        "score": m_s + s_s, "max": WEIGHTS_LOW["cycle"],
+        "label": f"Mayer {m_lbl}；200週 {s_lbl}",
+        "note": "長週期估值深跌（Mayer/200週）— 冪律子項 2026-08-25 因常亮無鑑別力移除",
         "sub": {"mayer": mayer, "mayer_score": m_s, "sma200w": sma200w,
-                "sma200w_score": s_s, "powerlaw": pl, "powerlaw_score": p_s},
+                "sma200w_score": s_s, "powerlaw": pl, "powerlaw_score": 0},
     }
 
 
-def _score_derivatives_low(funding_8h, oi_stats) -> dict:
-    """合約超冷（max 20）= 負資金費率年化(10) + OI 滾動清洗(10)。"""
+def funding_pit_percentile(hist, current=None, min_obs: int = FUNDING_PCT_MIN_OBS,
+                           window: int = FUNDING_PCT_WINDOW):
+    """
+    今日年化資費在「過去 window 日」中的分位（0–100，midrank 處理同值）。
+
+    hist：**已截到評分當日為止**的年化資費序列（不含未來 → PiT）。呼叫端負責切「不含未來」，
+          **本函式負責切「只看最近 window 日」**——2026-08-25 獨立檢核抓到：呼叫端為了讓
+          休眠天數數得回 624 日前而餵 900 日，同一份 list 被拿去算分位 → 生產實跑 900 日
+          分位、不是校準拍板的 180 日（623 日中 137 日分數不同、最大差 5 分）。
+          視窗一律在這裡收斂，杜絕「餵幾筆就算幾筆」。
+    current：今日值；None 時取 hist[-1]。視窗內樣本不足 min_obs 回 None（不給分位分）。
+
+    純函數、零網路：歷史由 service/funding_history.funding_ann_hist() 提供。
+    """
+    if hist is None:
+        return None
+    vals = [float(v) for v in hist if not _nan(v)]
+    if window and window > 0:
+        vals = vals[-window:]
+    if len(vals) < min_obs:
+        return None
+    x = float(vals[-1]) if current is None or _nan(current) else float(current)
+    below = sum(1 for v in vals if v < x)
+    equal = sum(1 for v in vals if v == x)
+    return (below + 0.5 * equal) / len(vals) * 100
+
+
+def _score_derivatives_low(funding_8h, oi_stats, funding_ann_hist=None) -> dict:
+    """
+    合約超冷（max 20）= 負資金費率(10) + OI 滾動清洗(10)。
+
+    負費率子項 2026-08-25 起為「絕對階梯 ∪ PiT 滾動分位」**取大值**：
+      絕對階梯抓「跨環境的絕對極端」（2020/2022 危機級深負），分位抓「當前環境內的相對極端」
+      （後 2024-12 低費率環境，絕對階梯已失效 → 見 FUNDING_PCT_* 常數上方校準紀錄）。
+    funding_ann_hist=None（呼叫端沒餵歷史）→ 自動退回純絕對階梯，行為同 2026-08 之前。
+    """
     ann = annualize_funding(funding_8h)
+    # 資費抓不到就不該回報分位：否則 pct 會退化成「歷史最後一筆的分位」，
+    # 面板顯示一個與今日無關的數字（2026-08-25 獨立檢核 🟡 No.9）。
+    pct = None
     if ann is None:
         f_s, f_lbl, f_val = 0, "⚪ 無資料", "—"
     else:
+        pct = funding_pit_percentile(funding_ann_hist, ann) if funding_ann_hist else None
         f_val = f"{ann:.0f}% (年化)"
         # 階梯由 funding_threshold_calib.py 回歸：判別帶在淺負(≤-2~-5%)，深負(≤-20%)為危機級洗盤滿分
-        if   ann <= FUNDING_ANN_LOW_RED:    f_s, f_lbl = 10, "🟢 極端空方付費 (≤-20% 年化, 危機洗盤)"
-        elif ann <= -10:                    f_s, f_lbl = 8,  "🟢 嚴重空方付費 (≤-10%)"
-        elif ann <= FUNDING_ANN_LOW_YELLOW: f_s, f_lbl = 6,  "🟡 空方付費 (≤-5%)"
-        elif ann <= -2:                     f_s, f_lbl = 3,  "🟡 偏空 (≤-2%)"
-        elif ann < 0:                       f_s, f_lbl = 1,  "⚪ 微負費率"
-        else:                               f_s, f_lbl = 0,  "⚪ 多方付費/中性"
+        if   ann <= FUNDING_ANN_LOW_RED:    f_a, f_lbl = 10, "🟢 極端空方付費 (≤-20% 年化, 危機洗盤)"
+        elif ann <= -10:                    f_a, f_lbl = 8,  "🟢 嚴重空方付費 (≤-10%)"
+        elif ann <= FUNDING_ANN_LOW_YELLOW: f_a, f_lbl = 6,  "🟡 空方付費 (≤-5%)"
+        elif ann <= -2:                     f_a, f_lbl = 3,  "🟡 偏空 (≤-2%)"
+        elif ann < 0:                       f_a, f_lbl = 1,  "⚪ 微負費率"
+        else:                               f_a, f_lbl = 0,  "⚪ 多方付費/中性"
+
+        # 分位側 2026-08-25 已撤回計分（見上方常數區的歸因紀錄）：只算不給分、不進 label。
+        # 保留計算是為了讓 sub 有觀測值可累積，將來樣本夠了能直接重跑校準。
+        f_s = f_a
 
     # OI 滾動清洗（1h 窗 ΔOI，呼叫端以 openInterestHist 算好注入 oi_stats）
     chg = (oi_stats or {}).get("change_1h_pct")
@@ -165,14 +239,23 @@ def _score_derivatives_low(funding_8h, oi_stats) -> dict:
         "value": f"資費 {f_val}｜OI {o_val}",
         "score": f_s + o_s, "max": WEIGHTS_LOW["derivatives"],
         "label": f"資費 {f_lbl}；OI {o_lbl}",
-        "note": "OI 1h 滾動清洗未擬合(歷史不足)；負費率已回歸重校(AUC 0.626，判別帶在淺負)",
+        "note": ("OI 1h 滾動清洗未擬合(歷史不足)；負費率＝純絕對階梯"
+                 "(holdout AUC 0.499＝無訊號；分位混合版已撤回，見 FUNDING_PCT_* 紀錄)"),
         "sub": {"funding_ann": ann, "funding_score": f_s,
+                "funding_pct": pct, "funding_pct_window": FUNDING_PCT_WINDOW,
                 "oi_change_1h_pct": chg, "oi_score": o_s},
     }
 
 
 def _score_technical_low(row, df) -> dict:
-    """技術回穩（max 20）= 底背離 RSI+MACD(14) + RSI_14 超賣(6)。"""
+    """
+    技術回穩（max 20）= 底背離 RSI+MACD(14) + RSI_14 超賣(6)。
+
+    RSI 子項 2026-08-25 改「絕對階梯 ∪ PiT 滾動分位」取大值（見 core/pit_ladder）：
+      絕對門檻 <=20/25/30 在測期間只有 4.2% 的日子觸發，把原始 RSI 的 AUC 0.782 壓到 0.559。
+      改混合後 train 0.538→0.693、holdout 0.547→0.837（**雙邊都贏才收案**）。
+    歷史直接取自已傳入的 df，**不需要新資料管線**。
+    """
     div = detect_bottom_divergence_combo(df) if df is not None else {"n_confirm": 0, "strength": 0.0}
     n = div.get("n_confirm", 0)
     strength = div.get("strength", 0.0)
@@ -181,37 +264,60 @@ def _score_technical_low(row, df) -> dict:
     else:        d_s, d_lbl = 0, "⚪ 無"
 
     rsi = row.get("RSI_14") if hasattr(row, "get") else None
+    r_pct = None
     if _nan(rsi):
         r_s, r_lbl, r_val = 0, "⚪ 無資料", "—"
     else:
         r_val = f"{rsi:.0f}"
-        if   rsi <= 20: r_s, r_lbl = 6, f"🟢 極度超賣({r_val})"
-        elif rsi <= 25: r_s, r_lbl = 4, f"🟡 超賣({r_val})"
-        elif rsi <= 30: r_s, r_lbl = 2, f"⚪ 偏超賣({r_val})"
-        else:           r_s, r_lbl = 0, f"⚪ 中性({r_val})"
+        if   rsi <= 20: r_a, r_lbl = 6, f"🟢 極度超賣({r_val})"
+        elif rsi <= 25: r_a, r_lbl = 4, f"🟡 超賣({r_val})"
+        elif rsi <= 30: r_a, r_lbl = 2, f"⚪ 偏超賣({r_val})"
+        else:           r_a, r_lbl = 0, f"⚪ 中性({r_val})"
+        if df is not None and "RSI_14" in getattr(df, "columns", []):
+            r_pct = pit_percentile(list(df["RSI_14"].values), rsi)
+        r_p = percentile_score(r_pct, 6, high_is_extreme=False)
+        r_s = max(r_a, r_p)
+        if r_p > r_a and r_pct is not None:
+            r_lbl = f"🟡 本環境偏低({r_val}，{percentile_label(r_pct)})"
+        elif r_pct is not None:
+            r_lbl = f"{r_lbl} {percentile_label(r_pct)}"
 
     return {
         "value": f"背離×{n}｜RSI {r_val}",
         "score": d_s + r_s, "max": WEIGHTS_LOW["technical"],
         "label": f"背離 {d_lbl}；RSI {r_lbl}",
-        "note": "日線底背離（價LL/指標HL）+ RSI_14 超賣",
+        "note": "日線底背離（價LL/指標HL）+ RSI_14（絕對∪PiT分位，2026-08-25 重訂）",
         "sub": {"divergence_n": n, "divergence_strength": strength,
                 "divergence_score": d_s, "rsi": (None if _nan(rsi) else float(rsi)),
-                "rsi_score": r_s},
+                "rsi_score": r_s, "rsi_pct": r_pct},
     }
 
 
-def _score_sentiment_low(fng, btc_d_trend) -> dict:
-    """情緒恐慌（max 15）= F&G 極度恐懼(10) + BTC.D 上升避險(5)。"""
+def _score_sentiment_low(fng, btc_d_trend, fng_hist=None) -> dict:
+    """
+    情緒恐慌（max 15）= F&G 極度恐懼(10) + BTC.D 上升避險(5)。
+
+    F&G 子項 2026-08-25 改「絕對階梯 ∪ PiT 滾動分位」取大值：
+      train 0.525→0.584、holdout 0.568→0.718（雙邊都贏才收案）。
+    fng_hist=None 時自動退回純絕對階梯（向後相容）。
+    """
+    g_pct = None
     if _nan(fng):
         g_s, g_lbl, g_val = 0, "⚪ 無資料", "—"
     else:
         g_val = f"{fng:.0f}"
-        if   fng <= 10: g_s, g_lbl = 10, f"🟢 極度恐懼({g_val})"
-        elif fng <= 20: g_s, g_lbl = 8,  f"🟢 恐懼({g_val})"
-        elif fng <= 25: g_s, g_lbl = 5,  f"🟡 偏恐懼({g_val})"
-        elif fng <= 30: g_s, g_lbl = 3,  f"⚪ 偏空({g_val})"
-        else:           g_s, g_lbl = 0,  f"⚪ 中性/貪婪({g_val})"
+        if   fng <= 10: g_a, g_lbl = 10, f"🟢 極度恐懼({g_val})"
+        elif fng <= 20: g_a, g_lbl = 8,  f"🟢 恐懼({g_val})"
+        elif fng <= 25: g_a, g_lbl = 5,  f"🟡 偏恐懼({g_val})"
+        elif fng <= 30: g_a, g_lbl = 3,  f"⚪ 偏空({g_val})"
+        else:           g_a, g_lbl = 0,  f"⚪ 中性/貪婪({g_val})"
+        g_pct = pit_percentile(fng_hist, fng) if fng_hist else None
+        g_p = percentile_score(g_pct, 10, high_is_extreme=False)
+        g_s = max(g_a, g_p)
+        if g_p > g_a and g_pct is not None:
+            g_lbl = f"🟡 本環境偏恐懼({g_val}，{percentile_label(g_pct)})"
+        elif g_pct is not None:
+            g_lbl = f"{g_lbl} {percentile_label(g_pct)}"
 
     if not btc_d_trend or btc_d_trend.get("change_pp") is None:
         b_s, b_lbl, b_val = 0, "⚪ 累積中", "—"
@@ -228,13 +334,22 @@ def _score_sentiment_low(fng, btc_d_trend) -> dict:
         "label": f"F&G {g_lbl}；BTC.D {b_lbl}",
         "note": "恐懼貪婪極度恐懼 + BTC.D 上升（資金避險回流主鏈）",
         "sub": {"fng": (None if _nan(fng) else float(fng)), "fng_score": g_s,
+                "fng_pct": g_pct,
                 "btcd_change_pp": (btc_d_trend or {}).get("change_pp"), "btcd_score": b_s},
     }
 
 
-def _score_onchain_low(etf_summary, sopr, mvrv_z=None) -> dict:
-    """鏈上吸籌（max 16）= ETF 連續淨流入(6) + SOPR 割肉投降(4) + MVRV-Z 深度低估(6)。
-    ETF 灰燈/未擬合；SOPR/MVRV-Z 皆已驗證（AUC 0.585/0.732，見 WEIGHTS_LOW 上方註解）。"""
+def _score_onchain_low(etf_summary, sopr, mvrv_z=None, sopr_hist=None) -> dict:
+    """
+    鏈上吸籌（max 16）= ETF 連續淨流入(6) + SOPR 割肉投降(4) + MVRV-Z 深度低估(6)。
+    ETF 灰燈/未擬合；SOPR/MVRV-Z 皆已驗證（AUC 0.585/0.732，見 WEIGHTS_LOW 上方註解）。
+
+    SOPR 子項 2026-08-25 改「絕對階梯 ∪ PiT 滾動分位」取大值：
+      絕對門檻 <=0.92/0.95/0.98 只有 2.8% 的日子觸發，把原始 SOPR 的 AUC 0.707 壓到 0.568。
+      改混合後 train 0.600→0.735、holdout 0.538→0.597（雙邊都贏才收案）。
+    MVRV-Z **未改**：混合與取代版都沒有雙邊贏（見 tests/ladder_redesign_calib.py）。
+    sopr_hist=None 時自動退回純絕對階梯（向後相容）。
+    """
     if not etf_summary or etf_summary.get("n", 0) == 0:
         e_s, e_lbl, e_val = 0, "⚪ 無資料源", "—"
     else:
@@ -245,14 +360,22 @@ def _score_onchain_low(etf_summary, sopr, mvrv_z=None) -> dict:
         elif days >= 3: e_s, e_lbl = 2, "🟡 連續流入≥3日"
         else:           e_s, e_lbl = 0, "⚪ 無顯著流入"
 
+    s_pct = None
     if _nan(sopr):
         s_s, s_lbl, s_val = 0, "⚪ 無資料源", "—"
     else:
         s_val = f"{sopr:.3f}"
-        if   sopr <= 0.92: s_s, s_lbl = 4, f"🟢 深度割肉({sopr:.2f}) 投降"
-        elif sopr <= 0.95: s_s, s_lbl = 3, f"🟢 割肉({sopr:.2f})"
-        elif sopr <= 0.98: s_s, s_lbl = 2, f"🟡 微虧賣出({sopr:.2f})"
-        else:              s_s, s_lbl = 0, f"⚪ 中性/獲利({sopr:.2f})"
+        if   sopr <= 0.92: s_a, s_lbl = 4, f"🟢 深度割肉({sopr:.2f}) 投降"
+        elif sopr <= 0.95: s_a, s_lbl = 3, f"🟢 割肉({sopr:.2f})"
+        elif sopr <= 0.98: s_a, s_lbl = 2, f"🟡 微虧賣出({sopr:.2f})"
+        else:              s_a, s_lbl = 0, f"⚪ 中性/獲利({sopr:.2f})"
+        s_pct = pit_percentile(sopr_hist, sopr) if sopr_hist else None
+        s_p = percentile_score(s_pct, 4, high_is_extreme=False)
+        s_s = max(s_a, s_p)
+        if s_p > s_a and s_pct is not None:
+            s_lbl = f"🟡 本環境偏低({sopr:.2f}，{percentile_label(s_pct)})"
+        elif s_pct is not None:
+            s_lbl = f"{s_lbl} {percentile_label(s_pct)}"
 
     if _nan(mvrv_z):
         m_s, m_lbl, m_val = 0, "⚪ 無資料源", "—"
@@ -269,6 +392,7 @@ def _score_onchain_low(etf_summary, sopr, mvrv_z=None) -> dict:
         "label": f"ETF {e_lbl}；SOPR {s_lbl}；MVRV-Z {m_lbl}",
         "note": "SOPR(AUC 0.585)/MVRV-Z(AUC 0.732)已驗證；ETF 連續淨流入 2024+ 資料薄沿用專家權重",
         "sub": {"etf_consecutive_inflow": (etf_summary or {}).get("consecutive_inflow_days"),
+                "sopr_pct": s_pct,
                 "etf_score": e_s, "sopr": (None if _nan(sopr) else float(sopr)),
                 "sopr_score": s_s, "mvrv_z": (None if _nan(mvrv_z) else float(mvrv_z)),
                 "mvrv_z_score": m_s},
@@ -324,6 +448,9 @@ def compute_relative_low_score(
     btc_d_trend: Optional[dict] = None,
     macro: Optional[dict] = None,
     mvrv_z: Optional[float] = None,
+    funding_ann_hist=None,
+    fng_hist=None,
+    sopr_hist=None,
 ) -> Tuple[int, Dict[str, dict]]:
     """
     相對底部六維綜合評分（0–100）。鏡像 relative_high.compute_escape_top_score。
@@ -336,10 +463,10 @@ def compute_relative_low_score(
     """
     signals = {
         "cycle":       _score_cycle(row),
-        "derivatives": _score_derivatives_low(funding_8h, oi_stats),
+        "derivatives": _score_derivatives_low(funding_8h, oi_stats, funding_ann_hist),
         "technical":   _score_technical_low(row, df),
-        "sentiment":   _score_sentiment_low(fng, btc_d_trend),
-        "onchain":     _score_onchain_low(etf_summary, sopr, mvrv_z),
+        "sentiment":   _score_sentiment_low(fng, btc_d_trend, fng_hist),
+        "onchain":     _score_onchain_low(etf_summary, sopr, mvrv_z, sopr_hist),
         "macro":       _score_macro_low(macro),
     }
     score = int(sum(s["score"] for s in signals.values()))
@@ -348,14 +475,23 @@ def compute_relative_low_score(
 
 
 def relative_low_meta(score: int) -> Tuple[str, str, str]:
-    """(等級, 顏色, 操作建議) — 鏡像 escape_top_meta 的反向。"""
-    if score >= 75:
+    """
+    (等級, 顏色, 操作建議) — 鏡像 escape_top_meta 的反向。
+
+    2026-08-25 重校最高兩級（原 75／60）：實測 2542 日，抄底總分最高只到 65，
+    `>=75` 稀有度 **0.00%**、`>=60` 僅 0.20%；而**真實底部當天的中位分只有 26、最高 53**
+    ——最高兩級在真底也從沒到過，是死檔位。
+    新門檻錨在實際分布的 P99.5／P99（56／54 → 稀有度 0.67%／1.53%）；
+    下兩級（45／26）稀有度正常（10.15%／35.76%），僅 25→26 隨階梯重訂微調。
+    ⚠️ in-sample 校準，**只影響分級文案、不進任何交易條件**。
+    """
+    if score >= 56:
         return "🟢 強力抄底訊號", "#00cc88", "高度低估，分批進場／回補空單（需配合動態地板確認）"
-    if score >= 60:
+    if score >= 54:
         return "🟢 明確低估", "#00aa66", "可開始定投／減空"
     if score >= 45:
         return "🟡 偏冷觀察", "#ffcc00", "留意打底，勿純憑超賣搶反彈"
-    if score >= 25:
+    if score >= 26:
         return "⚪ 中性", "#9e9e9e", "正常持有"
     return "🔴 無底部訊號", "#ff4b4b", "無低估壓力，勿接刀"
 

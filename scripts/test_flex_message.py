@@ -71,7 +71,8 @@ def get_decision_data():
         latest_funding = 0.0
         if not funding_df.empty:
             latest_funding = funding_df['fundingRate'].iloc[-1]
-            f_is_hot = latest_funding >= 0.03 # 資金費率過熱標準 0.03%
+            from core.relative_high import FUNDING_HOT_8H   # 門檻收回 core 單一來源
+            f_is_hot = latest_funding >= FUNDING_HOT_8H
             summary["funding_text"] = f"{'🔴' if f_is_hot else '🟢'} {latest_funding:.4f}%"
             summary["funding_color"] = "#ff4b4b" if f_is_hot else "#00ff88"
 

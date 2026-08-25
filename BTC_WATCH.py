@@ -96,6 +96,8 @@ class BitcoinMonitor:
         self._sentinel_cache = None   # (gate, d3)：升槓桿窗口／熊底 D3，隨日線刷新
         self._fng_cache = None
         self._ext_cache = None     # ETF/SOPR/BTC.D/macro 外部維度（每小時隨日線刷新一次）
+        self._funding_hist = None  # 近 900 日年化資費（休眠天數用；分位視窗由 core 收斂）
+        self._metric_hist = {}     # SOPR / F&G 歷史（抄底 PiT 分位子項用）
         self._daily_ts = 0.0
 
     # ── 即時資料 ──────────────────────────────────────────────────────────────
@@ -238,9 +240,43 @@ class BitcoinMonitor:
                 self._sentinel_cache = None
             self._fng_cache = self.get_fng()
             self._ext_cache = self._gather_externals()
+            self._funding_hist = self._gather_funding_hist()
+            self._metric_hist = self._gather_metric_hist()
             self._daily_ts = now
         except Exception as e:
             print(f"日線刷新失敗：{e}")
+
+    def _gather_funding_hist(self):
+        """
+        近 400 日年化資費（抄底負費率子項的 PiT 滾動分位用；隨日線每小時刷新）。
+        best-effort：抓不到回 None → core 端自動退回純絕對階梯（行為同 2026-08 之前）。
+        僅 BTC：分位 cutoff 由 BTCUSDT 資費史校準，其他幣對不套用。
+        """
+        if not self.is_btc:
+            return None
+        try:
+            from service.funding_history import funding_ann_hist
+            # 900 日而非分位所需的 180：休眠天數要數得回 2024-12-10 那次越基準（623 日前），
+            # 視窗太短會把「近 N 日未越基準」報成視窗長度本身、低估休眠時間。
+            hist = funding_ann_hist(window=900, symbol=self.symbol)
+            return hist or None
+        except Exception as e:
+            print(f"資費歷史取得失敗：{e}")
+            return None
+
+    def _gather_metric_hist(self):
+        """SOPR / F&G 歷史（抄底 RSI 以外的兩個 PiT 分位子項用；隨日線每小時刷新）。
+        best-effort：取不到回空 dict → core 端自動退回純絕對階梯。"""
+        if not self.is_btc:
+            return {}
+        out = {}
+        try:
+            from service.metric_history import sopr_hist, fng_hist
+            out['sopr'] = sopr_hist() or None
+            out['fng'] = fng_hist() or None
+        except Exception as e:
+            print(f'指標歷史取得失敗：{e}')
+        return out
 
     def _gather_externals(self):
         """
@@ -348,8 +384,10 @@ class BitcoinMonitor:
         else:
             # 距低點天數用**日曆天**（與 LINE 哨兵同基準）——K 棒位移會在日線缺日時分歧
             lo_naive = idx_naive[lo_pos].to_pydatetime().replace(tzinfo=None)
+            # cycle_ath 必傳：沒有它就等於少掉 c3「仍在熊市」閘門（2026-08-25 新增）
             d3 = d3_status(float(closes[-1]), lo_val,
-                           str(idx_naive[lo_pos])[:10], (now - lo_naive).days)
+                           str(idx_naive[lo_pos])[:10], (now - lo_naive).days,
+                           cycle_ath=float(cycle_ath))
         self._sentinel_cache = (
             gate_status(float(ahr), dath,
                         LEVERAGE_AHR999_MAX, LEVERAGE_MIN_DAYS_FROM_ATH),
@@ -365,6 +403,33 @@ class BitcoinMonitor:
         gate, d3 = self._sentinel_cache
         return compact_rows(gate, d3, price,
                             LEVERAGE_AHR999_MAX, LEVERAGE_MIN_DAYS_FROM_ATH)
+
+    def _sentinel_board_rows(self, top_score=None):
+        """
+        七個 LINE 哨兵的總覽（2026-08-25 新增）。
+
+        為什麼要有：哨兵的狀態原本只存在「推播那一刻」，畫面上看不到哪些已響過、
+        哪些還在待命、離觸發多遠 —— 而本輪稽核發現逃頂警報的三級門檻（85/75/60）
+        全部在實測上限 55 之上、**從來沒響過也不可能響**，這種事只有攤在畫面上才會被發現。
+        純顯示：只讀 escape_alert_state.json，不寫、不推播。
+        """
+        if not _COW_OK or not self.is_btc:
+            return []
+        try:
+            from core.sentinel_board import sentinel_rows
+            gate = d3 = None
+            if self._sentinel_cache:
+                gate, d3 = self._sentinel_cache
+            rsi = rsi_max = None
+            df = self._daily_cache
+            if df is not None and "RSI_14" in df.columns and len(df) >= 90:
+                rsi = float(df["RSI_14"].iloc[-1])
+                rsi_max = float(df["RSI_14"].tail(90).max())
+            rows = sentinel_rows(top_score=top_score, gate=gate, d3=d3,
+                                 rsi14=rsi, rsi_max_90d=rsi_max)
+            return ["", "  ── LINE 哨兵總覽（只顯示，不推播）──"] + ["  " + r for r in rows]
+        except Exception as e:
+            return ["", f"  哨兵總覽取得失敗：{e}"]
 
     # ── 畫面 ────────────────────────────────────────────────────────────────────
     def render(self, md, funding, oi_stats, top, low, trend=None, mom=None):
@@ -428,6 +493,7 @@ class BitcoinMonitor:
         # 不另開面板：兩欄面板已把 W 撐到 >=102，而本區各行僅約 50-58 寬，
         # 右側有約 44 字元的閒置橫向空間，放這裡不會撐寬版面、不增加垂直高度。
         quote += self._sentinel_rows(md["close"])
+        quote += self._sentinel_board_rows(top[0] if top else None)
 
         _, top_rows = _panel(top, escape_top_meta, self.TOP_CAP, "逃頂訊號（出貨）",
                              ("derivatives", "technical", "onchain", "sentiment", "macro"))
@@ -523,16 +589,30 @@ class BitcoinMonitor:
                 df = self._daily_cache
                 if df is not None and not df.empty:
                     row = df.iloc[-1]
+                    # 顯示用 funding＝即時單筆；**計分改吃日均**（與校準同口徑，
+                    # 見 service.funding_history.funding_8h_daily_mean 的說明）。
                     funding_8h = funding   # 已是 %（×100 過）
+                    if self.is_btc:
+                        try:
+                            from service.funding_history import funding_8h_daily_mean
+                            _dm = funding_8h_daily_mean()
+                            if _dm is not None:
+                                funding_8h = _dm
+                        except Exception:
+                            pass
                     ext = self._ext_cache or {}
                     top = compute_escape_top_score(
                         row, df, funding_8h=funding_8h, oi_stats=oi_stats, fng=self._fng_cache,
                         etf_summary=ext.get("etf"), sopr=ext.get("sopr"),
-                        btc_d_trend=ext.get("btcd"), macro=ext.get("macro"), mvrv_z=ext.get("mvrv_z"))
+                        btc_d_trend=ext.get("btcd"), macro=ext.get("macro"), mvrv_z=ext.get("mvrv_z"),
+                        funding_ann_hist=self._funding_hist)
                     low = compute_relative_low_score(
                         row, df, funding_8h=funding_8h, oi_stats=oi_stats, fng=self._fng_cache,
                         etf_summary=ext.get("etf"), sopr=ext.get("sopr"),
-                        btc_d_trend=ext.get("btcd"), macro=ext.get("macro"), mvrv_z=ext.get("mvrv_z"))
+                        btc_d_trend=ext.get("btcd"), macro=ext.get("macro"), mvrv_z=ext.get("mvrv_z"),
+                        funding_ann_hist=self._funding_hist,
+                        sopr_hist=(self._metric_hist or {}).get('sopr'),
+                        fng_hist=(self._metric_hist or {}).get('fng'))
                     trend = compute_trend_score(row, df)
                     mom = _short_momentum(df)
                 self.render(md, funding, oi_stats, top, low, trend, mom)

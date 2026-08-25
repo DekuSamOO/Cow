@@ -39,6 +39,23 @@ from core.season_forecast import forecast_price, get_current_season
 FUNDING_ANN_YELLOW = 30.0    # 年化 % — 過熱起點（回撤轉折；黃）
 FUNDING_ANN_RED    = 50.0    # 年化 % — 極端/滿分（回撤飽和；紅）
 
+# 幣安永續的「利率成分」基準：premiumIndex.interestRate（2026-08-25 實查 BTCUSDT = 0.0001）。
+# 溢價 ≈ 0 時資費就等於它 → 0.01%/8h 是**基準值不是上限**（上限 fundingInfo.adjustedFundingRateCap
+# = 0.3%/8h）。年化 10.95% 落在下方階梯的「⚪ 中性」桶（未達偏多線 12%），語義正確、勿改。
+FUNDING_BASELINE_8H  = 0.01                        # %/8h
+FUNDING_ANN_BASELINE = FUNDING_BASELINE_8H * 3 * 365   # 年化 % ≈ 10.95
+# 顯示層過熱線（app.py / handler 原本各自硬編 0.03，與本檔常數漂移 → 2026-08-25 收回單一來源）
+FUNDING_HOT_8H = FUNDING_ANN_YELLOW / (3 * 365)    # ≈ 0.0274 %/8h
+
+# 2026-08-25 資費維「休眠」現象（見 tests/funding_percentile_calib.py）：
+# 幣安 BTCUSDT 日均年化最後一次越過基準是 2024-12-09 → 休眠自 2024-12-10 起算，
+# 至 2026-08-25 為 624 日（與 funding_dormant_days 的輸出一致；勿再寫 623）。
+# 本維因此連續 624 日給 0 分。**這不是失效，是它正確回報「沒有槓桿泡沫」**——
+# 曾評估改用 PiT 滾動分位（相對過熱）取代絕對階梯，train 0.706→0.618、holdout 0.580→0.492、
+# 新環境內部 0.457/0.393，三處全輸 → **否決，逃頂側維持絕對階梯**。
+# 只補「休眠」標示讓面板說出這件事，不動分數。**勿再把逃頂側改成相對分位。**
+FUNDING_DORMANT_DAYS = 180   # 視窗內都沒越過基準 → 標示休眠（僅影響 label，不影響 score）
+
 # Layer A 五維權重（各維最高分；理論總和 106，compute_escape_top_score clamp 到 100）
 WEIGHTS = {
     "derivatives": 30,   # 一、合約過熱（資金費率 20 + OI 10）
@@ -77,9 +94,32 @@ def _nan(v) -> bool:
 # Layer A — 五維子評分
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _score_derivatives(funding_8h, oi_stats) -> dict:
-    """合約過熱（max 30）= 資金費率年化(20) + OI 相對高(10)。"""
+def funding_dormant_days(hist) -> Optional[int]:
+    """
+    「距今幾日未越過利率基準」（hist 為已截到當日的年化資費序列，PiT）。
+    回傳 None＝無歷史；回傳 n＝最近 n 日都沒越過基準（n 到視窗長度為止，非全史）。
+    純標示用，不參與計分。
+    """
+    if not hist:
+        return None
+    vals = [v for v in hist if not _nan(v)]
+    if not vals:
+        return None
+    for i, v in enumerate(reversed(vals)):
+        if float(v) > FUNDING_ANN_BASELINE + 1e-9:
+            return i
+    return len(vals)
+
+
+def _score_derivatives(funding_8h, oi_stats, funding_ann_hist=None) -> dict:
+    """
+    合約過熱（max 30）= 資金費率年化(20) + OI 相對高(10)。
+
+    funding_ann_hist：選填，**只用來標示「資費維休眠」**（見 FUNDING_DORMANT_DAYS 上方紀錄），
+    不影響任何分數。逃頂側維持絕對階梯——改相對分位已在 2026-08-25 校準中三處全輸並否決。
+    """
     ann = annualize_funding(funding_8h)
+    dormant = funding_dormant_days(funding_ann_hist)
     # 資金費率年化（max 20）
     if ann is None:
         f_s, f_lbl, f_val = 0, "⚪ 無資料", "—"
@@ -93,6 +133,10 @@ def _score_derivatives(funding_8h, oi_stats) -> dict:
         elif ann >= 12:                 f_s, f_lbl = 2,  "⚪ 偏多 (≥12%)"
         elif ann >= 0:                  f_s, f_lbl = 0,  "⚪ 中性"
         else:                           f_s, f_lbl = 0,  "🟢 空方付費 (負費率)"
+
+        # 休眠標示：讓面板說出「這 0 分是『沒有泡沫』，不是指標壞掉」
+        if dormant is not None and dormant >= FUNDING_DORMANT_DAYS and f_s == 0:
+            f_lbl += f"（本維休眠：近 {dormant} 日未越基準 {FUNDING_BASELINE_8H}%/8h＝無槓桿泡沫）"
 
     # OI 相對高（max 10）— 依自建快照歷史分位（不足則 0 + 累積中）
     if not oi_stats or oi_stats.get("percentile") is None:
@@ -120,6 +164,7 @@ def _score_derivatives(funding_8h, oi_stats) -> dict:
         "label": f"資費 {f_lbl}；OI {o_lbl}{syn_lbl}",
         "note": "資金費率年化 + OI 分位；OI×Funding 假頂折減（NOT VERIFIED，AUC 待回測）",
         "sub": {"funding_ann": ann, "funding_score": f_s, "funding_score_eff": f_s_eff,
+                "funding_dormant_days": dormant,
                 "oi_percentile": oi_pct, "oi_score": o_s, "synergy_discount": synergy},
     }
 
@@ -283,6 +328,7 @@ def compute_escape_top_score(
     btc_d_trend: Optional[dict] = None,
     macro: Optional[dict] = None,
     mvrv_z: Optional[float] = None,
+    funding_ann_hist=None,
 ) -> Tuple[int, Dict[str, dict]]:
     """
     Layer A 逃頂綜合評分（0–100）。鏡像 bear_bottom.calculate_bear_bottom_score。
@@ -294,7 +340,7 @@ def compute_escape_top_score(
     mvrv_z：2026-07 已驗證計入 onchain 子分（見 WEIGHTS 上方註解），不再是純參考。
     """
     signals = {
-        "derivatives": _score_derivatives(funding_8h, oi_stats),
+        "derivatives": _score_derivatives(funding_8h, oi_stats, funding_ann_hist),
         "technical":   _score_technical(row, df),
         "onchain":     _score_onchain(etf_summary, sopr, mvrv_z),
         "sentiment":   _score_sentiment(fng, btc_d_trend),
@@ -306,10 +352,20 @@ def compute_escape_top_score(
 
 
 def escape_top_meta(score: int) -> Tuple[str, str, str]:
-    """(等級, 顏色, 操作建議) — 鏡像 _bear_score_meta 的反向。"""
-    if score >= 75:
+    """
+    (等級, 顏色, 操作建議) — 鏡像 _bear_score_meta 的反向。
+
+    2026-08-25 重校最高兩級（原 75／60）：實測 2019-09~2026-08 共 2542 日，
+    逃頂總分**最高只到 55**，`>=75` 與 `>=60` 的歷史稀有度都是 **0.00%**
+    ——雷達結構上永遠說不出「強烈逃頂訊號」與「明確過熱」，等於兩個死檔位
+    （與資費階梯、冪律子項同型的問題，見 tests/radar_subitem_audit.py）。
+    新門檻錨在**實際分布**的 P99.5／P99（51／49 → 稀有度 0.55%／1.18%）；
+    下兩級（45／25）稀有度本來就正常（2.05%／14.59%），不動。
+    ⚠️ 這是用全期分布回頭校門檻（in-sample），**只影響分級文案、不進任何交易條件**。
+    """
+    if score >= 51:
         return "🔴 強烈逃頂訊號", "#ff4b4b", "高度過熱，分批止盈／考慮對沖空單"
-    if score >= 60:
+    if score >= 49:
         return "🟠 明確過熱", "#ff8800", "減倉、收緊移動止盈"
     if score >= 45:
         return "🟡 偏熱警戒", "#ffcc00", "停止加倉、提高警覺"
@@ -410,6 +466,7 @@ def compute_relative_high(
     btc_d_trend: Optional[dict] = None,
     macro: Optional[dict] = None,
     mvrv_z: Optional[float] = None,
+    funding_ann_hist=None,
 ) -> dict:
     """
     相對高點完整評估（Layer A + Layer B + 價位錨）。
@@ -419,7 +476,8 @@ def compute_relative_high(
     """
     score, signals = compute_escape_top_score(
         row, df, funding_8h=funding_8h, oi_stats=oi_stats, etf_summary=etf_summary,
-        sopr=sopr, fng=fng, btc_d_trend=btc_d_trend, macro=macro, mvrv_z=mvrv_z)
+        sopr=sopr, fng=fng, btc_d_trend=btc_d_trend, macro=macro, mvrv_z=mvrv_z,
+        funding_ann_hist=funding_ann_hist)
     level, color, action = escape_top_meta(score)
     return {
         "escape_score":   score,

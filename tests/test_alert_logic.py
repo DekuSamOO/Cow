@@ -26,12 +26,21 @@ def notify():
 
 
 def test_escape_alert_tier_mapping():
-    assert escape_alert_tier(59) == (0, None)
-    assert escape_alert_tier(60) == (60, "預警")
-    assert escape_alert_tier(74) == (60, "預警")
-    assert escape_alert_tier(75) == (75, "警報")
-    assert escape_alert_tier(85) == (85, "危急")
-    assert escape_alert_tier(100) == (85, "危急")
+    """
+    分級對應 — **從 config 推導、不寫死數字**。
+    2026-08-25 門檻由 85/75/60 改成 51/49/45（原三級都在實測上限 55 之上＝永遠不觸發），
+    這批測試當時整批紅燈就是因為寫死了舊值；改成推導後，門檻再調也不會誤報失敗。
+    """
+    from config import ESCAPE_ALERT_TIERS
+    tiers = sorted(ESCAPE_ALERT_TIERS)          # 由低到高
+    lowest, low_name = tiers[0]
+    assert escape_alert_tier(lowest - 1) == (0, None)
+    for floor, name in tiers:
+        assert escape_alert_tier(floor) == (floor, name)
+    top_floor, top_name = tiers[-1]
+    assert escape_alert_tier(top_floor + 50) == (top_floor, top_name)
+    # 每一級都必須落在歷史實測上限（55 分）之內，否則就是永遠觸發不了的死檔位
+    assert top_floor <= 55
 
 
 @pytest.fixture
@@ -59,11 +68,13 @@ def test_escape_alert_below_threshold_no_push(notify, patched_state):
 
 
 def test_escape_alert_first_cross_pushes(notify, patched_state):
+    from config import ESCAPE_ALERT_TIERS
+    lowest = min(f for f, _ in ESCAPE_ALERT_TIERS)
     state_file, sent = patched_state
-    notify.maybe_send_escape_alert(_data(62))
+    notify.maybe_send_escape_alert(_data(lowest))
     assert len(sent) == 1
     st = json.loads(state_file.read_text())
-    assert st["last_escape_score"] == 62 and st["last_escape_tier"] == 60
+    assert st["last_escape_score"] == lowest and st["last_escape_tier"] == lowest
 
 
 def test_escape_alert_same_day_dedupe(notify, patched_state):
@@ -74,18 +85,26 @@ def test_escape_alert_same_day_dedupe(notify, patched_state):
 
 
 def test_escape_alert_cross_day_needs_delta_or_upgrade(notify, patched_state):
+    """跨日同級：需 >= REPUSH_DELTA 才再推；升級則無論差值都推。門檻與 delta 皆由 config 推導。"""
+    from config import ESCAPE_ALERT_TIERS, ESCAPE_ALERT_REPUSH_DELTA as DELTA
+    tiers = sorted(ESCAPE_ALERT_TIERS)
+    low, mid = tiers[0][0], tiers[1][0]
+    # delta 必須 <= 最小級距間隔，否則「同級再推」永遠用不到（死規則）
+    gaps = [b[0] - a[0] for a, b in zip(tiers, tiers[1:])]
+    assert DELTA <= min(gaps), f"REPUSH_DELTA={DELTA} 大於最小級距間隔 {min(gaps)}"
+
     state_file, sent = patched_state
-    # 模擬「昨日已以 62 分推播過」
     state_file.write_text(json.dumps(
-        {"last_escape_date": "2020-01-01", "last_escape_score": 62, "last_escape_tier": 60}))
-    notify.maybe_send_escape_alert(_data(64))  # +2 < 5 且未升級 → 不推
+        {"last_escape_date": "2020-01-01", "last_escape_score": low, "last_escape_tier": low}))
+    notify.maybe_send_escape_alert(_data(low + DELTA - 1))     # 差值不足且未升級 → 不推
     assert len(sent) == 0
-    notify.maybe_send_escape_alert(_data(67))  # +5 → 推
+    notify.maybe_send_escape_alert(_data(low + DELTA))         # 達 delta → 推
     assert len(sent) == 1
-    # 再模擬昨日 74 分 → 今日 76 雖只 +2 但升級「警報」→ 推
+    # 同級內差值不足、但升級 → 仍要推
     state_file.write_text(json.dumps(
-        {"last_escape_date": "2020-01-01", "last_escape_score": 74, "last_escape_tier": 60}))
-    notify.maybe_send_escape_alert(_data(76))
+        {"last_escape_date": "2020-01-01", "last_escape_score": mid - 1,
+         "last_escape_tier": low}))
+    notify.maybe_send_escape_alert(_data(mid))
     assert len(sent) == 2
 
 
