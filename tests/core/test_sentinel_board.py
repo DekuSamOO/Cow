@@ -88,3 +88,40 @@ def test_hedge_constants_match_appendix():
     assert [thr for _, thr, _ in HEDGE_BATCHES] == [65, 55, 50]
     assert round(sum(q for _, _, q in HEDGE_BATCHES), 4) == 0.1285
     assert HEDGE_G3_PEAK == 75
+
+
+# ── 版面約束（2026-08-25）──────────────────────────────────────────────────────
+# 教訓：完整版 10 列加進 BTC 儀表板時只驗了內容、沒驗版面。實測儀表板**改動前就已 51 列**，
+# 加完變 61 列；橫向沒撐開純屬運氣（兩欄區把 W 壓在 102，哨兵最寬才 62）。
+def test_compact_view_is_two_lines():
+    """儀表板用的壓縮版必須恰好兩行——垂直空間是這個畫面最稀缺的資源。"""
+    from core.sentinel_board import sentinel_compact
+    rows = sentinel_compact(top_score=14,
+                            gate={"ok": False, "g1": False, "g2": True, "ahr": 0.5, "dath": 323},
+                            d3={"ok": False, "c1": False, "c2": False, "c3": True,
+                                "rebound": 0.35, "days": 56},
+                            rsi14=81.8, rsi_max_90d=85.9, state={})
+    assert len(rows) == 2, f"壓縮版必須兩行，實際 {len(rows)} 行"
+
+
+def test_compact_view_fits_panel_width():
+    """
+    寬度不得超過兩欄版的版面下限（2*_MIN_COL_W+2），否則會把整個儀表板撐寬
+    —— render 的 w_full 直接吃 quote 區每一行（BTC_WATCH.py 的 `w_full = max(...)`）。
+    """
+    from core.sentinel_board import sentinel_compact
+    from core.term_ui import _dw, _MIN_COL_W
+    limit = 2 * _MIN_COL_W + 2
+    for state in ({}, {"last_action_label": "分批止盈／考慮對沖空單", "hedge_batch_1": True}):
+        rows = sentinel_compact(top_score=55,
+                                gate={"ok": True, "g1": True, "g2": True, "ahr": 0.39, "dath": 400},
+                                d3={"ok": True, "c1": True, "c2": True, "c3": True,
+                                    "rebound": 1.08, "days": 120},
+                                rsi14=49.0, rsi_max_90d=86.0, state=state)
+        for r in rows:
+            assert _dw(r) <= limit, f"寬 {_dw(r)} > 版面下限 {limit}：{r}"
+
+
+def test_full_view_still_seven_rows_for_entry_screen():
+    """watcher 進場畫面仍用完整版（該頁沒有東西跟它搶垂直空間）。"""
+    assert len(sentinel_rows(state={})) == 7

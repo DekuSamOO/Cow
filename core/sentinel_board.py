@@ -190,3 +190,65 @@ def sentinel_rows(top_score: Optional[int] = None,
         except Exception:
             rows.append("   （推播狀態來自 GH Actions artifact 快取）")
     return rows
+
+
+def sentinel_compact(top_score=None, gate=None, d3=None,
+                     rsi14=None, rsi_max_90d=None,
+                     state: Optional[dict] = None, allow_remote: bool = False) -> list:
+    """
+    兩行橫向摘要版（給垂直空間吃緊的 BTC 儀表板用）。
+
+    為什麼要有：完整版 7 列 + 標題 + 來源 = 10 列，而儀表板**改動前就已經 51 列**、
+    本來就超過一般終端機高度；再加 10 列等於把表頭與即時行情推出畫面
+    （2026-08-25 實測 51 → 61 列）。橫向沒撐開是因為兩欄區把 W 壓在 102 欄、
+    哨兵最寬才 62 —— 那是運氣不是設計，所以這裡也一併把寬度壓在 102 以內。
+    完整版留給 watcher 進場畫面（那頁沒有東西跟它搶垂直空間）。
+    """
+    if state is None:
+        st, source = load_state(allow_remote=allow_remote)
+    else:
+        st, source = state, "local"
+    unavailable = (source == "unavailable")
+
+    def tick(ok):
+        return "✅" if ok else "✕"
+
+    # 第一行：四個「會觸發動作」的哨兵當下條件
+    try:
+        from config import ESCAPE_ALERT_TIERS
+        floor = min(f for f, _ in ESCAPE_ALERT_TIERS)
+    except Exception:
+        floor = None
+    esc = f"逃頂 {top_score}/{floor}{tick(top_score >= floor)}"         if (top_score is not None and floor is not None) else "逃頂 —"
+    win = f"窗口 {tick(gate.get('ok'))}" if gate and gate.get("ok") is not None else "窗口 —"
+    if d3 and d3.get("ok") is not None:
+        bear = "" if d3.get("c3", True) else "⚠近ATH"
+        d3s = f"D3 {tick(d3.get('ok'))}({d3.get('rebound', 0) * 100:+.0f}%/{d3.get('days', 0)}天){bear}"
+    else:
+        d3s = "D3 —"
+    done = sum(1 for n, _, _ in HEDGE_BATCHES if st.get(f"hedge_batch_{n}"))
+    if rsi14 is not None and rsi_max_90d is not None:
+        nxt = next((thr for n, thr, _ in HEDGE_BATCHES
+                    if not st.get(f"hedge_batch_{n}") and rsi14 >= thr), None)
+        armed = "" if rsi_max_90d > HEDGE_G3_PEAK else "G3✕"
+        hedge = f"套保 {'?' if unavailable else done}/3{armed}" + (f"(下批RSI<{nxt})" if nxt else "")
+    else:
+        hedge = f"套保 {'?' if unavailable else done}/3"
+
+    # 第二行：純狀態類（不會有即時條件）+ 狀態來源
+    if unavailable:
+        line2 = "狀態讀不到（在 GH Actions artifact）→ 已推/已建不可信"
+    else:
+        act = st.get("last_action_label") or "—"
+        wk = (st.get("last_weekly_date") or "—")[5:]
+        mart = "已推" if st.get("last_mart_restart_key") else "—"
+        src = ""
+        if source == "remote":
+            try:
+                src = f"｜狀態源 artifact {(time.time() - os.path.getmtime(REMOTE_CACHE)) / 3600:.1f}h 前"
+            except Exception:
+                src = "｜狀態源 artifact"
+        line2 = f"行動 {act}｜週報 {wk}｜馬丁 {mart}{src}"
+
+    return [f"  LINE 哨兵      {esc}  {win}  {d3s}  {hedge}",
+            f"  哨兵狀態      {line2}"]
