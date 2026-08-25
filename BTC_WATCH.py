@@ -313,6 +313,8 @@ class BitcoinMonitor:
         if not self.is_btc:
             return
         from core.leverage_window import gate_status, d3_status, find_bear_low
+        from core.season_forecast import (analyze_market_state, HALVING_DATES,
+                                          _utcnow_naive)
         from config import LEVERAGE_AHR999_MAX, LEVERAGE_MIN_DAYS_FROM_ATH
         df = self._daily_cache
         if df is None or len(df) < 200 or "AHR999" not in df.columns:
@@ -320,19 +322,36 @@ class BitcoinMonitor:
         ahr = df["AHR999"].iloc[-1]
         if ahr is None or (isinstance(ahr, float) and math.isnan(ahr)):
             return
-        hi = df["high"] if "high" in df.columns else df["close"]
-        ath_pos = int(hi.values.argmax())
         closes = df["close"].values
+        # ATH 一律取 season_forecast 的 cycle_ath（**減半後最高收盤**），與 LINE 哨兵同源。
+        # 2026-08-25 統一：本檔原本用 df["high"].argmax()（全表滾動、high 欄），
+        # 與哨兵的 cycle_ath 是兩套定義，實測 D3 已漂到差 2 天 / 2.2pp。
+        # cycle_ath 是既有的週期正本（forecast_price 也吃它），故以它為準。
+        # 用 season_forecast 自己的 naive-UTC helper：HALVING_DATES 全程以 naive 比較，
+        # 且它已取代 Python 3.12 棄用的 datetime.utcnow()
+        now = _utcnow_naive()
+        past = [h for h in HALVING_DATES if h <= now]
+        ms = analyze_market_state(float(closes[-1]), df,
+                                  past[-1] if past else HALVING_DATES[0])
+        cycle_ath = ms.get("cycle_ath")
+        ath_dt = ms.get("cycle_ath_date")
+        if not cycle_ath or ath_dt is None:
+            return
+        ath_naive = ath_dt.replace(tzinfo=None)
+        dath = (now - ath_naive).days
+        idx_naive = df.index.tz_localize(None) if df.index.tz is not None else df.index
+        ath_pos = int(idx_naive.searchsorted(ath_naive))
         # 低點門檻（自 ATH 跌逾 30%）由 core.leverage_window 統一，勿在此重寫
-        lo_val, lo_pos = find_bear_low(closes, float(hi.iloc[ath_pos]), ath_pos)
+        lo_val, lo_pos = find_bear_low(closes, float(cycle_ath), ath_pos)
         if lo_val is None:
             d3 = {"ok": None}
         else:
-            # 距低點天數以 K 棒位移計（此處手上就是完整日線快取）
+            # 距低點天數用**日曆天**（與 LINE 哨兵同基準）——K 棒位移會在日線缺日時分歧
+            lo_naive = idx_naive[lo_pos].to_pydatetime().replace(tzinfo=None)
             d3 = d3_status(float(closes[-1]), lo_val,
-                           str(df.index[lo_pos])[:10], len(df) - 1 - lo_pos)
+                           str(idx_naive[lo_pos])[:10], (now - lo_naive).days)
         self._sentinel_cache = (
-            gate_status(float(ahr), len(df) - 1 - ath_pos,
+            gate_status(float(ahr), dath,
                         LEVERAGE_AHR999_MAX, LEVERAGE_MIN_DAYS_FROM_ATH),
             d3,
         )
