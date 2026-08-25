@@ -71,7 +71,11 @@ jobs:
       with:
         name: escape-alert-state
         path: escape_alert_state.json
-        retention-days: 2
+        # 2026-08-25：原為 2 天。狀態靠「從最近一個成功 run 下載 artifact」鏈接，
+        # 連續 2 天沒有成功 run，artifact 就過期 → d3_confirmed / hedge_batch_* 這種
+        # 「只推一次」的旗標會被清空並重複推播。拉到 90 天讓這件事實務上不可能發生
+        # （需連續 90 天排程全失敗，而那時早就發現沒收到推播了）。
+        retention-days: 90
       continue-on-error: true
 
     # 任一步驟失敗時推 LINE 文字告警，避免排程靜默失敗無人知
