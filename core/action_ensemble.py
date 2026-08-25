@@ -43,10 +43,18 @@ TREND_STRONG_BULL = 50   # trend_net ≥ 此值 → 強多頭（trend_meta）
 TREND_BULL = 20      # trend_net ≥ 此值 → 多頭
 TREND_BEAR = -20     # trend_net ≤ 此值 → 空頭
 TREND_STRONG_BEAR = -50  # trend_net ≤ 此值 → 強空頭（trend_meta）
-ESCAPE_HOT = 60      # 逃頂明確過熱（= LINE 警報門檻）
-ESCAPE_WARM = 45     # 逃頂偏熱
-LOW_STRONG = 75      # 強力抄底
-LOW_VALUE = 60       # 明確低估
+# 2026-08-25：原本硬編 ESCAPE_HOT=60 / LOW_STRONG=75 / LOW_VALUE=60，註解宣稱「與 meta
+# 分級邊界對齊」但實際早已漂移 —— 而逃頂實測上限只有 55、抄底 65，
+# 那三個值**永遠走不到**，等於 TAKE_PROFIT / REDUCE / BOTTOM_FISH 三個分支是死的。
+# 這支的輸出是行動短語＋建議倉位，被 dashboard 與 LINE 推播消費，比分級文案嚴重得多。
+# → 改成直接 import meta 的具名常數，**不要再抄一份數字**（抄一份就會再漂移一次）。
+from core.relative_high import TOP_LEVEL_HOT, TOP_LEVEL_WARM       # noqa: E402
+from core.relative_low import LOW_LEVEL_STRONG, LOW_LEVEL_VALUE    # noqa: E402
+
+ESCAPE_HOT = TOP_LEVEL_HOT     # 逃頂明確過熱
+ESCAPE_WARM = TOP_LEVEL_WARM   # 逃頂偏熱
+LOW_STRONG = LOW_LEVEL_STRONG  # 強力抄底
+LOW_VALUE = LOW_LEVEL_VALUE    # 明確低估
 # 抄底 cycle 維度（長週期深跌，max 25，AUC 0.662）≥22 ≈ 跌破2年均×0.8「且」跌破200週均。
 # 2 年回測歸納（scripts/backtest_composite.py）：≥18 太鬆會在 $79k 誤判低估；≥22 才對應真歷史
 # 底部區（其後30d 平均 +15.4%）。即時版 low 常因 OI/ETF/SOPR 缺項被拉低，故以 cycle 直判補強。

@@ -77,10 +77,11 @@ def sentinel_rows(top_score: Optional[int] = None,
     rows.append("3 馬丁重啟    " + (f"上次 {mk}" if mk else "尚無紀錄"))
 
     # 4 升槓桿窗口
-    if gate and gate.get("ok") is not None:
+    if gate and gate.get("ok") is not None and gate.get("ahr") is not None:
         g1 = "✅" if gate.get("g1") else "✕"
         g2 = "✅" if gate.get("g2") else "✕"
-        rows.append(f"4 升槓桿窗口  AHR999 {gate.get('ahr'):.3f}{g1}  距ATH {gate.get('dath')}天{g2}"
+        # ahr/dath 缺值時走下面的「—」分支：不可在 f-string 直接格式化 None（獨立檢核 🟡 No.10）
+        rows.append(f"4 升槓桿窗口  AHR999 {float(gate['ahr']):.3f}{g1}  距ATH {gate.get('dath')}天{g2}"
                     + ("  🟢 開窗中" if gate.get("ok") else "  ⚪ 未開"))
     else:
         rows.append("4 升槓桿窗口  —")

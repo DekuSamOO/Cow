@@ -64,6 +64,13 @@ FUNDING_PCT_MIN_OBS = 90      # 視窗內最少樣本，不足則不輸出分位
 # 五檔全部由 train 稀有度換算（僅供未來重議時參考，目前不計分）：
 FUNDING_PCT_LOW_CUTS = (1.0, 3.3, 5.5, 9.3, 13.0)   # → 10 / 8 / 6 / 3 / 1 分
 
+# ── 抄底分級門檻（具名常數；2026-08-25 重校）──────────────────────────────────
+# 抽成常數的理由同 relative_high 的 TOP_LEVEL_*：杜絕別處再抄一份數字然後靜默漂移。
+LOW_LEVEL_STRONG  = 56   # 🟢 強力抄底訊號（實際分布 P99.5）
+LOW_LEVEL_VALUE   = 54   # 🟢 明確低估（P99）
+LOW_LEVEL_COOL    = 45   # 🟡 偏冷觀察
+LOW_LEVEL_NEUTRAL = 26   # ⚪ 中性
+
 # 六維權重（各維最高分；理論總和 106，compute_relative_low_score clamp 到 100）
 # — 經 relative_low_backtest 拍板（實證導向）
 WEIGHTS_LOW = {
@@ -170,28 +177,12 @@ def _score_cycle(row) -> dict:
 def funding_pit_percentile(hist, current=None, min_obs: int = FUNDING_PCT_MIN_OBS,
                            window: int = FUNDING_PCT_WINDOW):
     """
-    今日年化資費在「過去 window 日」中的分位（0–100，midrank 處理同值）。
+    資費分位（目前只作為 sub["funding_pct"] 觀測值，**不計分**）。
 
-    hist：**已截到評分當日為止**的年化資費序列（不含未來 → PiT）。呼叫端負責切「不含未來」，
-          **本函式負責切「只看最近 window 日」**——2026-08-25 獨立檢核抓到：呼叫端為了讓
-          休眠天數數得回 624 日前而餵 900 日，同一份 list 被拿去算分位 → 生產實跑 900 日
-          分位、不是校準拍板的 180 日（623 日中 137 日分數不同、最大差 5 分）。
-          視窗一律在這裡收斂，杜絕「餵幾筆就算幾筆」。
-    current：今日值；None 時取 hist[-1]。視窗內樣本不足 min_obs 回 None（不給分位分）。
-
-    純函數、零網路：歷史由 service/funding_history.funding_ann_hist() 提供。
+    2026-08-25 獨立檢核 🟠 No.5：本函式原本是 core/pit_ladder.pit_percentile 的
+    逐行複製，與「單一真實來源」的宣稱相左 → 改為委派，只保留資費專屬的預設參數。
     """
-    if hist is None:
-        return None
-    vals = [float(v) for v in hist if not _nan(v)]
-    if window and window > 0:
-        vals = vals[-window:]
-    if len(vals) < min_obs:
-        return None
-    x = float(vals[-1]) if current is None or _nan(current) else float(current)
-    below = sum(1 for v in vals if v < x)
-    equal = sum(1 for v in vals if v == x)
-    return (below + 0.5 * equal) / len(vals) * 100
+    return pit_percentile(hist, current, min_obs=min_obs, window=window)
 
 
 def _score_derivatives_low(funding_8h, oi_stats, funding_ann_hist=None) -> dict:
@@ -247,7 +238,7 @@ def _score_derivatives_low(funding_8h, oi_stats, funding_ann_hist=None) -> dict:
     }
 
 
-def _score_technical_low(row, df) -> dict:
+def _score_technical_low(row, df, rsi_pct_enabled: bool = True) -> dict:
     """
     技術回穩（max 20）= 底背離 RSI+MACD(14) + RSI_14 超賣(6)。
 
@@ -273,7 +264,9 @@ def _score_technical_low(row, df) -> dict:
         elif rsi <= 25: r_a, r_lbl = 4, f"🟡 超賣({r_val})"
         elif rsi <= 30: r_a, r_lbl = 2, f"⚪ 偏超賣({r_val})"
         else:           r_a, r_lbl = 0, f"⚪ 中性({r_val})"
-        if df is not None and "RSI_14" in getattr(df, "columns", []):
+        # rsi_pct_enabled=False（非 BTC 幣對）→ 不套分位：級距在 BTCUSDT 上校準，
+        # 其他幣對的 RSI 分布不同，套上去等於用別人的刻度量自己（獨立檢核 🟠 No.7）。
+        if rsi_pct_enabled and df is not None and "RSI_14" in getattr(df, "columns", []):
             r_pct = pit_percentile(list(df["RSI_14"].values), rsi)
         r_p = percentile_score(r_pct, 6, high_is_extreme=False)
         r_s = max(r_a, r_p)
@@ -451,6 +444,7 @@ def compute_relative_low_score(
     funding_ann_hist=None,
     fng_hist=None,
     sopr_hist=None,
+    rsi_pct_enabled: bool = True,
 ) -> Tuple[int, Dict[str, dict]]:
     """
     相對底部六維綜合評分（0–100）。鏡像 relative_high.compute_escape_top_score。
@@ -464,7 +458,7 @@ def compute_relative_low_score(
     signals = {
         "cycle":       _score_cycle(row),
         "derivatives": _score_derivatives_low(funding_8h, oi_stats, funding_ann_hist),
-        "technical":   _score_technical_low(row, df),
+        "technical":   _score_technical_low(row, df, rsi_pct_enabled),
         "sentiment":   _score_sentiment_low(fng, btc_d_trend, fng_hist),
         "onchain":     _score_onchain_low(etf_summary, sopr, mvrv_z, sopr_hist),
         "macro":       _score_macro_low(macro),
@@ -484,14 +478,15 @@ def relative_low_meta(score: int) -> Tuple[str, str, str]:
     新門檻錨在實際分布的 P99.5／P99（56／54 → 稀有度 0.67%／1.53%）；
     下兩級（45／26）稀有度正常（10.15%／35.76%），僅 25→26 隨階梯重訂微調。
     ⚠️ in-sample 校準，**只影響分級文案、不進任何交易條件**。
+    ⚠️ 校準口徑同 escape_top_meta：重放少餵 btc_d_trend/macro，生產分數會系統性偏高。
     """
-    if score >= 56:
+    if score >= LOW_LEVEL_STRONG:
         return "🟢 強力抄底訊號", "#00cc88", "高度低估，分批進場／回補空單（需配合動態地板確認）"
-    if score >= 54:
+    if score >= LOW_LEVEL_VALUE:
         return "🟢 明確低估", "#00aa66", "可開始定投／減空"
-    if score >= 45:
+    if score >= LOW_LEVEL_COOL:
         return "🟡 偏冷觀察", "#ffcc00", "留意打底，勿純憑超賣搶反彈"
-    if score >= 26:
+    if score >= LOW_LEVEL_NEUTRAL:
         return "⚪ 中性", "#9e9e9e", "正常持有"
     return "🔴 無底部訊號", "#ff4b4b", "無低估壓力，勿接刀"
 

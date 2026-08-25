@@ -612,7 +612,8 @@ class BitcoinMonitor:
                         btc_d_trend=ext.get("btcd"), macro=ext.get("macro"), mvrv_z=ext.get("mvrv_z"),
                         funding_ann_hist=self._funding_hist,
                         sopr_hist=(self._metric_hist or {}).get('sopr'),
-                        fng_hist=(self._metric_hist or {}).get('fng'))
+                        fng_hist=(self._metric_hist or {}).get('fng'),
+                        rsi_pct_enabled=self.is_btc)
                     trend = compute_trend_score(row, df)
                     mom = _short_momentum(df)
                 self.render(md, funding, oi_stats, top, low, trend, mom)

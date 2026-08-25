@@ -7,23 +7,39 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 import pytest
 
 from core.action_ensemble import compute_composite_action, compute_trend_stance
+from core.action_ensemble import (LOW_STRONG as _LOW_STRONG, LOW_VALUE as _LOW_VALUE,
+                                  ESCAPE_HOT as _ESCAPE_HOT, ESCAPE_WARM as _ESCAPE_WARM)
+
+# 「達到明確低估但**未**到強力抄底」的代表值——原本寫死 65，
+# 但門檻 2026-08-25 重校後 65 已越過 LOW_STRONG，語意會反轉（獨立檢核 🟠 No.1 的連帶）。
+_LOW_VALUE_ONLY = _LOW_VALUE if _LOW_VALUE < _LOW_STRONG else _LOW_STRONG - 1
+
+
+# 2026-08-25：本矩陣原本寫死 70/50/65/80 等分數。門檻重校後（ESCAPE_HOT 60→49、
+# LOW_STRONG 75→56）那些值的**語意會反轉**（65 從「低估」變成「強力低估」），
+# 測試就會在行為正確時誤報失敗 → 一律改用從常數推導的代表值。
+_ESC_HOT = _ESCAPE_HOT              # 已達「明確過熱」
+_ESC_WARM_ONLY = _ESCAPE_WARM       # 達偏熱但未到過熱
+_ESC_CALM = 10                      # 中性
+_LOW_STRONG_V = _LOW_STRONG         # 已達「強力抄底」
+_LOW_CALM = 10
 
 
 @pytest.mark.parametrize("trend,esc,low,expected_key", [
     # 多頭分支
-    (50, 70, 10, "TAKE_PROFIT"),      # 強多＋過熱 → 分批止盈
-    (50, 50, 10, "HOLD_TIGHTEN"),     # 多頭偏熱
-    (30, 10, 65, "ADD"),              # 多頭仍低估 → 加倉
-    (30, 10, 10, "RIDE"),             # 多頭中性
+    (50, _ESC_HOT, _LOW_CALM, "TAKE_PROFIT"),          # 強多＋過熱 → 分批止盈
+    (50, _ESC_WARM_ONLY, _LOW_CALM, "HOLD_TIGHTEN"),   # 多頭偏熱（未到過熱）
+    (30, _ESC_CALM, _LOW_VALUE_ONLY, "ADD"),           # 多頭仍低估 → 加倉
+    (30, _ESC_CALM, _LOW_CALM, "RIDE"),                # 多頭中性
     # 空頭分支
-    (-50, 10, 80, "BOTTOM_FISH"),     # 空頭＋強力低估 → 小倉左側
-    (-50, 10, 65, "WATCH_REVERSAL"),  # 空頭＋低估 → 等右側（勿接刀）
-    (-30, 50, 10, "FADE_RALLY"),      # 空頭反彈過熱
-    (-30, 10, 10, "DEFENSE"),         # 空頭中性
+    (-50, _ESC_CALM, _LOW_STRONG_V, "BOTTOM_FISH"),    # 空頭＋強力低估 → 小倉左側
+    (-50, _ESC_CALM, _LOW_VALUE_ONLY, "WATCH_REVERSAL"),  # 空頭＋低估 → 等右側（勿接刀）
+    (-30, _ESC_HOT, _LOW_CALM, "FADE_RALLY"),          # 空頭反彈過熱
+    (-30, _ESC_CALM, _LOW_CALM, "DEFENSE"),            # 空頭中性
     # 盤整分支
-    (0, 65, 10, "REDUCE"),
-    (0, 10, 65, "ACCUMULATE"),
-    (0, 10, 10, "RANGE"),
+    (0, _ESC_HOT, _LOW_CALM, "REDUCE"),
+    (0, _ESC_CALM, _LOW_VALUE_ONLY, "ACCUMULATE"),
+    (0, _ESC_CALM, _LOW_CALM, "RANGE"),
 ])
 def test_decision_matrix(trend, esc, low, expected_key):
     out = compute_composite_action(trend, esc, low)
@@ -41,10 +57,18 @@ def test_escape_low_none_treated_as_zero():
     assert out["action_key"] == "RIDE"
 
 
-def test_boundary_alignment_with_alert_threshold():
-    # 逃頂熱門檻與 LINE 警報門檻一致（60）
-    assert compute_composite_action(30, 60, 0)["action_key"] == "TAKE_PROFIT"
-    assert compute_composite_action(30, 59, 0)["action_key"] == "HOLD_TIGHTEN"
+def test_boundary_alignment_with_meta_levels():
+    """
+    行動門檻必須與 meta 分級邊界一致 —— **從常數推導、不寫死數字**。
+    2026-08-25：原本寫死 60（並註解「與 LINE 警報門檻一致」），但 60 在逃頂實測上限 55
+    之上 → TAKE_PROFIT 分支永遠走不到；同時該註解也早已漂移（LINE 主閘門實際是 45）。
+    現在 ESCAPE_HOT 直接 import core.relative_high.TOP_LEVEL_HOT，兩邊不可能再各走各的。
+    """
+    from core.action_ensemble import ESCAPE_HOT
+    from core.relative_high import TOP_LEVEL_HOT
+    assert ESCAPE_HOT == TOP_LEVEL_HOT
+    assert compute_composite_action(30, ESCAPE_HOT, 0)["action_key"] == "TAKE_PROFIT"
+    assert compute_composite_action(30, ESCAPE_HOT - 1, 0)["action_key"] == "HOLD_TIGHTEN"
 
 
 @pytest.mark.parametrize("trend,esc,low,cyc,expected_key", [

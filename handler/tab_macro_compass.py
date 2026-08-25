@@ -245,6 +245,18 @@ def _render_trend_banner(btc, curr):
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
+def _radar_funding_8h():
+    """計分用的日均資費（與校準同口徑）。取不到回 None → 呼叫端沿用即時值。
+    2026-08-25 獨立檢核 🟠 No.6：BTC_WATCH 改吃日均後，dashboard/LINE 仍吃即時單筆，
+    反而新增一處三方分歧（實測 344/2542 日、最大差 10 分）→ 三方一起改。"""
+    try:
+        from service.funding_history import funding_8h_daily_mean
+        return funding_8h_daily_mean()
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def _radar_metric_hist():
     """SOPR / F&G 歷史（抄底 PiT 分位子項用）。抓不到回 {} → 退回絕對階梯。"""
     try:
@@ -367,7 +379,7 @@ def _render_dip_block(btc, curr, funding_rate, fng_val, realtime_data):
         ext = _gather_radar_externals(str(btc.index[-1]))
         rl = compute_relative_low(
             price, btc.iloc[-1], btc,
-            funding_8h=funding_rate,
+            funding_8h=(_radar_funding_8h() if _radar_funding_8h() is not None else funding_rate),
             funding_ann_hist=_radar_funding_hist(),
             sopr_hist=_radar_metric_hist().get('sopr'),
             fng_hist=_radar_metric_hist().get('fng'),

@@ -54,7 +54,17 @@ FUNDING_HOT_8H = FUNDING_ANN_YELLOW / (3 * 365)    # ≈ 0.0274 %/8h
 # 曾評估改用 PiT 滾動分位（相對過熱）取代絕對階梯，train 0.706→0.618、holdout 0.580→0.492、
 # 新環境內部 0.457/0.393，三處全輸 → **否決，逃頂側維持絕對階梯**。
 # 只補「休眠」標示讓面板說出這件事，不動分數。**勿再把逃頂側改成相對分位。**
-FUNDING_DORMANT_DAYS = 180   # 視窗內都沒越過基準 → 標示休眠（僅影響 label，不影響 score）
+FUNDING_DORMANT_DAYS = 180
+
+# ── 逃頂分級門檻（具名常數；2026-08-25 重校）──────────────────────────────────
+# 抽成常數是為了**杜絕各寫各的**：獨立檢核發現 core/action_ensemble.py 另外硬編了
+# ESCAPE_HOT=60 / LOW_STRONG=75，註解宣稱「與 meta 分級邊界對齊」但實際早已漂移，
+# 而那兩個值都在實測上限之上 → TAKE_PROFIT / REDUCE / BOTTOM_FISH 三個分支永遠走不到。
+# 任何需要「逃頂多熱」的地方一律 import 這裡，不要再抄一份數字。
+TOP_LEVEL_SEVERE  = 51   # 🔴 強烈逃頂訊號（實際分布 P99.5）
+TOP_LEVEL_HOT     = 49   # 🟠 明確過熱（P99）
+TOP_LEVEL_WARM    = 45   # 🟡 偏熱警戒
+TOP_LEVEL_NEUTRAL = 25   # ⚪ 中性   # 視窗內都沒越過基準 → 標示休眠（僅影響 label，不影響 score）
 
 # Layer A 五維權重（各維最高分；理論總和 106，compute_escape_top_score clamp 到 100）
 WEIGHTS = {
@@ -362,14 +372,18 @@ def escape_top_meta(score: int) -> Tuple[str, str, str]:
     新門檻錨在**實際分布**的 P99.5／P99（51／49 → 稀有度 0.55%／1.18%）；
     下兩級（45／25）稀有度本來就正常（2.05%／14.59%），不動。
     ⚠️ 這是用全期分布回頭校門檻（in-sample），**只影響分級文案、不進任何交易條件**。
+    ⚠️ 校準口徑揭露：重放時 `btc_d_trend=None, macro=None`（本機無這兩維的長史），
+       但 LINE 推播路徑**真的會餵**（BTC.D 最多 5 分 + macro 最多 10 分）。
+       → 生產分數會系統性高於重放，實際觸發頻率**高於**此處標示的稀有度。
+       敏感度：若生產常態多 +8 分，`>=45` 的實際比例約 4.4%（非 2.05%）。
     """
-    if score >= 51:
+    if score >= TOP_LEVEL_SEVERE:
         return "🔴 強烈逃頂訊號", "#ff4b4b", "高度過熱，分批止盈／考慮對沖空單"
-    if score >= 49:
+    if score >= TOP_LEVEL_HOT:
         return "🟠 明確過熱", "#ff8800", "減倉、收緊移動止盈"
-    if score >= 45:
+    if score >= TOP_LEVEL_WARM:
         return "🟡 偏熱警戒", "#ffcc00", "停止加倉、提高警覺"
-    if score >= 25:
+    if score >= TOP_LEVEL_NEUTRAL:
         return "⚪ 中性", "#9e9e9e", "正常持有"
     return "🟢 無過熱", "#00cc88", "無逃頂壓力"
 

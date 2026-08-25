@@ -50,6 +50,33 @@ CANDIDATES = [
     ("L_fng",      "raw_fng",      "抄底 F&G",      10, False, False, "has_fng"),
 ]
 
+# ── 改動前的絕對階梯「凍結快照」（2026-08-25 獨立檢核 🟠 No.3）────────────────
+# 為什麼要凍結：本腳本原本從 radar_subitem_audit.build_scores() 取「現行」基準，
+# 但那支呼叫的是產品函式 —— 改動落地後 `cur` 就等於 `hyb`，決策依據自己把自己洗掉，
+# 「11 項採用 3 項」再也重現不出來。基準必須是**改動前那一刻**的階梯，且不隨產品碼變動。
+# 下列階梯抄自 commit aaca4cd 的 core/relative_low.py 與 core/relative_high.py。
+FROZEN_LADDERS = {
+    "T_rsi":      (lambda v: 7 if v >= 80 else 5 if v >= 75 else 3 if v >= 70 else 0),
+    "L_rsi":      (lambda v: 6 if v <= 20 else 4 if v <= 25 else 2 if v <= 30 else 0),
+    "L_mayer":    (lambda v: 10 if v < 0.8 else 6 if v < 1.0 else 3 if v < 1.2 else 0),
+    "L_sma200w":  (lambda v: 9 if v < 1.0 else 6 if v < 1.3 else 3 if v < 2.0 else 0),
+    "L_powerlaw": (lambda v: 6 if v < 2.0 else 3 if v < 5.0 else 0),
+}
+
+
+def frozen_current(col, raw_series):
+    """改動前的整數分數序列；沒有凍結快照的子項（SOPR/F&G/MVRV）沿用 audit 的欄位。"""
+    fn = FROZEN_LADDERS.get(col)
+    if fn is None:
+        return None
+    out = np.zeros(len(raw_series), dtype=float)
+    for i, v in enumerate(raw_series):
+        if v is None or (isinstance(v, float) and np.isnan(v)):
+            continue
+        out[i] = fn(float(v))
+    return out
+
+
 WINDOW = 365          # 滾動視窗（日）：週期型指標需一年以上才涵蓋一輪季節性
 MIN_OBS = 180
 
@@ -98,7 +125,9 @@ def main():
     for col, rawcol, name, w, is_top, high_ex, flagcol in CANDIDATES:
         mask = sc[flagcol].values if flagcol else np.ones(len(sc), bool)
         ev, nev = (tops, ntp) if is_top else (bots, nbt)
-        cur = sc[col].astype(float).values
+        raw_vals = pd.to_numeric(sc[rawcol], errors="coerce").values
+        frozen = frozen_current(col, raw_vals)          # 改動前的凍結基準
+        cur = frozen if frozen is not None else sc[col].astype(float).values
         new = rolling_scores(pd.to_numeric(sc[rawcol], errors="coerce").values, w, high_ex)
         hyb = np.maximum(cur, new)
 

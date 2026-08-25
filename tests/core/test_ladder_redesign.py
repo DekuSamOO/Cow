@@ -106,3 +106,53 @@ def test_meta_is_monotone():
     for meta in (escape_top_meta, relative_low_meta):
         seen = [meta(s)[0] for s in range(0, 101)]
         assert len(set(seen)) >= 4          # 至少四個等級真的都會出現
+
+
+# ── 2026-08-25 獨立檢核補洞：M1/M5 兩個突變原本全綠（測到的是已不計分的那份實作）──
+def test_pit_ladder_window_truncation_is_enforced():
+    """
+    `pit_ladder.pit_percentile` 必須只看最近 window 筆。
+    原本只有 `relative_low.funding_pit_percentile` 有測，而那份**已不影響任何分數**；
+    真正被三個採用子項使用的是 pit_ladder 這條路，拿掉截斷時 489 全綠（突變 M1）。
+    """
+    old, recent = [-50.0] * 800, [10.0] * 365
+    assert pit_percentile(old + recent, 0.0, min_obs=180, window=365) == 0.0
+    assert pit_percentile(old + recent, 0.0, min_obs=180, window=1165) > 50.0
+    assert pit_percentile([1.0] * 500, 1.0, min_obs=180, window=10) is None
+
+
+def test_low_rsi_takes_max_not_percentile_only():
+    """
+    RSI 子項必須是 max(絕對, 分位)。突變 M5（改成只取分位）原本 489 全綠。
+    構造：RSI 18（絕對階梯滿分 6）但所在環境更低 → 分位分較低，取大值仍須是 6。
+    """
+    import pandas as pd
+    row = _Row({"RSI_14": 18.0})
+    df = pd.DataFrame({"RSI_14": [10.0] * 399 + [18.0]})   # 環境長期更低 → 分位不極端
+    res = _score_technical_low(row, df)
+    assert res["sub"]["rsi_score"] == 6, "取大值被改成只取分位"
+
+
+def test_rsi_percentile_can_be_disabled_for_non_btc():
+    """級距在 BTCUSDT 上校準 → 非 BTC 幣對必須關得掉（獨立檢核 🟠 No.7）。"""
+    import pandas as pd
+    row = _Row({"RSI_14": 35.0})
+    df = pd.DataFrame({"RSI_14": [70.0] * 399 + [35.0]})
+    on = _score_technical_low(row, df, rsi_pct_enabled=True)["sub"]["rsi_score"]
+    off = _score_technical_low(row, df, rsi_pct_enabled=False)["sub"]["rsi_score"]
+    assert on > 0 and off == 0
+
+
+def test_action_ensemble_thresholds_are_reachable():
+    """
+    行動建議的門檻必須可觸及。原本硬編 ESCAPE_HOT=60 / LOW_STRONG=75，
+    都在實測上限（55／65）之上 → TAKE_PROFIT / REDUCE / BOTTOM_FISH 三個分支永遠走不到，
+    而這支輸出的是行動短語＋**建議倉位**，被 dashboard 與 LINE 推播消費。
+    """
+    from core import action_ensemble as AE
+    from core.relative_high import TOP_LEVEL_HOT, TOP_LEVEL_WARM
+    from core.relative_low import LOW_LEVEL_STRONG, LOW_LEVEL_VALUE
+    assert AE.ESCAPE_HOT <= 55 and AE.LOW_STRONG <= 65
+    # 必須是 import 來的同一組值，不可再抄一份
+    assert (AE.ESCAPE_HOT, AE.ESCAPE_WARM) == (TOP_LEVEL_HOT, TOP_LEVEL_WARM)
+    assert (AE.LOW_STRONG, AE.LOW_VALUE) == (LOW_LEVEL_STRONG, LOW_LEVEL_VALUE)

@@ -395,7 +395,15 @@ def _compute_radars(btc_df, curr, latest_funding, price) -> dict:
         _funding_hist = _fah(window=400) or None
     except Exception:
         _funding_hist = None
-    common = dict(funding_8h=latest_funding, oi_stats=None, etf_summary=etf,
+    # 計分用日均資費（與校準同口徑）；取不到沿用即時值。三方（BTC_WATCH/dashboard/本支）一致。
+    try:
+        from service.funding_history import funding_8h_daily_mean as _f8dm
+        _score_funding = _f8dm()
+    except Exception:
+        _score_funding = None
+    if _score_funding is None:
+        _score_funding = latest_funding
+    common = dict(funding_8h=_score_funding, oi_stats=None, etf_summary=etf,
                   sopr=sopr, fng=fng, btc_d_trend=btcd, macro=macro, mvrv_z=mvrv_z,
                   funding_ann_hist=_funding_hist)
     rh = compute_relative_high(price, curr, btc_df, **common)
@@ -490,7 +498,8 @@ def attach_score_deltas(data: dict) -> None:
 
 def maybe_send_escape_alert(data: dict) -> None:
     """
-    逃頂評分 ≥ 門檻時推 LINE 警報，分級 60 預警 / 75 警報 / 85 危急（config.ESCAPE_ALERT_TIERS）。
+    逃頂評分 ≥ 門檻時推 LINE 警報，分級見 config.ESCAPE_ALERT_TIERS
+    （2026-08-25 由 85/75/60 重校為 51/49/45——舊值全在實測上限 55 之上＝永遠不觸發）。
     防洗版三規則：
       1. 同曆日最多一次（原規則保留）。
       2. 跨日需「分數較上次推播 +ESCAPE_ALERT_REPUSH_DELTA」或「升級」才再推，
