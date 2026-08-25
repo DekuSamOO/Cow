@@ -425,8 +425,11 @@ class BitcoinMonitor:
             if df is not None and "RSI_14" in df.columns and len(df) >= 90:
                 rsi = float(df["RSI_14"].iloc[-1])
                 rsi_max = float(df["RSI_14"].tail(90).max())
+            # allow_remote=True：推播狀態只存在於 GH Actions artifact，本機沒有這個檔。
+            # ⚠️ 本方法是在 render() 裡被呼叫的，也就是**每 60 秒一次**；不會變成每分鐘一發
+            # gh 請求的原因在 load_state 內的 TTL 閘門（快取未逾 6 小時就只讀檔、不開子行程）。
             rows = sentinel_rows(top_score=top_score, gate=gate, d3=d3,
-                                 rsi14=rsi, rsi_max_90d=rsi_max)
+                                 rsi14=rsi, rsi_max_90d=rsi_max, allow_remote=True)
             return ["", "  ── LINE 哨兵總覽（只顯示，不推播）──"] + ["  " + r for r in rows]
         except Exception as e:
             return ["", f"  哨兵總覽取得失敗：{e}"]

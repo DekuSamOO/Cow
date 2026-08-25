@@ -430,7 +430,9 @@ def _sentinel_board():
     """
     try:
         from core.sentinel_board import sentinel_rows
-        rows = sentinel_rows()          # 進場畫面不抓網路 → 只顯示狀態檔那半邊
+        # allow_remote=True：狀態檔只存在於 GH Actions artifact，本機沒有。
+        # 每 6 小時用 gh 抓一次快取（失敗沿用舊的、不擋進場）。
+        rows = sentinel_rows(allow_remote=True)
     except Exception:
         return
     if not rows:

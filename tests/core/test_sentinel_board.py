@@ -11,6 +11,31 @@ def test_all_seven_sentinels_always_listed():
         assert r.startswith(str(i)), f"第 {i} 列順序錯：{r}"
 
 
+def test_unreadable_state_is_not_reported_as_no_record(tmp_path, monkeypatch):
+    """
+    **狀態讀不到 ≠ 沒發生過。**
+    2026-08-25 實測：`escape_alert_state.json` 只存在於 GH Actions artifact，本機沒有
+    → 面板把「已推播過」的哨兵印成「尚無紀錄」（實際 last_action_label=順勢持有）。
+    這是同一類「顯示得出來、內容永遠是空的」問題，必須在文案上分得出來。
+    """
+    monkeypatch.setattr(SB, "STATE_FILE", str(tmp_path / "no.json"))
+    monkeypatch.setattr(SB, "REMOTE_CACHE", str(tmp_path / "no2.json"))
+    rows = sentinel_rows()                       # state=None → 走 load_state
+    for i in (1, 2, 6):                          # 2/3/7 列（index 1,2,6）
+        assert "尚無紀錄" not in rows[i], f"讀不到狀態卻宣稱沒紀錄：{rows[i]}"
+        assert "讀不到" in rows[i]
+    assert "狀態未知" in rows[4]                  # D3 不得說「待命」
+    assert "已建 ?/3" in rows[5]                  # 套保批次不得說 0/3
+    assert any("不可信" in r for r in rows)
+
+
+def test_no_record_still_says_no_record_when_state_is_readable():
+    """有狀態、只是該鍵沒紀錄 → 仍要說「尚無紀錄」，不可一律推給讀不到。"""
+    rows = sentinel_rows(state={"last_action_label": "順勢持有"})
+    assert "順勢持有" in rows[1]
+    assert "尚無紀錄" in rows[2]      # 馬丁重啟真的沒紀錄
+
+
 def test_no_side_effects_on_state_file(tmp_path, monkeypatch):
     """只讀不寫：即使狀態檔不存在也不得建立。"""
     ghost = tmp_path / "nope.json"
@@ -23,8 +48,9 @@ def test_load_state_survives_broken_file(tmp_path, monkeypatch):
     bad = tmp_path / "s.json"
     bad.write_text("{not json", encoding="utf-8")
     monkeypatch.setattr(SB, "STATE_FILE", str(bad))
-    assert SB.load_state() == {}
-    assert len(sentinel_rows()) == 7
+    monkeypatch.setattr(SB, "REMOTE_CACHE", str(tmp_path / "nope.json"))
+    st, source = SB.load_state()
+    assert st == {} and source == "unavailable"
 
 
 def test_escape_tier_thresholds_are_reachable():

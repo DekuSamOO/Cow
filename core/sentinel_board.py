@@ -19,25 +19,81 @@ core/sentinel_board.py · 哨兵總覽（單一真實來源）
 """
 import json
 import os
+import subprocess
+import time
 from typing import Optional
 
 _COW = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATE_FILE = os.path.join(_COW, "escape_alert_state.json")
 
+# ⚠️ 狀態檔**不在本機**：LINE 哨兵跑在 GitHub Actions，狀態靠 artifact 在 run 之間傳遞
+# （workflow 從上一個成功 run `gh run download`，跑完再 upload，保留 2 天）。
+# 2026-08-25 實測：本機 escape_alert_state.json 根本不存在 → 面板把「有紀錄」的哨兵
+# 也印成「尚無紀錄」（實際 last_action_label=順勢持有、last_weekly_date=2026-08-23）。
+# → 這裡用 gh CLI 把 artifact 抓成本機快取，並**區分「讀不到狀態」與「該鍵沒紀錄」**。
+REMOTE_CACHE = os.path.join(_COW, "db", "cache", "escape_alert_state.json")
+ARTIFACT_NAME = "escape-alert-state"
+WORKFLOW = "daily_line_notify.yml"
+REMOTE_TTL_SEC = 6 * 3600
+
 HEDGE_BATCHES = ((1, 65, 0.0428), (2, 55, 0.0428), (3, 50, 0.0429))
 HEDGE_G3_PEAK = 75          # G3 前提：近 90 日 RSI 曾 > 此值
 
 
-def load_state() -> dict:
-    """讀推播狀態（只讀不寫）。檔案不存在／壞掉 → 回空 dict。"""
+def _read_json(path) -> Optional[dict]:
     try:
-        with open(STATE_FILE, encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             return json.load(f) or {}
     except Exception:
-        return {}
+        return None
 
 
-def _mark(done: bool) -> str:
+def fetch_remote_state(timeout: int = 20) -> Optional[dict]:
+    """
+    用 gh CLI 從最近一個成功的 workflow run 下載狀態 artifact，落地成本機快取。
+    需要 gh 已登入；任何失敗都回 None（呼叫端沿用舊快取），**不擋畫面**。
+    """
+    try:
+        os.makedirs(os.path.dirname(REMOTE_CACHE), exist_ok=True)
+        run_id = subprocess.run(
+            ["gh", "run", "list", "--workflow", WORKFLOW, "--status", "success",
+             "--limit", "1", "--json", "databaseId", "-q", ".[0].databaseId"],
+            capture_output=True, text=True, timeout=timeout).stdout.strip()
+        if not run_id:
+            return None
+        out_dir = os.path.dirname(REMOTE_CACHE)
+        subprocess.run(["gh", "run", "download", run_id, "-n", ARTIFACT_NAME,
+                        "-D", out_dir], capture_output=True, text=True, timeout=timeout)
+        return _read_json(REMOTE_CACHE)
+    except Exception:
+        return None
+
+
+def load_state(allow_remote: bool = False):
+    """
+    讀推播狀態（只讀不寫）。回傳 (state, source)：
+      source="local"        本機有狀態檔（一般只在 CI 上才有）
+      source="remote"       用的是 GH Actions artifact 快取（附抓取時間）
+      source="unavailable"  兩者都沒有 → **不可把缺鍵解讀成「沒發生過」**
+    allow_remote=True 時，快取超過 REMOTE_TTL_SEC 會嘗試用 gh 更新（失敗沿用舊的）。
+    """
+    local = _read_json(STATE_FILE)
+    if local is not None:
+        return local, "local"
+    age = time.time() - os.path.getmtime(REMOTE_CACHE) if os.path.exists(REMOTE_CACHE) else None
+    if allow_remote and (age is None or age > REMOTE_TTL_SEC):
+        fetched = fetch_remote_state()
+        if fetched is not None:
+            return fetched, "remote"
+    cached = _read_json(REMOTE_CACHE)
+    if cached is not None:
+        return cached, "remote"
+    return {}, "unavailable"
+
+
+def _mark(done: bool, unavailable: bool = False) -> str:
+    if unavailable:
+        return "❔ 狀態未知"
     return "✅ 已推" if done else "⏳ 待命"
 
 
@@ -46,12 +102,25 @@ def sentinel_rows(top_score: Optional[int] = None,
                   d3: Optional[dict] = None,
                   rsi14: Optional[float] = None,
                   rsi_max_90d: Optional[float] = None,
-                  state: Optional[dict] = None) -> list:
+                  state: Optional[dict] = None,
+                  allow_remote: bool = False) -> list:
     """
     回傳哨兵總覽的顯示行（list[str]）。所有參數皆選填 —— 取不到的項目照樣列出，
     標成「—」而不是整段消失（死項要看得見，這正是 2026-08-25 稽核的教訓）。
     """
-    st = load_state() if state is None else state
+    if state is None:
+        st, source = load_state(allow_remote=allow_remote)
+    else:
+        st, source = state, "local"
+    unavailable = (source == "unavailable")
+
+    def _hist(key, label):
+        """有狀態才敢說「尚無紀錄」；讀不到狀態時必須說讀不到，不可裝作沒發生過。"""
+        if unavailable:
+            return "狀態讀不到（在 GH Actions artifact）"
+        v = st.get(key)
+        return f"上次 {v}" if v else "尚無紀錄"
+
     rows = []
 
     # 1 逃頂警報
@@ -69,12 +138,10 @@ def sentinel_rows(top_score: Optional[int] = None,
         rows.append("1 逃頂警報    —")
 
     # 2 行動翻轉
-    lbl = st.get("last_action_label")
-    rows.append("2 行動翻轉    " + (f"上次 {lbl}" if lbl else "尚無紀錄"))
+    rows.append("2 行動翻轉    " + _hist("last_action_label", "行動翻轉"))
 
     # 3 馬丁重啟
-    mk = st.get("last_mart_restart_key")
-    rows.append("3 馬丁重啟    " + (f"上次 {mk}" if mk else "尚無紀錄"))
+    rows.append("3 馬丁重啟    " + _hist("last_mart_restart_key", "馬丁重啟"))
 
     # 4 升槓桿窗口
     if gate and gate.get("ok") is not None and gate.get("ahr") is not None:
@@ -92,9 +159,9 @@ def sentinel_rows(top_score: Optional[int] = None,
         c2 = "✅" if d3.get("c2") else "✕"
         c3 = "" if d3.get("c3", True) else "  ⚠c3未過(距ATH太近)"
         rows.append(f"5 熊底確認D3  反彈 {d3.get('rebound', 0) * 100:+.1f}%{c1}"
-                    f"  距低 {d3.get('days', 0)}天{c2}{c3}  {_mark(st.get('d3_confirmed'))}")
+                    f"  距低 {d3.get('days', 0)}天{c2}{c3}  {_mark(st.get('d3_confirmed'), unavailable)}")
     else:
-        rows.append("5 熊底確認D3  —  " + _mark(st.get("d3_confirmed")))
+        rows.append("5 熊底確認D3  —  " + _mark(st.get("d3_confirmed"), unavailable))
 
     # 6 套保建倉（G3 前提 + 三批）
     if rsi14 is not None and rsi_max_90d is not None:
@@ -104,12 +171,22 @@ def sentinel_rows(top_score: Optional[int] = None,
                     if n not in done and rsi14 >= thr), None)
         pre = "G3✅" if armed else f"G3✕(近90日峰 {rsi_max_90d:.0f}，需>{HEDGE_G3_PEAK})"
         rows.append(f"6 套保建倉    RSI {rsi14:.1f}  {pre}"
-                    f"  已建 {len(done)}/3" + (f"  下一批 RSI {nxt}" if nxt and armed else ""))
+                    f"  已建 {'?' if unavailable else len(done)}/3" + (f"  下一批 RSI {nxt}" if nxt and armed else ""))
     else:
         done = [n for n, _, _ in HEDGE_BATCHES if st.get(f"hedge_batch_{n}")]
-        rows.append(f"6 套保建倉    —  已建 {len(done)}/3")
+        rows.append(f"6 套保建倉    —  已建 {'?' if unavailable else len(done)}/3")
 
     # 7 週報
-    wd = st.get("last_weekly_date")
-    rows.append("7 週報        " + (f"上次 {wd}" if wd else "尚無紀錄"))
+    rows.append("7 週報        " + _hist("last_weekly_date", "週報"))
+
+    # 狀態來源與新鮮度：讀不到 vs 有紀錄，使用者必須分得出來
+    if unavailable:
+        rows.append("   ⚠ 推播狀態讀不到 → 上面的『已推/已建』一律不可信"
+                    "（需 gh 已登入；watcher 進場畫面會自動抓，每 6 小時一次）")
+    elif source == "remote":
+        try:
+            age_h = (time.time() - os.path.getmtime(REMOTE_CACHE)) / 3600
+            rows.append(f"   （推播狀態來自 GH Actions artifact 快取，{age_h:.1f} 小時前抓取）")
+        except Exception:
+            rows.append("   （推播狀態來自 GH Actions artifact 快取）")
     return rows
