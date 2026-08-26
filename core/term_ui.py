@@ -30,13 +30,22 @@ def _bar(score, cap):
     return "█" * filled + "░" * (10 - filled)
 
 
-# 文字呈現預設的窄符號：在 emoji 範圍內、但終端機（無 FE0F 時）渲染為寬度 1
-# ⚠ U+26A0 警告號。其餘 emoji（⚪🔴🟡…）維持寬度 2。
-_NARROW_SYMBOLS = {0x26A0}
+# 覆寫用逃生門：某個字元的實際渲染寬度與下方通則不符時才往這裡加，並註明實測依據。
+# （⚠ U+26A0 原本列在這裡；2026-08-26 起已由 0x2600 段的 EAW 通則正確判為 1，不需個案豁免。）
+_NARROW_SYMBOLS = set()
 
 
 def _dw(s):
-    """字串顯示寬度：全形/emoji=2、半形=1（FE0F 修飾符=0）；窄符號（⚠）=1。"""
+    """字串顯示寬度：全形/emoji=2、半形=1（FE0F 修飾符=0）。
+
+    ⚠️ **0x2600–0x27BF（雜項符號與 Dingbats）不是每個都寬**，這是本函式最容易錯的地方。
+    原本整段一律算 2，實測有六個常用字元會被高估（EAW=N、無 emoji presentation，
+    終端機只佔一欄）：⚠ ❄ ✕ ☀ ⚙ ✓；真正寬的是 EAW=W 那些：⚪ ✅ ❌ ⛔ ❓ ⚡。
+    後果是**每出現一個就少補一格空白、右框往左縮一欄**——2026-08-26 使用者回報
+    「LINE 哨兵」那行錯位，該行有 4 個 ✕、右框整整少 4 欄。
+    改為在這段內信任 `east_asian_width`（W/F 才算 2）。
+    0x1F300–0x1FAFF 那段是真 emoji，維持一律 2。
+    """
     w = 0
     for ch in s:
         if ch == "️":
@@ -44,8 +53,10 @@ def _dw(s):
         o = ord(ch)
         if o in _NARROW_SYMBOLS:
             w += 1
-        elif 0x1F300 <= o <= 0x1FAFF or 0x2600 <= o <= 0x27BF:
+        elif 0x1F300 <= o <= 0x1FAFF:
             w += 2
+        elif 0x2600 <= o <= 0x27BF:
+            w += 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
         elif unicodedata.east_asian_width(ch) in ("W", "F"):
             w += 2
         else:
