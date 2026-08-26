@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.leverage_window import (  # noqa: E402
     gate_status, trigger_price, advance_batches, d3_status, compact_rows,
-    find_bear_low, WINDOW_RESET_DAYS,
+    find_bear_low, WINDOW_RESET_DAYS, d3_grid_plan,
 )
 
 AHR_MAX, MIN_DAYS = 0.40, 300
@@ -158,3 +158,20 @@ def test_compact_rows_shape_and_width():
 def test_compact_rows_handles_missing():
     rows = compact_rows({"ok": None}, {"ok": None}, None, AHR_MAX, MIN_DAYS)
     assert len(rows) == 2 and "無法判定" in rows[0]
+
+
+def test_d3_grid_plan_bounds_and_liq_estimate():
+    """下限=前波新低本身；上限=下限 x step^count；強平估算=開單價 x liq_mult。"""
+    plan = d3_grid_plan(lower_bound=50_000.0, open_price=80_000.0,
+                         grid_step=1.0074, grid_count=100, liq_mult=0.667)
+    assert plan["lower"] == 50_000.0
+    assert abs(plan["upper"] - 50_000.0 * (1.0074 ** 100)) < 1e-6
+    assert plan["grid_count"] == 100
+    assert abs(plan["liq_estimate"] - 80_000.0 * 0.667) < 1e-6
+    # 上限必須高於下限（100 格、每格漲 0.74% 是正報酬率）
+    assert plan["upper"] > plan["lower"]
+
+
+def test_d3_grid_plan_missing_inputs_returns_none():
+    assert d3_grid_plan(None, 80_000.0, 1.0074, 100, 0.667) is None
+    assert d3_grid_plan(50_000.0, None, 1.0074, 100, 0.667) is None

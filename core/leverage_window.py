@@ -217,3 +217,24 @@ def compact_rows(gate, d3, price, ahr_max, min_days, batch_days=None,
                 d3["rebound"] * 100, ok(d3["c1"]), d3["rebound_req"] * 100,
                 d3["price_req"], d3["days"], ok(d3["c2"]), d3["days_req"]))
     return rows
+
+
+def d3_grid_plan(lower_bound, open_price, grid_step, grid_count, liq_mult):
+    """D3 觸發後的 2X 網格參數（`1a BTC部位SOP.md` 情境二 F-2）。
+
+    下限＝前波新低本身；上限＝下限 x grid_step^grid_count；強平價為**粗估**
+    （開單價 x liq_mult）。⚠️ liq_mult 不可信到能省略 App 覆蓋這一步——
+    No.6 名義 L 該是 0.667、App 實際強平價落在 0.554（見 config_private.py 附註），
+    差距達 17%。本函式只給「先算個數量級」的估算，開單後仍必須讀 App 訂單詳情
+    的實際強平價比對，差 > 1% 就停下（SOP 步驟 5，本函式不重複那段流程）。
+    """
+    if lower_bound is None or open_price is None:
+        return None
+    lower = float(lower_bound)
+    upper = lower * (float(grid_step) ** int(grid_count))
+    return {
+        "lower": lower,
+        "upper": upper,
+        "grid_count": int(grid_count),
+        "liq_estimate": float(open_price) * float(liq_mult),
+    }

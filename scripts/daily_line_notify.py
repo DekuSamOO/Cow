@@ -783,11 +783,17 @@ def maybe_send_bear_bottom_confirm_alert(data: dict, dry_run: bool = False) -> N
 
     ⚠️ **2026-08-26 改寫**：舊版文案叫使用者把馬丁 USDT 全額換現貨；使用者拍板改成
     「用現貨＋屯幣寶開 2X 網格、馬丁留著當強平緩衝」（vault `1a BTC部位SOP.md` 附錄 F-2，
-    回測見 `Work\\BTC幣本位網格去留評估\\scripts\\X1_d3_relaunch_grid.py`）。本函式不試圖
-    算出實際強平價/區間（那要「前一波新低」與使用者自己的保證金額，屬人工判斷欄位，
-    同 `maybe_send_leverage_window_alert` 對「前波新低」的處理方式一致），只提醒公式與步驟。
+    回測見 `Work\\BTC幣本位網格去留評估\\scripts\\X1_d3_relaunch_grid.py`）。
+
+    **2026-08-26 二次改寫**：網格下限/上限/格數改為算出確切數字（`core.leverage_window
+    .d3_grid_plan`，純算術：下限=前波新低、上限=下限×1.0074^100，不依賴使用者保證金額，
+    可以自動算）。強平價**仍只給粗估**——那需要「開單價」且歷史對過 App 實際強平價
+    落差達 17%（config_private.py 附註），本函式不試圖假裝算得準，只給量級並保留
+    「以 App 實際值覆蓋」的警語。保證金 BTC 數量（現貨＋屯幣寶）本函式仍不試圖算，
+    Cow 沒有交易所餘額 API，那格繼續是人工欄位。
     """
-    from core.leverage_window import d3_status
+    from core.leverage_window import d3_status, d3_grid_plan
+    import config as _config
 
     lo = data.get("bear_low_since_ath")
     price = data.get("current_price")
@@ -815,6 +821,10 @@ def maybe_send_bear_bottom_confirm_alert(data: dict, dry_run: bool = False) -> N
         print("OK 熊底確認 D3 已推播過，不重複。")
         return
 
+    # lo/price 已在函式開頭 guard 過非 None，d3_grid_plan 這裡必定回傳 dict
+    plan = d3_grid_plan(lo, price, _config.D3_GRID_STEP, _config.D3_GRID_COUNT,
+                         _config.D3_GRID_LIQ_MULT_2X)
+
     lines = [
         "[熊底確認] D3 成立",
         f"自 {d3['low_date']} 低點 ${d3['low']:,.0f} 反彈 {d3['rebound'] * 100:+.1f}%"
@@ -826,14 +836,20 @@ def maybe_send_bear_bottom_confirm_alert(data: dict, dry_run: bool = False) -> N
         "動作（2026-08-26 拍板，取代舊版「馬丁全額換現貨」）：",
         "1. 套保機器人若還有未平批次，先到者全平，未建批次取消",
         "2. 用現貨+屯幣寶（不含馬丁）開 2X 幣本位網格：",
-        "   強平價 = 開單價 x 0.667；區間下限 = 前波新低下方；",
-        "   上限 = 下限 x 1.0074^格數；不設止盈止損",
+        f"   下限 ${plan['lower']:,.0f}（前波新低本身）",
+        f"   上限 ${plan['upper']:,.0f}（下限 x {_config.D3_GRID_STEP}^{plan['grid_count']}）"
+        f"｜格數 {plan['grid_count']}",
+        f"   強平價粗估 ${plan['liq_estimate']:,.0f}（現價 x {_config.D3_GRID_LIQ_MULT_2X}，"
+        "⚠️僅估算，開單後務必讀 App 實際強平價覆蓋，差 >1% 停下）",
+        "   保證金＝現貨+屯幣寶當下持有全部 BTC（自己讀 App/Notion，不設止盈止損）",
         "3. 兩台馬丁繼續跑，不要現在關，當強平緩衝：",
-        "   價格跌到「網格強平價 x 1.10」才一次全平換現貨注入保證金",
+        "   價格跌到「網格 App 實際強平價 x 1.10」時哨兵會另推一則提醒注資",
+        "   （開網格後記得把 App 實際強平價填進 config_private.D3_GRID_LIQ_PRICE）",
         "4. 每月定投維持 10,000 TWD，不因 D3 加碼；分批止盈不設",
         "",
         "完整規則：vault Literature Note/1a BTC部位SOP.md 情境二",
-        "註：這是提醒不是自動執行；PREREG 亦要求同步評判四季論存活與否。",
+        "註：範圍與強平價估算是自動算的，實際開單/注資仍是人工執行；"
+        "PREREG 亦要求同步評判四季論存活與否。",
     ]
     if dry_run:
         print("[dry-run] 熊底確認 D3：" + lines[0] + "（未發送）")
@@ -847,6 +863,74 @@ def maybe_send_bear_bottom_confirm_alert(data: dict, dry_run: bool = False) -> N
     state["d3_confirmed_date"] = str(date.today())
     _save_escape_state(state)
     print("! 熊底確認 D3 已推播。")
+
+
+def maybe_send_d3_grid_buffer_alert(data: dict, dry_run: bool = False) -> None:
+    """D3 網格緩衝觸發哨兵（2026-08-26 立；`1a BTC部位SOP.md` 情境二 F-2）。
+
+    D3 網格開單後（`config_private.D3_GRID_LIQ_PRICE` 由使用者讀 App 訂單詳情填入
+    實際強平價），每日比對現價是否跌到「該強平價 x D3_GRID_BUFFER_MULT(1.10)」——
+    到了就推播一次，提醒兩台馬丁一次全平換現貨、全部注入網格追加保證金
+    （新強平價＝`1/Liq_new = 1/Liq_old + ΔM_BTC/Q`，公式在此僅原樣引用自 SOP，
+    不重新推導；ΔM_BTC 是馬丁釋出的 BTC 量、Q 是網格名目量，這兩個數字仍是人工欄位）。
+
+    D3_GRID_LIQ_PRICE 為 None（沒有活躍網格）時整段略過——這是多數時候的常態，
+    只有 D3 觸發、使用者實際開了網格之後才會有值。只觸發一次
+    （比照 SOP「只注一次」），狀態存 escape_alert_state.json 的 d3_grid_buffer_triggered，
+    去重 key 含 liq 值本身，換了新一輪網格（新 liq 值）會重新武裝。
+    """
+    import config as _config
+
+    liq = getattr(_config, "D3_GRID_LIQ_PRICE", None)
+    price = data.get("current_price")
+    if liq is None:
+        print("OK D3 網格緩衝：目前無活躍 D3 網格（D3_GRID_LIQ_PRICE 未設），略過。")
+        return
+    if price is None:
+        print("OK D3 網格緩衝：現價缺值，略過。")
+        return
+
+    liq = float(liq)
+    threshold = liq * _config.D3_GRID_BUFFER_MULT
+    key = f"d3_grid_buffer_triggered@{liq}"
+    state = _load_escape_state()
+    if state.get(key):
+        print(f"OK D3 網格緩衝：本輪（強平價 ${liq:,.0f}）已推播過，不重複。")
+        return
+
+    if price > threshold:
+        print(f"OK D3 網格緩衝未觸發：現價 ${price:,.0f} > 門檻 ${threshold:,.0f}"
+              f"（強平價 ${liq:,.0f} x {_config.D3_GRID_BUFFER_MULT}）。")
+        return
+
+    lines = [
+        "[D3 網格] 強平緩衝觸發",
+        f"現價 ${price:,.0f} <= 門檻 ${threshold:,.0f}"
+        f"（網格強平價 ${liq:,.0f} x {_config.D3_GRID_BUFFER_MULT}）",
+        "",
+        "動作（1a BTC部位SOP 情境二 F-2，只注一次）：",
+        "1. 兩台馬丁一次全平換現貨（不要分批平）",
+        "2. 全部注入網格追加保證金，拉低強平價：",
+        "   1/Liq_new = 1/Liq_old + ΔM_BTC/Q",
+        "   （ΔM_BTC＝馬丁釋出的 BTC 量；Q＝網格名目量，自己讀 App）",
+        "3. 注資完成後，把新強平價回填 config_private.D3_GRID_LIQ_PRICE",
+        "   （或若不想再監控下一輪緩衝，設回 None）",
+        "",
+        "完整規則：vault Literature Note/1a BTC部位SOP.md 情境二 F-2",
+        "註：這是提醒不是自動執行，注資與回填仍是人工動作。",
+    ]
+    if dry_run:
+        print("[dry-run] D3 網格緩衝：" + lines[0] + "（未發送）")
+        return
+    try:
+        send_line_message({"type": "text", "text": "\n".join(lines)})
+    except Exception as e:
+        print(f"X D3 網格緩衝發送失敗: {e}")
+        return
+    state[key] = True
+    state[f"{key}_date"] = str(date.today())
+    _save_escape_state(state)
+    print("! D3 網格緩衝已推播。")
 
 
 def maybe_send_hedge_batch_alert(data: dict, dry_run: bool = False) -> None:
@@ -993,6 +1077,8 @@ if __name__ == "__main__":
     # 升槓桿窗口：AHR999 + 距 ATH 兩道閘門，開/關/分批提醒（2026-08-23）
     maybe_send_leverage_window_alert(data)
     maybe_send_bear_bottom_confirm_alert(data)
+    # D3 網格開單後的強平緩衝監控（2026-08-26；無活躍網格時整段略過）
+    maybe_send_d3_grid_buffer_alert(data)
     maybe_send_hedge_batch_alert(data)
     # 週報：週日傍晚場次加推一則（每週一次）
     maybe_send_weekly_summary(data)

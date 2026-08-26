@@ -31,23 +31,30 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'
 
 
 def defense_fingerprint() -> str:
-    """經 config 載入器取防守四元組，算 canonical JSON 的 sha256 前 16 碼。
+    """經 config 載入器取防守五元組，算 canonical JSON 的 sha256 前 16 碼。
 
     來源由 config.py 決定（DEFENSE_CONFIG_JSON 環境變數優先，否則 config_private），
     保證本地與 Actions 走同一條 parse 路徑。
     """
     import config
     return _fingerprint(config.ALERT_PRICE_LOW, config.DEFENSE_LADDER,
-                        config.DEFENSE_DECISION_CARD, config.MART_TP_BASELINE)
+                        config.DEFENSE_DECISION_CARD, config.MART_TP_BASELINE,
+                        config.D3_GRID_LIQ_PRICE)
 
 
-def _fingerprint(alp, ladder, card, mart_baseline) -> str:
-    """純函數供測試：四元組 → canonical 指紋（tuple/list 差異正規化為 list）。"""
+def _fingerprint(alp, ladder, card, mart_baseline, d3_grid_liq_price) -> str:
+    """純函數供測試：五元組 → canonical 指紋（tuple/list 差異正規化為 list）。
+
+    2026-08-26 加入 d3_grid_liq_price（D3 網格緩衝哨兵的觸發基準）：它跟其餘
+    四個欄位一樣是「本地改了、secret 忘了同步」會直接推錯（或該推不推）的真值，
+    理當納入同一份 drift 偵測，不因為它多數時候是 None 就排除在外。
+    """
     canon = json.dumps({
         'alert_price_low': float(alp),
         'defense_ladder': [list(r) for r in ladder],
         'defense_decision_card': list(card),
         'mart_tp_baseline': mart_baseline,
+        'd3_grid_liq_price': (None if d3_grid_liq_price is None else float(d3_grid_liq_price)),
     }, ensure_ascii=False, sort_keys=True)
     return hashlib.sha256(canon.encode('utf-8')).hexdigest()[:16]
 

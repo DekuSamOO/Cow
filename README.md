@@ -404,6 +404,30 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 
 ## 版本紀錄
 
+### v3.48 (2026-08-26)
+D3 熊底確認的網格緩衝機制（`1a BTC部位SOP.md` 情境二 F-2）原本只推文字提醒叫使用者
+自己照公式算、自己盯盤等緩衝觸發點。本版把「算網格範圍」與「盯緩衝觸發點」兩件事接上
+自動化，實際下單／注資／餘額仍是人工（Cow 沒有交易所下單與餘額 API）。
+
+- **feat(core)**: `core/leverage_window.py` 新增 `d3_grid_plan()`——純計算，下限＝前波新低
+  本身、上限＝下限×1.0074^格數、強平價粗估＝開單價×0.667。⚠️ 強平價僅估算：No.6 名義 L
+  該是 0.667、App 實際強平價落在 0.554（差 17%），開單後仍須以 App 訂單詳情覆蓋。
+- **feat(notify)**: `maybe_send_bear_bottom_confirm_alert()` 改為在 D3 推播裡直接算出並附上
+  確切的下限/上限/格數/強平價估算數字，取代舊版「只給公式」。
+- **feat(notify)**: 新增 `maybe_send_d3_grid_buffer_alert()` 並掛進 `__main__`——每日比對現價
+  vs `config_private.D3_GRID_LIQ_PRICE × 1.10`，跌破且未觸發過才推播「該平兩台馬丁注資了」，
+  只觸發一次（比照 SOP「只注一次」），去重 key 含強平價本身，換一輪新強平價會重新武裝。
+  `D3_GRID_LIQ_PRICE` 為 `None`（多數時候，無活躍 D3 網格）時整段略過。
+- **feat(config)**: `config.py` 新增 4 個公開常數（`D3_GRID_STEP`／`D3_GRID_COUNT`／
+  `D3_GRID_LIQ_MULT_2X`／`D3_GRID_BUFFER_MULT`）；S-1 私有層（`config_private.py` /
+  `DEFENSE_CONFIG_JSON`）新增可選欄位 `D3_GRID_LIQ_PRICE`，容錯寫法比照既有
+  `MART_TP_BASELINE`（缺值＝功能停用，不觸發 fail-loud）。
+- **feat(ops)**: `scripts/defense_config_check.py` 的同步指紋從四元組擴為五元組，納入
+  `D3_GRID_LIQ_PRICE`——它跟其餘欄位一樣是「本地改了、secret 忘了同步」會直接推錯
+  （或該推不推）的真值，理當被同一份 drift 偵測覆蓋。
+- **test**: `tests/test_leverage_window.py` 新增 `d3_grid_plan` 的顯假值單元測試；
+  `tests/test_defense_config_check.py` 補五元組 drift 偵測。**515 passed**（原 513）。
+
 ### v3.47 (2026-08-26)
 v3.46 把「逃頂/抄底複合分數的驗證狀態不對稱」寫進了 code 註解與 README，但畫面/推播上的
 使用者看不到——分數還沒到門檻時一切正常，一旦觸發 TAKE_PROFIT 或 ADD 這類分支，使用者
@@ -1269,4 +1293,4 @@ watcher 面板誠實化：移除已回測無效的 Hash Ribbons 參考訊號、�
 
 ---
 
-**最後更新：2026-08-26（v3.47）**
+**最後更新：2026-08-26（v3.48）**

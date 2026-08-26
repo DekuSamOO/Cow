@@ -18,12 +18,17 @@ config_private.py.example — S-1 覆蓋層範本（2026-07-06）
        "defense_decision_card": ["文案1", "文案2", "文案3", "文案4"],
        "mart_tp_baseline": {"date": "YYYY-MM-DD", "marts": [
          {"name": "馬1", "tp": 99999.0, "rung": 1},
-         {"name": "馬2", "tp": 88888.0, "rung": 3}]}
+         {"name": "馬2", "tp": 88888.0, "rung": 3}]},
+       "d3_grid_liq_price": 99999.0
      }
 
      mart_tp_baseline 為「可選」鍵（P4 止盈重啟偵測基線，2026-07-13）：缺值＝
      偵測停用、警報回退靜態警語，不觸發 fail-loud。date=對帳基線日；tp=該輪
      推斷止盈價（均價×(1+tp%)）；rung=止盈重啟時作廢的防守階（1-based）。
+
+     d3_grid_liq_price 為「可選」鍵（D3 網格緩衝哨兵，2026-08-26）：缺值／null＝
+     無活躍 D3 網格，哨兵略過。有值時＝ App 訂單詳情讀到的網格實際強平價，
+     哨兵在價格跌到「本值 x D3_GRID_BUFFER_MULT(1.10，見 config.py)」時推播一次。
 
   兩個來源缺一即可（config.py 優先讀 DEFENSE_CONFIG_JSON 環境變數，
   找不到才 import 本模組）；兩者都缺時 config.py 會 raise（fail-loud，
@@ -77,3 +82,6 @@ MART_TP_BASELINE: dict = {
         {"name": "馬2", "tp": 88_888.0, "rung": 3},
     ],
 }
+
+# D3 網格緩衝哨兵（可選；None／刪除本段＝無活躍 D3 網格，哨兵略過）。範例假數字。
+D3_GRID_LIQ_PRICE: float = 99_999.0
