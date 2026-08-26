@@ -70,6 +70,18 @@ LOW_LEVEL_STRONG  = 56   # 🟢 強力抄底訊號（實際分布 P99.5）
 LOW_LEVEL_VALUE   = 54   # 🟢 明確低估（P99）
 LOW_LEVEL_COOL    = 45   # 🟡 偏冷觀察
 LOW_LEVEL_NEUTRAL = 26   # ⚪ 中性
+# ⛔ 實證否決區（2026-08-26 新增，**唯一通過獨立驗收的雷達用法**）
+# 設計：BTCUSDT 全樣本（`tests/radar_veto_filter.py`）——分數 <=5 的日子否決 31.3%，
+#       其後 180 日報酬中位 +1.3% vs 未否決 +27.5%，Mann-Whitney p=2.0e-07。
+# 獨立驗收：改測**非 BTC 幣對**（`tests/veto_rules_acceptance.py`，標的與分數組成都不同
+#       ——MVRV/SOPR/ETF 為 BTC 專屬故為 None，正是生產上 cap 72 的實際輸入）：
+#       ETH −15.6%／SOL −16.3%／BNB −11.8%／XRP −32.5%，**4/4 方向一致**，
+#       跨檔中位 −16.0%、否決比例中位 34.6%。三條事前判準全過。
+# ⚠️ 這是**否決條件不是進場條件**：它說的是「這種日子別進場」，
+#    不是「分數高就該進場」——後者在 2026-08-26 的 holdout 已被否決（見 relative_high.py 檔頭）。
+# ⚠️ 6~25 分沿用舊的「無底部訊號」文案，那一段**沒有通過驗證**
+#    （<=10/15/20/25 的否決比例 44~71%，事前判準 V3 全未過）→ 兩段刻意分開顯示，別再合併。
+LOW_VETO_VALIDATED = 5
 
 # 六維權重（各維最高分；理論總和 106，compute_relative_low_score clamp 到 100）
 # — 經 relative_low_backtest 拍板（實證導向）
@@ -479,6 +491,11 @@ def relative_low_meta(score: int) -> Tuple[str, str, str]:
     下兩級（45／26）稀有度正常（10.15%／35.76%），僅 25→26 隨階梯重訂微調。
     ⚠️ in-sample 校準，**只影響分級文案、不進任何交易條件**。
     ⚠️ 校準口徑同 escape_top_meta：重放少餵 btc_d_trend/macro，生產分數會系統性偏高。
+
+    2026-08-26 於最低端新增第六級 `⛔ 實證否決區`（<=LOW_VETO_VALIDATED=5）。
+    **這是本雷達唯一通過獨立驗收的用法**，證據與界線見 LOW_VETO_VALIDATED 上方註解。
+    刻意與 6~25 的「🔴 無底部訊號」分開：後者是既有文案、**未經驗證**，
+    合併顯示會讓使用者以為兩段有同等證據力。
     """
     if score >= LOW_LEVEL_STRONG:
         return "🟢 強力抄底訊號", "#00cc88", "高度低估，分批進場／回補空單（需配合動態地板確認）"
@@ -488,7 +505,10 @@ def relative_low_meta(score: int) -> Tuple[str, str, str]:
         return "🟡 偏冷觀察", "#ffcc00", "留意打底，勿純憑超賣搶反彈"
     if score >= LOW_LEVEL_NEUTRAL:
         return "⚪ 中性", "#9e9e9e", "正常持有"
-    return "🔴 無底部訊號", "#ff4b4b", "無低估壓力，勿接刀"
+    if score > LOW_VETO_VALIDATED:
+        return "🔴 無底部訊號", "#ff4b4b", "無低估壓力，勿接刀"
+    return ("⛔ 實證否決區", "#c62828",
+            f"≤{LOW_VETO_VALIDATED} 分：其後180日中位 +1.3% vs 其他日 +27.5%，不進場")
 
 
 def compute_relative_low(

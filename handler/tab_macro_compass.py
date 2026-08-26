@@ -40,7 +40,8 @@ from core.bottom_floors import compute_all_bottom_estimates
 from core.action_ensemble import compute_composite_action, POSITION_NOTE
 from core.relative_high import (compute_relative_high, compute_cycle_top_estimates,
                                 compute_cycle_top_state, FUNDING_HOT_8H, FUNDING_BASELINE_8H)
-from core.relative_low import compute_relative_low
+from core.relative_low import (compute_relative_low, LOW_LEVEL_STRONG, LOW_LEVEL_VALUE,
+                               LOW_LEVEL_COOL, LOW_LEVEL_NEUTRAL, LOW_VETO_VALIDATED)
 from core.trend_direction import compute_trend_direction
 from service.bottom_metrics import get_latest_bottom_metrics, fetch_hashrate_history_ths
 from service.etf_flow import get_etf_flow_summary
@@ -418,14 +419,17 @@ def _render_dip_block(btc, curr, funding_rate, fng_val, realtime_data):
         st.markdown(f'### {level}')
         st.markdown(f'**評分: {score}/100**')
         st.success(f'📋 **操作建議**: {rl["low_action"]}')
-        st.markdown("""
+        # 門檻一律由 core.relative_low 的常數生成，**不要再寫死數字**——
+        # 這張表曾停留在 2026-08-25 重校前的 75/60/45/25，與實際分級差了整整一級。
+        st.markdown(f"""
         | 分數 | 狀態 | 行動 |
         |------|------|------|
-        | 75-100 | 強力抄底 | 分批進場/回補空單 |
-        | 60-75 | 明確低估 | 定投/減空 |
-        | 45-60 | 偏冷觀察 | 留意打底，勿純憑超賣搶反彈 |
-        | 25-45 | 中性 | 正常持有 |
-        | 0-25 | 無底部訊號 | 勿接刀 |
+        | {LOW_LEVEL_STRONG}-100 | 強力抄底訊號 | 分批進場/回補空單（需配合動態地板確認） |
+        | {LOW_LEVEL_VALUE}-{LOW_LEVEL_STRONG} | 明確低估 | 可開始定投/減空 |
+        | {LOW_LEVEL_COOL}-{LOW_LEVEL_VALUE} | 偏冷觀察 | 留意打底，勿純憑超賣搶反彈 |
+        | {LOW_LEVEL_NEUTRAL}-{LOW_LEVEL_COOL} | 中性 | 正常持有 |
+        | {LOW_VETO_VALIDATED + 1}-{LOW_LEVEL_NEUTRAL} | 無底部訊號 | 勿接刀〔**此段未經驗證**〕 |
+        | 0-{LOW_VETO_VALIDATED} | ⛔ **實證否決區** | 不進場（其後180日中位 +1.3% vs 其他日 +27.5%，p=2e-07；非 BTC 幣對 4/4 獨立驗收通過） |
         """)
 
     # 六維卡片
@@ -523,7 +527,8 @@ _LOW_RUBRIC_MD = """
 | ⑥ 總經順風 **10**〔規則式＋待FRED〕 | 通膨/就業 dovish (7)〔待FRED回補驗證〕 | 通膨降溫 +4、就業轉弱 +3（上限 7） |
 | | 事件臨近 (3)〔規則式·不可擬合〕 | ≤1日→3｜≤3日→2｜≤7日→1｜無→0 |
 
-等級：≥75 強力抄底｜≥60 明確低估（觸發 LINE 抄底訊號）｜≥45 偏冷觀察｜≥25 中性｜<25 無底部訊號
+等級（2026-08-25 重校、2026-08-26 新增最低級；門檻正本＝`core.relative_low` 的具名常數）：
+≥56 強力抄底｜≥54 明確低估（觸發 LINE 抄底訊號）｜≥45 偏冷觀察｜≥26 中性｜6~25 無底部訊號〔未驗證〕｜**≤5 ⛔ 實證否決區**
 
 〔未擬合〕＝權重採專家設定、歷史樣本不足「待累積後可回測」（如 OI 自建快照）；〔灰燈〕＝資料源在純幣安環境可能缺漏。
 〔SOPR已驗〕＝SOPR 子項 2026-06 敏感度驗證通過（方向正確、加入無害；ETF 子項 2024+ 資料薄沿用專家權重）。

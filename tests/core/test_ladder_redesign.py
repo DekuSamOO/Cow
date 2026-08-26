@@ -156,3 +156,32 @@ def test_action_ensemble_thresholds_are_reachable():
     # 必須是 import 來的同一組值，不可再抄一份
     assert (AE.ESCAPE_HOT, AE.ESCAPE_WARM) == (TOP_LEVEL_HOT, TOP_LEVEL_WARM)
     assert (AE.LOW_STRONG, AE.LOW_VALUE) == (LOW_LEVEL_STRONG, LOW_LEVEL_VALUE)
+
+
+# ── 2026-08-26：抄底最低端新增「實證否決區」（唯一通過獨立驗收的雷達用法）──────
+def test_low_veto_zone_is_separated_from_unvalidated_band():
+    """
+    <=LOW_VETO_VALIDATED 與 6~25 必須是**不同**等級。
+
+    兩段的證據力天差地遠：<=5 有 BTCUSDT 設計 + 非 BTC 幣對 4/4 獨立驗收
+    （ETH/SOL/BNB/XRP，跨檔中位 -16.0%）；6~25 完全沒過驗證
+    （<=10/15/20/25 的否決比例 44~71%，事前判準 V3 全未過）。
+    合併顯示會讓使用者以為兩段有同等證據力 → 本測試就是防止日後有人「順手合併」。
+    """
+    from core.relative_low import relative_low_meta, LOW_VETO_VALIDATED, LOW_LEVEL_NEUTRAL
+    veto = relative_low_meta(LOW_VETO_VALIDATED)[0]
+    unvalidated = relative_low_meta(LOW_VETO_VALIDATED + 1)[0]
+    assert veto != unvalidated, "否決區與未驗證區被合併了"
+    assert "否決" in veto, f"最低級應標示為否決區，實得：{veto}"
+    # 邊界：5 在否決區、6 不在；26 以上不受影響
+    assert relative_low_meta(0)[0] == veto
+    assert relative_low_meta(LOW_LEVEL_NEUTRAL - 1)[0] == unvalidated
+    assert relative_low_meta(LOW_LEVEL_NEUTRAL)[0] != unvalidated
+
+
+def test_low_veto_action_states_the_evidence():
+    """否決區的操作建議必須帶數字——沒有數字的警語會被當成語氣詞忽略。"""
+    from core.relative_low import relative_low_meta
+    action = relative_low_meta(0)[2]
+    assert "不進場" in action
+    assert "%" in action, "否決建議應附實證數字，否則與一般警語無異"
