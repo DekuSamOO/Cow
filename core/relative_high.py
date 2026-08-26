@@ -66,6 +66,18 @@ TOP_LEVEL_HOT     = 49   # 🟠 明確過熱（P99）
 TOP_LEVEL_WARM    = 45   # 🟡 偏熱警戒
 TOP_LEVEL_NEUTRAL = 25   # ⚪ 中性   # 視窗內都沒越過基準 → 標示休眠（僅影響 label，不影響 score）
 
+# ⚠️ 2026-08-26 逐維體制驗證（`tests/top_cycle_dim_calib.py`；分數 vs 其後 180 日報酬的
+#    Spearman r，**期望負**，正值＝該維在說反話）。TRAIN 2019-09~2023-12：
+#      derivatives  30 分   -0.124 (p=8e-07)   ✅ 方向正確（資費維雖休眠，有值時是對的）
+#      technical    25 分   **+0.166** (p=4e-11)  ❌ 五維中**最有害**（頂背離 AUC 0.549 已知偏弱）
+#      onchain      26 分   **+0.096** (p=1e-04)  ❌ 有害（ETF 逃頂 AUC 0.380 方向反，n=14）
+#      sentiment    15 分   +0.043 (p=0.09)       ⚠️ 不顯著且方向反
+#      macro        10 分   回放恆為常數（FRED 被公司 SSL 擋）→ 無法評估
+#    整體總分：TRAIN r=+0.105（**方向相反**）、HOLDOUT r=-0.133（方向正確）→ **符號在兩段翻號**。
+#    曾試「新增純價格 cycle 維（冪律+距ATH）並移除 technical/onchain/sentiment 計分」：
+#      TRAIN 由 +0.105 改善到 -0.124，但 **HOLDOUT -0.126 未優於現行 -0.133 → 事前判準 H2 未過，否決落地**。
+#    → **配重維持現狀**。改動前務必先讀 `Github\Cow\歷程\20260826findings_雙向雷達體制診斷.md`，
+#      別再重跑同一個假說（holdout 驗收次數已用掉一次）。
 # Layer A 五維權重（各維最高分；理論總和 106，compute_escape_top_score clamp 到 100）
 WEIGHTS = {
     "derivatives": 30,   # 一、合約過熱（資金費率 20 + OI 10）

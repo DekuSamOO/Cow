@@ -10,6 +10,11 @@ core/relative_low_us.py  ·  v0.1（2026-07-02 新建）
 
 ⚠️ 狀態：v0.1，全數規則式、尚未在美股資料上跑過任何回測，見 `core/relative_high_us.py` 同節說明
 與 `core/relative_universal.py` 檔頭。權重配重理由同高點側鏡像。
+
+⛔ **2026-08-26 端到端重驗：確認無訊號，維持撤下。**
+八檔美股、波動標準化事件門檻（k_bot=1.90）：計時量法跨標的 AUC 中位 **0.521**、
+體制量法 Spearman r 中位 **+0.035**（方向正確 6/8，幅度接近 0）。
+**重啟條件與詳細數字見 `core/relative_high_us.py` 檔尾同節，兩側共用一套判準。**
 """
 from typing import Dict, Tuple
 
