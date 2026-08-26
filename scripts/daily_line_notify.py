@@ -839,7 +839,8 @@ def maybe_send_hedge_batch_alert(data: dict, dry_run: bool = False) -> None:
     """
     套保分批建倉哨兵（2026-08-25 立）— G3 觸發，分三批。
 
-    規則正本：`Work/BTC幣本位網格去留評估/BTC部位SOP.md`（2026-08-26 更名，原「升槓桿窗口執行清單」）附錄 E-1／E-2。
+    規則正本：vault `Literature Note/1a BTC部位SOP.md`（2026-08-26 更名並移入 Literature Note，
+    原放 `Work/BTC幣本位網格去留評估/`、原名「升槓桿窗口執行清單」）附錄 E-1／E-2。
       規模 0.1285 BTC（現貨的一半）｜產品＝**全倉套保**（非分段/網格套保）
       G3 前提：日線 RSI **曾 >75**（近 90 日）後回落
       三批：RSI <65 / <55 / <50，各 0.0428 BTC

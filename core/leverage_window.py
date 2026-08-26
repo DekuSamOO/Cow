@@ -4,7 +4,8 @@ core/leverage_window.py — 升槓桿窗口與熊底確認的單一真實來源�
 
 三處共用：scripts/daily_line_notify.py（LINE 哨兵）、BTC_WATCH.py（終端機視覺化）、
 未來的 dashboard。數字正本：vault
-`Work\\BTC幣本位網格去留評估\\BTC部位SOP.md`（2026-08-26 更名，原「升槓桿窗口執行清單」；附錄 B／D-1）。
+`Literature Note\\1a BTC部位SOP.md`（2026-08-26 更名並移入 Literature Note，
+原放 `Work\\BTC幣本位網格去留評估\\`、原名「升槓桿窗口執行清單」；附錄 B／D-1）。
 
 本模組只做純計算，不做 IO、不推播，方便測試對拍。
 
