@@ -297,6 +297,11 @@ def _build_swing_radar_box(s):
             "color": _light(s.get("composite_color") or "#2C3E50"),
             "size": "xs", "weight": "bold", "margin": "sm", "wrap": True,
         })
+        if s.get("composite_note"):
+            contents.append({
+                "type": "text", "text": s["composite_note"],
+                "color": "#999999", "size": "xxs", "margin": "xs", "wrap": True,
+            })
     contents.append(
         {"type": "text", "text": "≥60 觸發逃頂／抄底警報 · 風險量表非精準擇時 · 倉位未擬合僅供參考",
          "color": "#AAAAAA", "size": "xxs", "margin": "sm", "wrap": True})
@@ -351,16 +356,21 @@ def _build_risk_box(s):
     }
 
 
-def _build_advice_box(label, text, color):
-    """黃底建議 box（每日 Flex「策略建議」與逃頂警報「操作建議」共用）。"""
+def _build_advice_box(label, text, color, note=None):
+    """黃底建議 box（每日 Flex「策略建議」與逃頂警報「操作建議」共用）。
+    note（選填）：三軸合成的信心註記（core/action_ensemble.CRYPTO_ACTION_NOTES），不傳則不顯示。"""
+    contents = [
+        {"type": "text", "text": label, "color": "#888888", "size": "xxs", "weight": "bold"},
+        {"type": "text", "text": text, "color": color,
+         "size": "sm", "weight": "bold", "wrap": True, "margin": "xs"},
+    ]
+    if note:
+        contents.append({"type": "text", "text": note, "color": "#999999",
+                          "size": "xxs", "wrap": True, "margin": "xs"})
     return {
         "type": "box", "layout": "vertical", "margin": "lg",
         "backgroundColor": "#FFF9E6", "paddingAll": "md", "cornerRadius": "8px",
-        "contents": [
-            {"type": "text", "text": label, "color": "#888888", "size": "xxs", "weight": "bold"},
-            {"type": "text", "text": text, "color": color,
-             "size": "sm", "weight": "bold", "wrap": True, "margin": "xs"},
-        ],
+        "contents": contents,
     }
 
 
@@ -441,6 +451,9 @@ def build_action_alert_flex(data, prev_label=None):
     ]
     if pos:
         body.append({"type": "text", "text": pos, "size": "xs", "color": "#999999", "margin": "sm"})
+    if data.get("composite_note"):
+        body.append({"type": "text", "text": data["composite_note"], "size": "xxs",
+                     "color": "#999999", "wrap": True, "margin": "xs"})
     body.append({"type": "separator", "margin": "md"})
     body.append({"type": "text",
                  "text": f"趨勢 {data.get('trend_score')}｜逃頂 {data.get('escape_score')}｜抄底 {data.get('low_score')}",
@@ -517,7 +530,8 @@ def build_weekly_flex(data, esc, low, today):
     if data.get("composite_action"):
         body.append(_build_advice_box(
             "🎯 本週行動",
-            f"{data['composite_action']}｜{data.get('composite_pos', '')}", header_color))
+            f"{data['composite_action']}｜{data.get('composite_pos', '')}", header_color,
+            note=data.get("composite_note")))
 
     bubble = {
         "type": "bubble", "size": "giga",

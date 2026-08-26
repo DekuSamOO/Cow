@@ -62,12 +62,26 @@ CYCLE_DEEP_VALUE = 22
 
 POSITION_NOTE = "倉位區間為專家設定（未擬合），僅供方向參考"  # 回放校準受限，見 tests/position_calib.py
 
+# 2026-08-26：逃頂/抄底觸發分支的驗證狀態不對稱（見 relative_high.py:69-80、relative_low.py:73-84）
+# ——ESCAPE_DRIVEN 分支用的是 train/holdout 符號會反轉的複合分數；VALUE_DRIVEN 分支只有 ≤5 分
+# 否決區通過獨立驗收，54 分以上加碼訊號未經驗證。純趨勢分支（RIDE/DEFENSE/RANGE）不受影響。
+# ⚠️ 這個分類只適用 crypto：台股逃頂已驗證有效（AUC 0.571），呼叫端若是 TW/US 不可套用同一份文字。
+_ESCAPE_DRIVEN_KEYS = frozenset({"TAKE_PROFIT", "HOLD_TIGHTEN", "REDUCE", "FADE_RALLY"})
+_VALUE_DRIVEN_KEYS = frozenset({"ADD", "BOTTOM_FISH", "WATCH_REVERSAL", "ACCUMULATE"})
+
+CRYPTO_ACTION_NOTES = {
+    "escape_driven": "⚠️ 逃頂複合分數 train/holdout 方向不穩定，此建議僅供參考",
+    "value_driven": "⚠️ 抄底僅 ≤5 分否決區通過獨立驗收，此建議僅供參考",
+    "trend_only": "本次建議由趨勢軸決定，逃頂/抄底分數未達門檻",
+}
+
 
 def compute_composite_action(
     trend_net: Optional[float],
     escape_score: Optional[float],
     low_score: Optional[float],
     cycle_score: Optional[float] = None,
+    notes: Optional[dict] = None,
 ) -> Optional[dict]:
     """
     三軸 → 單一行動。trend_net 為 None 時無法分流，回 None（呼叫端隱藏該行）。
@@ -77,9 +91,13 @@ def compute_composite_action(
       與 low≥LOW_VALUE 同級觸發 ADD/ACCUMULATE/WATCH_REVERSAL——補強即時版 low 因 OI/ETF/SOPR
       缺項被拉低時的底部辨識（不傳則行為與舊版完全相同，向後相容）。
 
+    notes（選填）：{"escape_driven","value_driven","trend_only"} → 對應文字的 dict，
+      不傳則 confidence_note 為 None（向後相容，行為與舊版完全相同）。crypto 呼叫端可直接傳
+      CRYPTO_ACTION_NOTES；TW/US 呼叫端目前驗證狀態不同，不要套用同一份文字。
+
     回傳 dict：
       action_key / emoji / action（短語）/ detail（一句話）/
-      pos_low, pos_high（建議倉位 %）/ pos_label / color
+      pos_low, pos_high（建議倉位 %）/ pos_label / color / confidence_note
     """
     if trend_net is None:
         return None
@@ -120,11 +138,20 @@ def compute_composite_action(
             r = ("RANGE", "⚪", "區間操作", "無明確趨勢、估值中性：區間操作，等方向選擇", 40, 60, "#9E9E9E")
 
     key, emoji, action, detail, p_lo, p_hi, color = r
+    confidence_note = None
+    if notes:
+        if key in _ESCAPE_DRIVEN_KEYS:
+            confidence_note = notes.get("escape_driven")
+        elif key in _VALUE_DRIVEN_KEYS:
+            confidence_note = notes.get("value_driven")
+        else:
+            confidence_note = notes.get("trend_only")
     return {
         "action_key": key, "emoji": emoji, "action": action, "detail": detail,
         "pos_low": p_lo, "pos_high": p_hi,
         "pos_label": f"建議倉位 {p_lo}–{p_hi}%（未擬合）",
         "color": color,
+        "confidence_note": confidence_note,
     }
 
 

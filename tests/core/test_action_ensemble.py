@@ -88,6 +88,27 @@ def test_cycle_backward_compatible():
     assert compute_composite_action(-50, 10, 40, None)["action_key"] == "DEFENSE"
 
 
+def test_notes_absent_by_default():
+    # 不傳 notes → confidence_note 為 None，行為與舊版完全相同（向後相容）
+    out = compute_composite_action(30, _ESC_CALM, _LOW_CALM)
+    assert out["confidence_note"] is None
+
+
+@pytest.mark.parametrize("trend,esc,low,bucket", [
+    (30, _ESC_HOT, _LOW_CALM, "escape_driven"),       # TAKE_PROFIT
+    (-30, _ESC_HOT, _LOW_CALM, "escape_driven"),      # FADE_RALLY
+    (30, _ESC_CALM, _LOW_VALUE_ONLY, "value_driven"), # ADD
+    (-50, _ESC_CALM, _LOW_STRONG_V, "value_driven"),  # BOTTOM_FISH
+    (30, _ESC_CALM, _LOW_CALM, "trend_only"),         # RIDE
+    (-30, _ESC_CALM, _LOW_CALM, "trend_only"),        # DEFENSE
+    (0, _ESC_CALM, _LOW_CALM, "trend_only"),          # RANGE
+])
+def test_confidence_note_bucket(trend, esc, low, bucket):
+    notes = {"escape_driven": "ESC", "value_driven": "VAL", "trend_only": "TREND"}
+    out = compute_composite_action(trend, esc, low, notes=notes)
+    assert out["confidence_note"] == notes[bucket]
+
+
 @pytest.mark.parametrize("trend,mom,expected_key", [
     (73, "🟢 短線偏多", "RIDE_STRONG"),    # 強多頭
     (30, "🔴 短線偏空", "PULLBACK"),       # 多頭但短線轉弱 → 回檔

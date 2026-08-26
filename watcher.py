@@ -418,37 +418,11 @@ class UniversalMonitor:
                 return cmd          # 'back'（回上層重選）/ 'quit'（結束）
 
 
-def _sentinel_board():
-    """
-    七個 LINE 哨兵的總覽（2026-08-25 新增）。
-
-    放在進場畫面而不是各標的的面板裡：這些哨兵全是 BTC 專屬（升槓桿窗口／熊底 D3／
-    套保建倉…），塞進 2330 或 NVDA 的儀表板只會是雜訊；但每次開 watcher 都該看一眼
-    「哪些已響過、哪些待命」。BTC 儀表板內另有同一份總覽（BTC_WATCH._sentinel_board_rows）。
-
-    **純顯示：只讀 escape_alert_state.json，不推播。** 取不到就整段略過、不擋進場。
-    """
-    try:
-        from core.sentinel_board import sentinel_rows
-        # allow_remote=True：狀態檔只存在於 GH Actions artifact，本機沒有。
-        # 每 6 小時用 gh 抓一次快取（失敗沿用舊的、不擋進場）。
-        rows = sentinel_rows(allow_remote=True)
-    except Exception:
-        return
-    if not rows:
-        return
-    print("  LINE 哨兵（只顯示狀態，不推播；即時條件見 BTC 儀表板）")
-    for r in rows:
-        print("    " + r)
-    print("─" * 56)
-
-
 def _prompt_symbol() -> str:
     print("═" * 56)
     print("  Cow 通用監控  ·  輸入代號進入儀表板")
     print("  範例：BTCUSDT / ETHUSDT / SOLUSDT（幣）｜2330 / 0050（台股）｜QQQ / NVDA（美股）")
     print("─" * 56)
-    _sentinel_board()
     return input("  代號 > ").strip()
 
 

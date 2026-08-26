@@ -1,4 +1,4 @@
-# Cow — 比特幣投資戰情室 v3.46
+# Cow — 比特幣投資戰情室 v3.47
 
 > 比特幣多週期量化分析工具，整合技術指標、鏈上數據、期權與波段策略。
 
@@ -53,7 +53,7 @@ core/
   relative_low.py     相對底部（抄底雷達）單一真實來源：六維抄底評分(0-100，長週期深跌25/合約超冷20/技術回穩20/情緒恐慌15/鏈上10/總經10，權重經 relative_low_backtest 拍板)；compute_relative_low_score/relative_low_meta 供 BTC_WATCH path import，無 Streamlit 依賴。**分級六級（2026-08-26）**：≥56 強力抄底／≥54 明確低估／≥45 偏冷觀察／≥26 中性／6~25 無底部訊號〔**此段未經驗證**〕／**≤5 `⛔ 實證否決區`**——最低級是本雷達**唯一通過獨立驗收的用法**（`LOW_VETO_VALIDATED=5`）：BTCUSDT 設計端否決 31.3% 的日子、其後 180 日中位 +1.3% vs 未否決 +27.5%（p=2.0e-07），獨立驗收改測**非 BTC 幣對**（ETH −15.6%／SOL −16.3%／BNB −11.8%／XRP −32.5%，**4/4 方向一致**）。⚠️ 這是**否決條件不是進場條件**；6~25 刻意分開顯示，合併會讓兩段看起來證據力相同
   trend_direction.py  趨勢方向（波段雷達第三軸）單一真實來源：四維**有號**評分（均線結構±40/MACD±30/斜率±15/ADX±15）→ 淨分 [-100,+100]，ADX<20 方向三維打 0.6 折防盤整假突破；compute_trend_score/trend_meta/compute_trend_direction 供 dashboard/BTC_WATCH/LINE 共用，無 Streamlit 依賴
   radar_replay.py     三雷達歷史每日分數回放（逐日重放逃頂/抄底/趨勢分數，DIV_WINDOW 視窗切片避免 O(n²)）+ threshold_forward_stats（門檻向上跨越事件 → 其後 60 日報酬分布，±18% 命中定義與權重擬合一致、cooldown 防重複計數）；僅用歷史可得輸入（OI/ETF/SOPR/BTC.D/總經與線上灰燈一致給 0 → 分數為保守下界），無 Streamlit 依賴
-  action_ensemble.py  三軸合成行動建議**單一真實來源**（dashboard tab_macro_compass／LINE 推播／BTC_WATCH／watcher 共用，杜絕漂移）：compute_composite_action（趨勢方向 × 逃頂 × 抄底 → 11 種行動 + 建議倉位區間【專家設定，未擬合】；選填第 4 參數 cycle_score≥22「跌破2年均×0.8 且 跌破200週均」視同明確低估，補強即時 low 被 OI/ETF/SOPR 缺項拉低時的底部辨識，2 年回測歸納見 scripts/backtest_composite.py）；compute_trend_stance（股票/無衍生品標的精簡版：趨勢×短線動能 → 順勢持有/回檔/反彈/減碼/觀望）。邊界與 trend_meta/escape_top_meta/relative_low_meta/ESCAPE_ALERT_THRESHOLD 對齊，無 Streamlit 依賴
+  action_ensemble.py  三軸合成行動建議**單一真實來源**（dashboard tab_macro_compass／LINE 推播／BTC_WATCH／watcher 共用，杜絕漂移）：compute_composite_action（趨勢方向 × 逃頂 × 抄底 → 11 種行動 + 建議倉位區間【專家設定，未擬合】；選填第 4 參數 cycle_score≥22「跌破2年均×0.8 且 跌破200週均」視同明確低估，補強即時 low 被 OI/ETF/SOPR 缺項拉低時的底部辨識，2 年回測歸納見 scripts/backtest_composite.py）；compute_trend_stance（股票/無衍生品標的精簡版：趨勢×短線動能 → 順勢持有/回檔/反彈/減碼/觀望）。邊界與 trend_meta/escape_top_meta/relative_low_meta/ESCAPE_ALERT_THRESHOLD 對齊，無 Streamlit 依賴。**2026-08-26 新增選填參數 `notes`**：依觸發分支（逃頂驅動／抄底驅動／純趨勢）回傳對應的 `confidence_note`——逃頂驅動的 TAKE_PROFIT/HOLD_TIGHTEN/REDUCE/FADE_RALLY 用的複合分數 train/holdout 符號會反轉（見 relative_high.py 檔頭），抄底驅動的 ADD/BOTTOM_FISH/WATCH_REVERSAL/ACCUMULATE 只有 ≤5 分否決區通過獨立驗收；crypto 呼叫端統一吃 `CRYPTO_ACTION_NOTES` 常數，不傳 `notes` 行為與舊版相同（向後相容）
   relative_high_tw.py 台股相對高點（逃頂雷達）純函數 v0.5〔2026-07-02 全市場 swing 回測拍板〕：七維（技術衰竭30/估值過高30/量能見頂18/槓桿過熱10/法人派發4/籌碼鬆動8＋疊加 量價背離8，核心六維 100＋已驗證疊加，理論總分108 clamp 100），把加密專屬維度（funding/OI/鏈上）替換為台股對應（融資融券/三大法人/PE-PB絕對值/TDCC/成交量）+ `core.relative_universal` 通用量價訊號；技術維度複用 core/divergence、法人以近20日均量正規化。校準關鍵：估值 15→30（逃頂最強維，swing AUC PE 0.627/PB 0.640，絕對值大勝個股分位 0.452）、法人 25→10（雜訊 AUC 0.519）；量價背離 2026-07-02 全市場回測 AUC 0.566（>0.55）5→8 轉正式、結構轉折 AUC 0.483（雜訊/微反）移除不計分（純函數仍在 relative_universal 供美股用）。`WEAK_DIMS_HIGH_TW`=(leverage,institution,tdcc) 標 AUC<0.55 弱維、`UNFITTED_DIMS_HIGH_TW`=()（已無未擬合維）。量能維吃 `vol_pctile`（**近 `VOL_WINDOW`=5 日均量**的個股 expanding 分位；2026-08-10 `scripts/tw_volwindow_calib.py` 以 2079 檔／446 萬列／OOS≥2024 掃描 1/3/5/10/20 日視窗，逃頂 AUC 0.648/0.650/0.648/0.646/0.638、抄底側全 ≤0.521 無雙向混淆——**5 日不是更準而是更穩**，單日一根爆量即跳滿格隔天掉光，10/20 日則稀釋訊號；不取名目最高的 3 日，+0.002 屬雜訊）。`compute_relative_high_tw(..., forming_last=)` 供 live 盤中排除未結算今日棒，量能/量價/法人均量三個吃「量」的維度改用已結算日，回測腳本不傳此參數故 PiT 口徑不變。量能顯示用 `vol_snapshot`（純顯示不計分，回 `{ma, pctile, ratio, ref_window, n_pop}`）與 `vol_pctile` 共用 `_vol_series`（清洗）＋ `_vol_population`（母體＝歷史每日的同口徑 N 日均量）兩個單一出口——`n_pop` 直接取母體長度而非另立公式推導，畫面標的「共 N 筆」不可能與實際排名母體對不上。compute_relative_high_tw + relative_high_tw_meta，供 watcher 台股分支 import
   relative_low_tw.py  台股相對底部（抄底雷達）純函數 v0.4〔2026-07-02 全市場 swing 回測拍板＋反指標維移除〕：四維（槓桿清洗40/技術回穩30/法人吸籌20/估值深跌10，總分恰 100）；鏡像 relative_high_tw。校準關鍵：槓桿 20→30→40（抄底最強維，融資斷頭清洗 swing 真底vs假底 AUC 0.564）、技術回穩 25→30、估值 25→10（雜訊 AUC 0.45，台股便宜≠反彈＝價值陷阱，與加密「底部靠估值」相反）。2026-07-02 三項處置：大戶吸籌（TDCC）AUC 0.422（方向反）整維移除、量價背離/結構轉折抄底 AUC 0.500/0.516（雜訊）移除，釋出的 15 分用 `rescale_dim` 重配給最強兩維（不動內部分級）。**台股底部與加密非對稱：頂部靠估值貴、底部靠融資清洗。** PE/PB 用絕對值分級，`WEAK_DIMS_LOW_TW`=(institution,valuation)、`UNFITTED_DIMS_LOW_TW`=()（已無未擬合維）。compute_relative_low_tw + relative_low_tw_meta。⛔ **2026-08-26 端到端重驗：四維全數無訊號，不得作為進場依據**（`tests/tw_low_dim_audit.py`，14 檔合併 n=30,955 日）——leverage 0.490／technical 0.509／institution 0.489／valuation 0.480、總分 AUC 0.486，端到端 lift 在 15/30/45/55/65/75 六個門檻全部落在 0.96~1.15x。與上述 0.564 衝突的原因是**標籤口徑**：舊校準用固定 ±18%（台股個股僅 0.8~1.3σ），改用波動標準化後訊號消失。**舊數字不是算錯，是問錯問題。** 不重配權重——四維都沒訊號
   watch_plan.py       交易計畫檔（watch_plan.json）載入/驗證/衍生計算，純函數零網路（E1，2026-07-04）：TradePlan dataclass（entry 區間/stop/targets/size_pct/valid_until）＋載入即擋的價位順序驗證（long 須 stop<entry≤targets 遞增、short 鏡像；壞計畫收 errors 不拋，監控不因打錯字中斷）＋R 風報比＋過期判定；`load_plans_cached` mtime 快取（watcher 60s 輪詢、檔案沒動不重讀、盤中改檔下輪生效）＋`plan_panel_rows` 面板列。watch_plan.json 必留在 .gitignore（公開 repo，個人部位計畫不入庫）
@@ -80,7 +80,7 @@ service/
   etf_flow.py         美國現貨 BTC ETF 每日淨流量真實值（Farside read_html 解析）；抓得到更新 db/etf_flow.json，403 時回退快取（雲端讀 repo 內 db pattern），供逃頂「鏈上派發」維度；summary 含 stale_days（最新一筆距今天數，>4 天 Flex 顯示資料過舊警示）
   ohlc_universal.py   通用 OHLC 資料層（watcher.py 與 scripts/universal_watch_poc.py 共用單一來源）：classify_symbol 自動判市場（純數字4-6碼→台股.TW／含USDT/USD→幣安幣對／其餘→美股，BTC 各寫法標 is_btc=True）；fetch_ohlc 直連 Yahoo v8 chart JSON（不用 yfinance 套件，避公司 IP 429 + crumb/SSL），同端點吃幣對/美股/台股日線。台股 `.TW`（上市）查無資料自動改試 `.TWO`（上櫃 Yahoo 後綴）—— classify 無法離線預知上市/上櫃，故於 fetch 層解析；成功即 break（上市股不浪費第二次請求），全候選失敗才 `RuntimeError(... from last_err)` 保留原始錯誤。`fetch_live_quote` 除 price/ts/prev_close 外新增回傳 `volume`（meta.regularMarketVolume，同一次請求內、零額外網路成本，供 watcher 即時成交量/週轉率顯示）。`fetch_quote_meta(yahoo_symbol)` 回**整份 meta**（名稱/交易所/幣別等 `fetch_live_quote` 四個鍵之外的欄位），供 `scripts/stock_profile.py` 取基本資料——原本該檔自己複製一份請求迴圈並跨模組 import 私名 `_session`/`_tw_candidates`/`_YF_CHART`（與稽核 W-7 同一個錯），候選清單/UA/`_RESOLVED` 語意的正本只能有一份；本函式刻意**不寫 `_RESOLVED`**（成功條件只是「拿得到 meta」，比其餘兩支寬鬆，用它釘選候選會讓後續請求先試一個只有殼的 symbol）。**效率（2026-07-04 稽核批2）**：`_RESOLVED` resolved symbol 快取——上櫃股解析成功一次後直打 `.TWO`，不再每 60s 刷新都先吃一發注定 404 的 `.TW`（暫時性失敗不清快取）；`_session` 改模組級 lazy 單例（連線重用，60s 輪詢不重做 TCP+TLS 握手，公司 SSL 攔截環境握手更貴）。`is_daily_bar_forming(last_bar_date, is_tw, now=, is_crypto=)` 判斷最後一根是否為「今日進行式」（供 watcher 日線顯示與量能口徑共用）：股票需「交易時段中 ＆ 最後一根＝今天」；`is_crypto=True` 走 **UTC 日界且不看時段**（幣對 24/7 無收盤，套美股時段會讓每天 17.5 小時把仍在累積的今日棒當成已結算）
   tw_chip.py          台股籌碼/估值資料層（供 watcher 台股逃頂/抄底評分，替代加密的 funding/OI/鏈上）：get_chip_bundle(symbol, date, lookback=7) → {margin, institutional, valuation, tdcc, as_of}，每源獨立 best-effort 抓不到回 None。**EOD 日期 walk-back**：TWSE 日檔為盤後 EOD 公布，呼叫端常傳「今日」但今日未收/連假（如端午）會整片 None → 往前找「最近已公布交易日」（最多 lookback 天，跳過週末/未公布日），且探針要求**三日檔（BWIBBU 估值＋MI_MARGN 融資＋T86 法人）皆已公布**才採用該 `as_of`（三檔公布時間不同步，僅探 BWIBBU 會把 as_of 鎖在融資未出的當日 → 融資整片 None），三日檔對齊同一 `as_of`、減少多源×多日撞 TWSE 限流（探針命中即預熱快取、採用日不重抓）。TWSE 官方「市場全量單日檔」每小時快取 + filter symbol —— MI_MARGN(融資融券，單回應即含前日/今日餘額算變化)／T86(三大法人買賣超)／BWIBBU_d(本益比PB，上市)；Accept-Encoding 避 br（T86 brotli 解碼問題）。**上櫃籌碼四維 TPEx fallback**：估值/融資/法人三日檔皆「上市 TWSE → 上市查無（上櫃股）轉打對應 TPEx 端點」，`_fetch_market_file` 加 `base` 參數（預設 _TWSE，cache key 含 base 避撞檔；TPEx 日期皆 `_tpex_date` 轉 yyyy/mm/dd）——估值 `_get_valuation_tpex`（TPEx peQryDate，欄序 PE=2/殖利率=5/PB=6、無收盤價故 close=None）、融資 `_get_margin_tpex`（TPEx margin/balance，欄序 2前資/6資餘額/10前券/14券餘額，TWSE/TPEx 共用 `_margin_dict`）、法人 `_get_institutional_tpex`（TPEx insti/dailyTrade，欄序 4外資/13投信/22自營合計/23三大法人合計，與 TWSE T86 的 4/10/11/18 不同故分開）。→ 上櫃股（6488/8069）籌碼四維（融資/法人/估值/大戶）全部可用、逃頂/抄底不再灰燈（6488 抄底 15→38），上市路徑不變。TDCC 集保大戶分布鏡像 tw_stock_climber 的 GET→POST CSRF 爬法（SYNCHRONIZER_TOKEN）、pd.read_html 解析、大戶≥1000張/中實戶/散戶≤50張分級，同週同檔記憶體快取不重抓（`_fetch_tdcc_week` 抓單週、`get_tdcc` 自最近週五往前最多 `max_back_weeks=4` 週逐週試到已公布為止，因 TDCC 公布有延遲、最新週五常查無；傳明確 date_str 時只查該週）。**鏡像概念但不 import tw_stock_climber**（Cow 自包含、雲端可跑）。新增 `get_shares_outstanding(symbol)`（週轉率用已發行股數）：TWSE OpenAPI `t187ap03_L`（上市），查無轉打 TPEx OpenAPI `mopsfin_t187ap03_O`（上櫃），全市場單日檔回應大（~1MB+）實測 20–45 秒故 timeout 60s、日快取 `_SHARES_TTL=86400`（股本變動極不頻繁），失敗退回舊快取而非清空。⚠️ **NOT VERIFIED**：本函式僅 `tests/test_tw_chip_shares.py` mock 測試過，公司網路環境本次未做真實網路呼叫驗證，正式環境首次使用建議觀察週轉率數字是否合理
-  notification/       LINE/Telegram 推播模組（core 發送、builders 組 Flex：每日決策面板/逃頂警報分級配色/🎯 今日行動行/ETF 過舊警示/40KB 大小防線、facade 對外介面）
+  notification/       LINE/Telegram 推播模組（core 發送、builders 組 Flex：每日決策面板/逃頂警報分級配色/🎯 今日行動行/ETF 過舊警示/40KB 大小防線、facade 對外介面）。**2026-08-26**：今日行動行、操作訊號翻轉警報、週報三處皆附上 `composite_note`（信心註記，見 core/action_ensemble），與 dashboard/終端機同步不漂移
 
 strategy/
   swing.py              Antigravity v4.1 波段策略引擎（防先視偏誤、日頻 Sharpe、多週期回測引擎）
@@ -403,6 +403,27 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 ---
 
 ## 版本紀錄
+
+### v3.47 (2026-08-26)
+v3.46 把「逃頂/抄底複合分數的驗證狀態不對稱」寫進了 code 註解與 README，但畫面/推播上的
+使用者看不到——分數還沒到門檻時一切正常，一旦觸發 TAKE_PROFIT 或 ADD 這類分支，使用者
+不會知道那個建議背後的複合分數其實 train/holdout 符號會反轉、或只有否決端過了獨立驗收。
+本版把這件事**從註解搬到畫面**，不動任何決策矩陣或門檻。
+
+- **feat(action)**: `core/action_ensemble.compute_composite_action` 新增選填參數 `notes`，
+  回傳新增 `confidence_note` 欄位——依觸發分支（ESCAPE_DRIVEN／VALUE_DRIVEN／純趨勢）附對應
+  文字。crypto 呼叫端統一吃新常數 `CRYPTO_ACTION_NOTES`（集中管理，避免各呼叫端各寫一份漂移）；
+  不傳 `notes` 行為與舊版完全相同（向後相容，`tests/position_calib.py`／`scripts/tw_position_calib.py`
+  等既有呼叫端不受影響）。
+- **feat(action)**: `BTC_WATCH.py`（終端機）／`handler/tab_macro_compass.py`（Streamlit）／
+  `scripts/daily_line_notify.py` + `service/notification/builders.py`（LINE：每日卡片、操作訊號
+  翻轉警報、週報）四處全部接上 `confidence_note`，確保三邊看到的信心註記一致。
+  `_build_advice_box` 新增選填 `note` 參數（向後相容，另外兩個既有呼叫端不受影響）。
+- **fix(watcher)**: `watcher.py` 進場畫面（輸入代號那一步）移除哨兵總覽——七個 LINE 哨兵
+  全是 BTC 專屬，塞進 2330 或 NVDA 的選代號畫面只是雜訊。`_sentinel_board()` 無其他呼叫端，
+  一併刪除，不留死碼。BTC 儀表板內部既有的哨兵摘要（`BTC_WATCH._sentinel_board_rows`）不受影響。
+- **test**: `tests/core/test_action_ensemble.py` 新增 8 個測試（`notes` 預設 `None` 的向後相容、
+  三種觸發分支各自對到正確註記文字）。**513 passed**（原 505）。
 
 ### v3.46 (2026-08-26)
 建立**三資產類別分開的雷達評估標準**並用它把加密／台股／美股六個雷達全部重測一次。
@@ -1248,4 +1269,4 @@ watcher 面板誠實化：移除已回測無效的 Hash Ribbons 參考訊號、�
 
 ---
 
-**最後更新：2026-08-26（v3.46）**
+**最後更新：2026-08-26（v3.47）**

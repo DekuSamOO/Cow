@@ -343,7 +343,7 @@ def _compute_radars(btc_df, curr, latest_funding, price) -> dict:
     from core.relative_high import compute_relative_high
     from core.relative_low import compute_relative_low
     from core.trend_direction import compute_trend_direction
-    from core.action_ensemble import compute_composite_action
+    from core.action_ensemble import compute_composite_action, CRYPTO_ACTION_NOTES
     from service.bottom_metrics import get_latest_bottom_metrics
     from service.market_snapshot import get_btcd_trend, get_snapshot_staleness_days
     from service.etf_flow import get_etf_flow_summary
@@ -419,7 +419,8 @@ def _compute_radars(btc_df, curr, latest_funding, price) -> dict:
 
     # 三軸合成行動建議（與 dashboard 同源 core/action_ensemble；傳 cycle 子分補強底部辨識）
     comp = compute_composite_action(td["trend_score"], rh["escape_score"], rl["low_score"],
-                                    rl["low_signals"].get("cycle", {}).get("score"))
+                                    rl["low_signals"].get("cycle", {}).get("score"),
+                                    notes=CRYPTO_ACTION_NOTES)
     return {
         # 波段雷達 · 逃頂
         "escape_score": rh["escape_score"], "escape_level": rh["escape_level"],
@@ -441,7 +442,8 @@ def _compute_radars(btc_df, curr, latest_funding, price) -> dict:
         # 三軸合成（comp 為 None 時欄位缺省，builders 自動隱藏該行）
         **({"composite_emoji": comp["emoji"], "composite_action": comp["action"],
             "composite_detail": comp["detail"], "composite_key": comp["action_key"],
-            "composite_pos": comp["pos_label"], "composite_color": comp["color"]}
+            "composite_pos": comp["pos_label"], "composite_color": comp["color"],
+            "composite_note": comp.get("confidence_note")}
            if comp else {}),
         # 健康檢查：本機 OI 快照距今天數（>2 天時卡片顯示警告，揪出靜默失敗的排程）
         "snapshot_stale_days": snapshot_stale,

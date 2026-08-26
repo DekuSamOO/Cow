@@ -37,7 +37,7 @@ from core.season_forecast import (
     CYCLE_HISTORY,
 )
 from core.bottom_floors import compute_all_bottom_estimates
-from core.action_ensemble import compute_composite_action, POSITION_NOTE
+from core.action_ensemble import compute_composite_action, POSITION_NOTE, CRYPTO_ACTION_NOTES
 from core.relative_high import (compute_relative_high, compute_cycle_top_estimates,
                                 compute_cycle_top_state, FUNDING_HOT_8H, FUNDING_BASELINE_8H)
 from core.relative_low import (compute_relative_low, LOW_LEVEL_STRONG, LOW_LEVEL_VALUE,
@@ -474,6 +474,7 @@ def _render_composite_action(td, rh, rl):
         (td or {}).get('trend_score'),
         (rh or {}).get('escape_score'),
         (rl or {}).get('low_score'),
+        notes=CRYPTO_ACTION_NOTES,
     )
     if comp is None:
         return
@@ -485,6 +486,8 @@ def _render_composite_action(td, rh, rl):
         </span><br>
         <span style="color:#bbb;font-size:0.85rem;">{comp['detail']}</span>
     </div>""", unsafe_allow_html=True)
+    if comp.get("confidence_note"):
+        st.caption(comp["confidence_note"])
     st.caption(f"⚠️ {POSITION_NOTE}；三軸 = 趨勢方向 × 逃頂 × 抄底，與 LINE 推播同源 core/action_ensemble。")
 
 

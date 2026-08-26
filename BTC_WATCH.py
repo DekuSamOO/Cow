@@ -35,7 +35,7 @@ try:
     from core.trend_direction import compute_trend_score, trend_meta
     from core.momentum import momentum_ref_rows
     from core.bottom_floors import compute_all_bottom_estimates
-    from core.action_ensemble import compute_composite_action
+    from core.action_ensemble import compute_composite_action, CRYPTO_ACTION_NOTES
     _COW_OK = True
 except Exception as _e:  # noqa: BLE001
     print(f"[警告] 無法 import Cow core（{_e}）→ 退化為極簡模式（無六維評分）。")
@@ -516,11 +516,14 @@ class BitcoinMonitor:
         ct_comp, comp_rows = "", []
         if top is not None and low is not None and trend is not None:
             act = compute_composite_action(
-                trend[0], top[0], low[0], low[1]["cycle"]["score"])
+                trend[0], top[0], low[0], low[1]["cycle"]["score"],
+                notes=CRYPTO_ACTION_NOTES)
             if act:
                 _, comp_rows = _panel_stance(
                     "操作", f"{act['emoji']} {act['action']}", act["detail"])
                 comp_rows.append(f"     {act['pos_label']}")
+                if act.get("confidence_note"):
+                    comp_rows.append(f"     {act['confidence_note']}")
                 ct_comp = f"操作  {act['emoji']} {act['action']}"
 
         # 兩欄並排：操作｜趨勢、逃頂｜抄底（省垂直高度、一頁看完）。緊湊標題（略「訊號/可得」字樣）。
