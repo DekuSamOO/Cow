@@ -240,7 +240,10 @@ def sentinel_compact(top_score=None, gate=None, d3=None,
         line2 = "狀態讀不到（在 GH Actions artifact）→ 已推/已建不可信"
     else:
         act = st.get("last_action_label") or "—"
-        wk = (st.get("last_weekly_date") or "—")[5:]
+        # `[5:]` 是要把 "2026-08-26" 去掉年份成 "08-26"；**不可套在 fallback 上**
+        # ——"—"[5:] 會切成空字串，畫面顯示「週報 ｜馬丁」中間憑空缺一塊（2026-08-26 修）。
+        _wk = st.get("last_weekly_date")
+        wk = _wk[5:] if _wk else "—"
         mart = "已推" if st.get("last_mart_restart_key") else "—"
         src = ""
         if source == "remote":
@@ -250,5 +253,9 @@ def sentinel_compact(top_score=None, gate=None, d3=None,
                 src = "｜狀態源 artifact"
         line2 = f"行動 {act}｜週報 {wk}｜馬丁 {mart}{src}"
 
-    return [f"  LINE 哨兵      {esc}  {win}  {d3s}  {hedge}",
+    # ⚠️ 標籤欄一律補到**顯示寬度 16**（含開頭兩個空白），與同區其他行對齊
+    #    （現價／升槓桿哨兵／熊底確認 D3／哨兵狀態…全部是 16）。
+    #    "LINE 哨兵" 含半形字母，字面看起來跟四個中文字一樣長、實際只有 15，
+    #    原本補 6 格 → 17，整行右移一格。**改字串時用 core.term_ui._dw 量，不要目測。**
+    return [f"  LINE 哨兵     {esc}  {win}  {d3s}  {hedge}",
             f"  哨兵狀態      {line2}"]

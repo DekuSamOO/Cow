@@ -1,4 +1,5 @@
 """哨兵總覽（2026-08-25）單元測試 — 純顯示、不得有副作用。"""
+import re
 import core.sentinel_board as SB
 from core.sentinel_board import sentinel_rows, HEDGE_BATCHES, HEDGE_G3_PEAK
 
@@ -125,3 +126,31 @@ def test_compact_view_fits_panel_width():
 def test_full_view_still_seven_rows_for_entry_screen():
     """watcher 進場畫面仍用完整版（該頁沒有東西跟它搶垂直空間）。"""
     assert len(sentinel_rows(state={})) == 7
+
+
+# ── 標籤欄對齊（2026-08-26）───────────────────────────────────────────────────
+# 教訓：既有兩個版面測試只驗了「幾行」與「多寬」，**沒有人驗過左邊標籤欄對不對齊**，
+# 於是 "  LINE 哨兵      " 補了 6 格 → 顯示寬 17（同區其他行都是 16），整行右移一格，
+# 使用者實際看到才回報。半形字母混中文時字面長度會騙人，一律用 _dw 量。
+def test_compact_view_label_column_is_aligned():
+    """兩行的標籤欄顯示寬度必須都是 16，與 BTC_WATCH 即時行情區其他行一致。"""
+    from core.sentinel_board import sentinel_compact
+    from core.term_ui import _dw
+    rows = sentinel_compact(top_score=14,
+                            gate={"ok": False, "g1": False, "g2": True, "ahr": 0.5, "dath": 323},
+                            d3={"ok": False, "c1": False, "c2": False, "c3": True,
+                                "rebound": 0.35, "days": 56},
+                            rsi14=81.8, rsi_max_90d=85.9, state={})
+    # 標籤欄＝第一個「連續兩個以上空白」之前的部分，再加上那段空白
+    for r in rows:
+        m = re.match(r"^(\s{2}\S.*?\s{2,})", r)
+        assert m, f"抓不到標籤欄：{r!r}"
+        assert _dw(m.group(1)) == 16, \
+            f"標籤欄寬 {_dw(m.group(1))} != 16（會讓該行左右跑掉）：{m.group(1)!r}"
+
+
+def test_compact_view_labels_match_dashboard_convention():
+    """與 BTC_WATCH 即時行情區的既有標籤同寬——這是「對齊」的真正定義來源。"""
+    from core.term_ui import _dw
+    for lab in ("  現價          ", "  資金費率      ", "  升槓桿哨兵    ", "  熊底確認 D3   "):
+        assert _dw(lab) == 16, f"基準標籤 {lab!r} 寬 {_dw(lab)}，慣例已變請同步更新測試"
