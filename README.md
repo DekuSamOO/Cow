@@ -1,4 +1,4 @@
-# Cow — 比特幣投資戰情室 v3.47
+# Cow — 比特幣投資戰情室 v3.49
 
 > 比特幣多週期量化分析工具，整合技術指標、鏈上數據、期權與波段策略。
 
@@ -59,12 +59,17 @@ core/
   watch_plan.py       交易計畫檔（watch_plan.json）載入/驗證/衍生計算，純函數零網路（E1，2026-07-04）：TradePlan dataclass（entry 區間/stop/targets/size_pct/valid_until）＋載入即擋的價位順序驗證（long 須 stop<entry≤targets 遞增、short 鏡像；壞計畫收 errors 不拋，監控不因打錯字中斷）＋R 風報比＋過期判定；`load_plans_cached` mtime 快取（watcher 60s 輪詢、檔案沒動不重讀、盤中改檔下輪生效）＋`plan_panel_rows` 面板列。watch_plan.json 必留在 .gitignore（公開 repo，個人部位計畫不入庫）
   watch_alerts.py     警戒引擎（E2/E3，2026-07-04）純函數核心：`check_price_events`（入進場區/破停損/達目標，各自獨立武裝；遲滯防抖沿用 scripts/price_alert.py 實戰 pattern——觸發解除武裝、離開觸發價位 0.5% 才重武裝，免費源延遲價震盪不狂響；過期計畫不觸發）＋`check_signal_change`（composite action_key 變化、同 key 去重、首次觀測不觸發）＋`journal_append`/`journal_record`（logs/watch_journal.jsonl 一行一事件，含觸發當下訊號快照；寫入失敗靜默不干擾盯盤）＋`notify_beep`（winsound 兩短音、非 Windows 退終端 bell）。通知本地 only，LINE 推播明確不在 v1
   relative_high_us.py／relative_low_us.py 美股相對高低點（逃頂/抄底雷達）純函數 v0.1〔2026-07 新建〕：美股個股槓桿/法人/IV 無免費源，改用純 OHLCV 三維（技術背離50＋量價背離30＋結構轉折20，理論/實際總分皆 100）——技術維度複用 `relative_high_tw._score_technical_high`／`relative_low_tw._score_technical_low`（跨市場外插）並以 `rescale_dim` 換算到本框架宣告的 max 50（原函式固定 max 30/25，須 rescale 才不會讓實際上限被鎖在 80/75）；量價/結構維度來自 `core.relative_universal`。全數規則式、尚未在美股資料上跑過回測。compute_relative_high_us/low_us + relative_high_us_meta/relative_low_us_meta。⛔ **2026-08-26 端到端重驗：確認零訊號，維持撤下**（八檔 SPY/QQQ/AAPL/NVDA/MSFT/AMZN/GOOGL/META，波動標準化事件門檻）——逃頂計時 AUC 中位 **0.500**、體制 r 中位 **+0.011（方向還反了，4/8）**；抄底 0.521／+0.035（6/8）。**重啟條件三條寫在 `relative_high_us.py` 檔尾，缺一不可**
+  sentinel_board.py   七個 LINE 哨兵的**總覽與共用常數單一來源**（2026-08-25 立）：純顯示零副作用，只讀 `escape_alert_state.json`（本機沒有時用 gh CLI 抓 GH Actions artifact，6 小時 TTL）。套保建倉哨兵的三個常數也收在這裡供 `daily_line_notify` 與 `BTC_WATCH` 共用——`HEDGE_BATCHES`（65/55/50 各 0.0428 BTC）、`HEDGE_G3_PEAK`=75、`HEDGE_G3_WINDOW`=20。**檔頭寫著 RSI 判斷依據正本**：日線 RSI-14（Wilder）、口徑為**收完的日線收盤**（排除當日未收 K 棒）、前提為近 20 日曾 >75、觸發為嚴格小於門檻；**口徑的實作正本＝`closed_daily_rsi(df, window)`**（回 `(rsi14_closed, rsi_peak, closed_date)`，收完的日線不滿 window 根就回三個 None——湊不滿整個視窗算出的 peak 會低估，寧可讓哨兵報缺值略過），`daily_line_notify` 與 `BTC_WATCH` **都呼叫它、不各自實作**：口徑只寫在註解裡而程式碼各自為政，正是這次 90→20 與 `btc`→`btc_df` 的同一種成因。20 日對齊回測 `V1_bottom_and_hedge.py` 的 `rolling(20).max()`；實作一度寫成 90 日（從未被回測支持），2026-09-02 掃過 20/40/60/90 四個視窗確認分不出來後改回 20
   leverage_window.py  升槓桿窗口 + 熊底確認 D3 **單一真實來源**（2026-08-25 立，`scripts/daily_line_notify.py` 的 LINE 哨兵與 `BTC_WATCH.py` 的終端機摘要共用；純計算、零 IO、零 Streamlit 依賴）：`gate_status`（AHR999／距 ATH 兩道閘門，缺值回 ok=None 不可判定）＋`trigger_price`（AHR999 對價格是二次式 → 門檻價 = P×sqrt(ahr_max/ahr)，**是下界**，真跌下去 SMA200 會跟著下移故實際觸發價更高，只作「還差多少」的量級顯示不作下單價）＋`advance_batches`（分批推進，見下）＋`find_bear_low`（自 ATH 之後、且**已跌逾 `BEAR_DRAWDOWN`=30%** 的區間裡取最低收盤；不加這道跌幅門檻，熊市初期價格還在高檔就會被當成低點而誤判 D3。只回「值與位置」不回天數——兩個呼叫端的天數基準本就不同：BTC_WATCH 手上是完整日線用 K 棒位移，LINE 哨兵是 cron 執行、當日 K 棒可能還沒收故用日曆天）＋`d3_status`（熊底確認＝自最低點反彈 ≥50% 且距最低點 ≥90 天，PREREG 預簽定義）＋`compact_rows`（兩行橫向摘要，見 BTC_WATCH 版面說明）。**`advance_batches` 以「訊號日」累計而非日曆日**：回測 `D1_batching.py` 的 gap 是訊號日索引，閘門暫時不成立的日子只是不計數、不重置建構；舊版用「日曆日＋開窗即重置」，2018 那段窗口被 2~6 天的小反彈切成 7 截＝重置 6 次、六批永遠投不完。關窗只暫停不歸零，連續關窗超過 `WINDOW_RESET_DAYS`=90 天才視為換一個熊市階段而重置
 
 service/
   local_db_reader.py  讀取本地 SQLite（15m 原始 / 重採樣日線），TTL 快取，全面 UTC 時區
   market_data.py      BTC / DXY 歷史數據（五層備援：本地DB→Yahoo→Binance→Kraken→CryptoCompare）
-                      + T 日數據縫合，全面 UTC 時區（修正 UTC+8 偏移 8 小時 bug）
+                      + T 日數據縫合，全面 UTC 時區（修正 UTC+8 偏移 8 小時 bug）。
+                      **每次更新重抓最後 `REFETCH_TAIL_DAYS`=3 天覆蓋**：舊版只從 last_date+1
+                      往後接，而 last_date 那一列寫入時當日 K 棒往往還沒收（存下的是盤中殘值），
+                      於是那根殘值永遠不會被修正——近 300 天對 Binance 實測有 17 天收盤差 >0.5%
+                      （最大 3.64%），其中 2026-09-01 差 1.64% 足以讓「RSI<65」這種門檻判斷反向
   onchain.py          鏈上輔助數據（非同步 httpx 並行，TVL/穩定幣/資金費率歷史）
   realtime.py         即時報價（Binance→Kraken→本地DB 三層備援）
                       含資金費率/OI（Binance→Bybit→OKX 三層），Header 偽裝與 SSL 繞過
@@ -89,7 +94,7 @@ strategy/
   notifier.py           LINE Bot 主動推播通知模組
 
 scripts/
-  daily_line_notify.py     GitHub Actions 雲端自動推播腳本（Kraken 備援，台灣 08:23 / 13:39 / 18:27 三時段，含新聞輿情、逃頂警報分級/分數Δ/遲滯狀態機、OI 快照過期警告、週日傍晚場次加推文字週報，時段閘門 hour<17 早退使本地/手動執行也僅傍晚才發；另含 maybe_send_mart_restart_alert 每日馬丁止盈重啟偵測，見下方 price_alert 說明；另含 maybe_send_leverage_window_alert 每日升槓桿窗口哨兵，AHR999 與距 ATH 兩道閘門同時成立才開窗、**分批以「訊號日」累計、關窗只暫停不歸零**；另含 maybe_send_bear_bottom_confirm_alert 熊底確認 D3 哨兵，成立即只推一次、語意為「本輪熊市視為結束→升槓桿窗口可能不再開，馬丁的 USDT 該考慮換現貨」。兩者的判定邏輯與門檻皆委由 `core/leverage_window`，本檔只負責取數與組推播文案）
+  daily_line_notify.py     GitHub Actions 雲端自動推播腳本（Kraken 備援，台灣 08:23 / 13:39 / 18:27 三時段，含新聞輿情、逃頂警報分級/分數Δ/遲滯狀態機、OI 快照過期警告、週日傍晚場次加推文字週報，時段閘門 hour<17 早退使本地/手動執行也僅傍晚才發；另含 maybe_send_mart_restart_alert 每日馬丁止盈重啟偵測，見下方 price_alert 說明；另含 maybe_send_leverage_window_alert 每日升槓桿窗口哨兵，AHR999 與距 ATH 兩道閘門同時成立才開窗、**分批以「訊號日」累計、關窗只暫停不歸零**；另含 maybe_send_bear_bottom_confirm_alert 熊底確認 D3 哨兵，成立即只推一次、語意為「本輪熊市視為結束→升槓桿窗口可能不再開，馬丁的 USDT 該考慮換現貨」。兩者的判定邏輯與門檻皆委由 `core/leverage_window`，本檔只負責取數與組推播文案；另含 maybe_send_hedge_batch_alert 套保分批建倉哨兵 G3，門檻與視窗取自 `core/sentinel_board`，RSI 一律用**收完的日線收盤**、每批只推一次）
   price_alert.py           GitHub Actions 每小時價格警報（防守線＝config.ALERT_PRICE_LOW；文案由 config.DEFENSE_LADDER 三階推移表動態組裝，含同日去重 + armed 遲滯：跌破推一次、回升門檻+$500 才重新武裝。觸發價/釋出量等真實數字自 2026-07-06 起改由私有來源載入，見 config_private.py.example。**2026-08-21 起 ALERT_PRICE_LOW 與第 1 階觸發價解耦**——馬丁止盈重啟會讓階梯觸發價上飄並改變執行順序，警報價則刻意不跟漲，定位為「高於全部三階、留足台股 T+2 的獨立預警價」，守門判準為 >= 而非 ==）
   test_flex_message.py     本地端測試 LINE Flex Message 排版的除錯腳本
   test_compare_backtest.py 驗證腳本：對相同參數同時執行 swing.py 與 Walk-Forward，確認結果量級一致
@@ -106,6 +111,8 @@ handler/
 tests/
   test_bear_bottom.py   熊市底部指標單元測試
   test_dual_invest.py   雙幣期權策略單元測試
+  test_hedge_batch_alert.py  套保建倉哨兵 G3 單元測試（收盤口徑/嚴格小於/去重/單一來源常數，
+                        另含 bytecode+AST 靜態守衛：`core/`+`scripts/` **全目錄**禁止讀取哪裡都沒綁定的全域名稱）
   test_market_data.py   數據來源與備援鏈單元測試
   test_news.py          新聞聚合/去重/情緒彙總/中文化降級單元測試（monkeypatch 不打真 API）
   core/test_bottom_floors.py  最低價綜合評估離線單元測試（礦工成本/趨勢外插/final_low/可靠度加權中位數 ensemble/_weighted_median + 權重敏感度與 config 單一來源，注入 onchain/hashrate，10 passed）
@@ -403,6 +410,42 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 ---
 
 ## 版本紀錄
+
+### v3.49 (2026-09-02)
+套保建倉哨兵（v3.48 前一版建立）**自建立起從未有能力觸發**：組 summary 時用了未定義的變數
+`btc`（該用 `btc_df`），NameError 被外層 `except Exception` 吞掉 → `rsi_max` 恆為 None →
+每天都在第一個 guard 就 return。而 `BTC_WATCH` 的哨兵總覽是自己算 RSI 峰值，畫面顯示一切正常，
+**8 天沒人發現**；2026-09-02 使用者看到 watcher 顯示 RSI 64 卻沒收到推播才查出來。
+本版連同「哨兵吃的是哪一根 K 棒」「前提視窗幾天」兩處研究與實作不一致一併修正。
+
+- **fix(notify)**: `daily_line_notify.py` 的 `btc` → 收盤口徑計算，套保哨兵才有可能發出推播。
+- **fix(notify)**: 哨兵改吃**收完的日線收盤**（新增 `rsi14_closed` / `rsi_peak`），不再用
+  `curr`（cron 執行時當日 K 棒通常還沒收）。依據：回測 `U2_expectation.py` 是 15m 重採樣成
+  1D、close 取當日最後一筆，進場價也是當日收盤，**從沒測過盤中破門檻就進場**。
+- **fix(core)**: G3 前提視窗 90 日 → `HEDGE_G3_WINDOW`=20，對齊回測 `V1_bottom_and_hedge.py`
+  的 `rolling(20).max()`。90 是實作階段自己長出來的、從未被回測支持。2026-09-02 用同一套方法
+  掃 20/40/60/90：逐日口徑排 20 第一、進場事件口徑排 90 第一，**兩種計數方式給相反答案**，
+  12 格判讀有 9 格的 moving-block bootstrap 區間標成分不出來；90 的優勢可完整歸因到
+  「峰值 61~90 天前」單一分桶（n=5~22、事件擠在少數幾段行情、年齡剖面非單調）→ 判定無證據支持
+  更動，維持回測原定義 20。
+- **refactor(core)**: `HEDGE_BATCHES` 收回 `core/sentinel_board` 單一來源（原本 sentinel_board
+  與 daily_line_notify 各寫一份 65/55/50）；`rsi_max_90d` 更名 `rsi_peak`——名稱寫死天數是
+  下一次漂移的溫床。同輪把「取收完的日線收盤＋近 window 日峰值」抽成 `closed_daily_rsi()`：
+  `daily_line_notify` 與 `BTC_WATCH` 原本各手刻一份，且兩份的長度守門條件已經不一致
+  （前者沒有、後者 `len(df) >= window`），是下一次口徑漂移的溫床。
+- **fix(market_data)**: 新增 `REFETCH_TAIL_DAYS`=3，每次更新重抓最後 3 天覆蓋，盤中殘值不再
+  永久留在 `BTC_HISTORY.csv`（詳見「架構」段）。連帶移除「本地已追上今天就整段跳過抓取」那條
+  舊捷徑——它正是殘值永遠不被修正的原因（`last_date` 那一列本身就可能是殘值，跳過等於不修它）；
+  代價是每次呼叫都會走一次來源鏈，由外層 `@st.cache_data(ttl=300)` 吸收。
+  ⚠️ 歷史上已寫壞的 16 天不會自動修復。
+- **fix(watch)**: `BTC_WATCH` 哨兵總覽那一列改用同一口徑，讓畫面顯示＝哨兵實際會怎麼判；
+  面板其他 RSI 讀值（逃頂／抄底計分）維持即時值不變。
+- **test**: 新增 `tests/test_hedge_batch_alert.py` 11 條。其中靜態守衛用 bytecode + AST 兩套
+  機制找「讀取了哪裡都沒綁定的全域名稱」，掃 **`core/` 與 `scripts/` 全目錄（50 檔）**、不是只
+  釘住這次踩雷的兩個檔（只釘兩檔擋住的是那個實例、不是 bug 的類別，下一支新腳本照樣能再犯）；
+  **拿修好前的檔案反向測過會 fail**（`修好之前: ['btc']`／`修好之後: （無未綁定名稱）`）——
+  擋的是原 bug 的類別（NameError 被 except 吞掉、哨兵靜默死掉不報錯），不是只擋 `btc` 這一個實例。
+  **526 passed**（原 515）。
 
 ### v3.48 (2026-08-26)
 D3 熊底確認的網格緩衝機制（`1a BTC部位SOP.md` 情境二 F-2）原本只推文字提醒叫使用者
@@ -1293,4 +1336,4 @@ watcher 面板誠實化：移除已回測無效的 Hash Ribbons 參考訊號、�
 
 ---
 
-**最後更新：2026-08-26（v3.48）**
+**最後更新：2026-09-02（v3.49）**

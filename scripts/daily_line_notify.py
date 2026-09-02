@@ -66,6 +66,8 @@ from core.season_forecast import forecast_price, STATS as _SEASON_STATS
 from core.bottom_floors import compute_all_bottom_estimates
 from core.risk import compute_atr_risk
 from service.bottom_metrics import get_latest_bottom_metrics, fetch_hashrate_history_ths
+from core.sentinel_board import (HEDGE_BATCHES, HEDGE_G3_PEAK, HEDGE_G3_WINDOW,
+                                 closed_daily_rsi)
 
 
 def _get_cycle_meta(score: int):
@@ -256,12 +258,20 @@ def get_decision_data():
             summary["trend_color"] = "#00ff88" if is_bull_trend else "#ff4b4b"
 
             rsi = curr.get('RSI_14', 0)
-            # 套保建倉哨兵（G3）需要數值與「近 90 日是否曾 >75」
             summary["rsi14"] = float(rsi) if rsi else None
+            # ── 套保建倉哨兵（G3）的 RSI（2026-09-02 對齊回測）─────────────────
+            # 口徑正本＝`core.sentinel_board.closed_daily_rsi`（收完的日線收盤，排除
+            # 當日未收 K 棒；本 cron 執行時當日 K 棒通常還沒收）。**不要在這支重算**。
+            # 原本這段用了**未定義的變數 `btc`**（該用 btc_df），NameError 被外層 except
+            # 吞掉 → rsi_max 恆為 None → 哨兵自 2026-08-25 建立起從未有能力觸發；
+            # 2026-09-02 由使用者發現 watcher 顯示 RSI 64 卻沒收到推播才查出來。
             try:
-                summary["rsi_max_90d"] = float(btc["RSI_14"].tail(90).max())
-            except Exception:
-                summary["rsi_max_90d"] = None
+                (summary["rsi14_closed"], summary["rsi_peak"],
+                 summary["rsi_closed_date"]) = closed_daily_rsi(btc_df)
+            except Exception as e:
+                print(f"X 套保 RSI（收盤口徑）計算失敗，哨兵將略過：{e}")
+                summary["rsi14_closed"] = None
+                summary["rsi_peak"] = None
             summary["rsi_text"] = f"{'🟢' if rsi > 50 else '🔴'} ({rsi:.1f})"
             summary["rsi_color"] = "#00ff88" if rsi > 50 else "#ff4b4b"
 
@@ -940,26 +950,27 @@ def maybe_send_hedge_batch_alert(data: dict, dry_run: bool = False) -> None:
     規則正本：vault `Literature Note/1a BTC部位SOP.md`（2026-08-26 更名並移入 Literature Note，
     原放 `Work/BTC幣本位網格去留評估/`、原名「升槓桿窗口執行清單」）附錄 E-1／E-2。
       規模 0.1285 BTC（現貨的一半）｜產品＝**全倉套保**（非分段/網格套保）
-      G3 前提：日線 RSI **曾 >75**（近 90 日）後回落
+      G3 前提：日線 RSI **曾 >HEDGE_G3_PEAK**（近 HEDGE_G3_WINDOW 日）後回落
       三批：RSI <65 / <55 / <50，各 0.0428 BTC
+      口徑：**收完的日線收盤**（排除當日未收 K 棒），依據見 core/sentinel_board.py 檔頭
       平倉（優先於一切）：AHR999<0.40 開窗，或 D3 熊底確認 → **全部平倉**
 
     為什麼要哨兵：這三個觸發原本只寫在附錄裡，靠人每天自己看 RSI，漏看就錯過批次。
     每批只推一次，狀態存 escape_alert_state.json 的 hedge_batch_{n}。
     """
-    rsi = data.get("rsi14")
-    rsi_max = data.get("rsi_max_90d")
+    rsi = data.get("rsi14_closed")      # 收完的日線收盤，不是盤中值
+    rsi_max = data.get("rsi_peak")
     price = data.get("current_price")
     if rsi is None or rsi_max is None:
         print("OK 套保建倉：RSI 資料缺值，略過。")
         return
-    if rsi_max <= 75:
-        print(f"OK 套保建倉：G3 前提未成立（近 90 日 RSI 最高 {rsi_max:.1f}，需 >75）。")
+    if rsi_max <= HEDGE_G3_PEAK:
+        print(f"OK 套保建倉：G3 前提未成立（近 {HEDGE_G3_WINDOW} 日 RSI 最高 {rsi_max:.1f}，"
+              f"需 >{HEDGE_G3_PEAK}）。")
         return
 
     state = _load_escape_state()
-    batches = [(1, 65, 0.0428), (2, 55, 0.0428), (3, 50, 0.0429)]
-    due = [(n, thr, qty) for n, thr, qty in batches
+    due = [(n, thr, qty) for n, thr, qty in HEDGE_BATCHES
            if rsi < thr and not state.get(f"hedge_batch_{n}")]
     if not due:
         print(f"OK 套保建倉：無新批次（RSI {rsi:.1f}）。")
@@ -968,7 +979,8 @@ def maybe_send_hedge_batch_alert(data: dict, dry_run: bool = False) -> None:
     n, thr, qty = due[0]          # 一次只推一批，避免同日連推三則
     lines = [
         f"[套保建倉] 第 {n} 批觸發",
-        f"日線 RSI {rsi:.1f} < {thr}｜近 90 日曾達 {rsi_max:.1f}（G3 前提成立）",
+        f"日線 RSI {rsi:.1f} < {thr}（{data.get('rsi_closed_date', '?')} 收盤）",
+        f"近 {HEDGE_G3_WINDOW} 日曾達 {rsi_max:.1f} > {HEDGE_G3_PEAK}（G3 前提成立）",
         f"BTC ${price:,.0f}" if price else "",
         "",
         f"動作：開 {qty} BTC 的**全倉套保**（幣本位 1x 做空）。",

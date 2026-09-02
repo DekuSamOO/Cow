@@ -33,6 +33,9 @@ if not SSL_VERIFY:
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 BTC_CSV = "db/cache/BTC_HISTORY.csv"
+# 每次更新都重抓最後 N 天覆蓋（見 fetch_market_data 內註解）。3 天足以蓋掉盤中殘值，
+# 又不會把整段歷史重拉。
+REFETCH_TAIL_DAYS = 3
 
 # 確保 CSV 快取目錄存在（Streamlit Cloud 上 db/cache/ 被 gitignore，首次啟動時不存在）
 os.makedirs(os.path.dirname(BTC_CSV), exist_ok=True)
@@ -285,22 +288,28 @@ def fetch_market_data():
         last_date = None
 
     # 2. 確定需要下載的範圍
-    start_fetch_date = None
     
-    if last_date and last_date < today:
-        start_fetch_date = (last_date + timedelta(days=1)).strftime('%Y-%m-%d')
-    elif not last_date:
+    # 尾端重抓（2026-09-02）：last_date 那一列寫入時當日 K 棒往往還沒收，存下來的是
+    # **盤中殘值**；舊版只從 last_date+1 往後接，那根殘值就永遠不會被修正。
+    # 近 300 天對 Binance 日線實測：17 天收盤差 >0.5%（最大 3.64%，2026-06-05），
+    # 其中 2026-09-01 差 1.64%（78,666 vs 77,400）—— 足以讓「RSI<65」這種門檻判斷反向。
+    # → 一律重抓最後 REFETCH_TAIL_DAYS 天；合併時 keep='last'，後抓的新值勝出。
+    if last_date:
+        start_fetch_date = (last_date - timedelta(days=REFETCH_TAIL_DAYS - 1)).strftime('%Y-%m-%d')
+    else:
         start_fetch_date = "2015-01-01"
 
-    # 若有需要更新的日期，開始抓取
+    # 開始抓取。`start_fetch_date` **恆有值**：尾端重抓之後，「本地已追上今天就整段
+    # 跳過抓取」那條舊捷徑刻意不再存在 —— last_date 那一列本身就可能是盤中殘值，
+    # 跳過等於永遠不修它。代價是每次呼叫都會走一次來源鏈，由外層 @st.cache_data(ttl=300)
+    # 吸收（Streamlit 長駐下至多每 5 分鐘一次；cron 腳本本來就只跑一次）。
     btc_new = pd.DataFrame()
-    if start_fetch_date:
-        from core.data_sources import build_btc_history_chain
-        chain = build_btc_history_chain(session)
-        result = chain.fetch(start_fetch_date)
-        if result.data is not None and not result.data.empty:
-            btc_new = result.data
-            logger.info(f"[Market] {result.source_used} 成功，取得 {len(btc_new)} 筆")
+    from core.data_sources import build_btc_history_chain
+    chain = build_btc_history_chain(session)
+    result = chain.fetch(start_fetch_date)
+    if result.data is not None and not result.data.empty:
+        btc_new = result.data
+        logger.info(f"[Market] {result.source_used} 成功，取得 {len(btc_new)} 筆")
 
     # 3. 合併並存檔
     if not btc_new.empty:

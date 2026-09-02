@@ -68,11 +68,11 @@ def test_escape_tier_thresholds_are_reachable():
 
 
 def test_hedge_row_reflects_g3_precondition_and_progress():
-    armed = sentinel_rows(rsi14=60.0, rsi_max_90d=86.0, state={})[5]
+    armed = sentinel_rows(rsi14=60.0, rsi_peak=86.0, state={})[5]
     assert "G3✅" in armed and "已建 0/3" in armed
-    not_armed = sentinel_rows(rsi14=60.0, rsi_max_90d=70.0, state={})[5]
+    not_armed = sentinel_rows(rsi14=60.0, rsi_peak=70.0, state={})[5]
     assert "G3✕" in not_armed
-    done = sentinel_rows(rsi14=60.0, rsi_max_90d=86.0,
+    done = sentinel_rows(rsi14=60.0, rsi_peak=86.0,
                          state={"hedge_batch_1": True})[5]
     assert "已建 1/3" in done
 
@@ -101,7 +101,7 @@ def test_compact_view_is_two_lines():
                             gate={"ok": False, "g1": False, "g2": True, "ahr": 0.5, "dath": 323},
                             d3={"ok": False, "c1": False, "c2": False, "c3": True,
                                 "rebound": 0.35, "days": 56},
-                            rsi14=81.8, rsi_max_90d=85.9, state={})
+                            rsi14=81.8, rsi_peak=85.9, state={})
     assert len(rows) == 2, f"壓縮版必須兩行，實際 {len(rows)} 行"
 
 
@@ -118,7 +118,7 @@ def test_compact_view_fits_panel_width():
                                 gate={"ok": True, "g1": True, "g2": True, "ahr": 0.39, "dath": 400},
                                 d3={"ok": True, "c1": True, "c2": True, "c3": True,
                                     "rebound": 1.08, "days": 120},
-                                rsi14=49.0, rsi_max_90d=86.0, state=state)
+                                rsi14=49.0, rsi_peak=86.0, state=state)
         for r in rows:
             assert _dw(r) <= limit, f"寬 {_dw(r)} > 版面下限 {limit}：{r}"
 
@@ -140,7 +140,7 @@ def test_compact_view_label_column_is_aligned():
                             gate={"ok": False, "g1": False, "g2": True, "ahr": 0.5, "dath": 323},
                             d3={"ok": False, "c1": False, "c2": False, "c3": True,
                                 "rebound": 0.35, "days": 56},
-                            rsi14=81.8, rsi_max_90d=85.9, state={})
+                            rsi14=81.8, rsi_peak=85.9, state={})
     # 標籤欄＝第一個「連續兩個以上空白」之前的部分，再加上那段空白
     for r in rows:
         m = re.match(r"^(\s{2}\S.*?\s{2,})", r)

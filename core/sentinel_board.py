@@ -21,6 +21,7 @@ import json
 import os
 import subprocess
 import time
+from datetime import datetime, timezone
 from typing import Optional
 
 _COW = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -37,7 +38,43 @@ WORKFLOW = "daily_line_notify.yml"
 REMOTE_TTL_SEC = 6 * 3600
 
 HEDGE_BATCHES = ((1, 65, 0.0428), (2, 55, 0.0428), (3, 50, 0.0429))
-HEDGE_G3_PEAK = 75          # G3 前提：近 90 日 RSI 曾 > 此值
+HEDGE_G3_PEAK = 75          # G3 前提門檻值，完整定義見下方「RSI 判斷依據」
+# 前提視窗天數。**20，對齊回測**：Work/BTC幣本位網格去留評估/scripts/V1_bottom_and_hedge.py:16
+# 的 `hot = pd.Series(R).rolling(20).max()`，E3 掃描沿用同一個閘門。
+# 2026-09-02 修正：原本實作寫 90 日，比回測寬鬆且無證據支持（E-1 表「G3 n=35」是
+# 20 日窗算出來的）。改這個常數等於改策略觸發頻率，動它要先回頭重跑 V1/E3。
+HEDGE_G3_WINDOW = 20
+
+# RSI 判斷依據（三支呼叫端共用，勿各自實作 —— 實作就是下面的 closed_daily_rsi）：
+#   指標 = 日線 RSI-14（Wilder，pandas_ta.rsi(close, 14)，core/indicators.py:40）
+#   口徑 = **收完的日線收盤**，排除當日未收 K 棒（回測 U2_expectation.py 是 15m
+#          重採樣成 1D、close 取當日最後一筆，從沒測過盤中進場）
+#   前提 = 近 HEDGE_G3_WINDOW 日 RSI 曾 > HEDGE_G3_PEAK
+#   觸發 = RSI 嚴格小於門檻（65/55/50），每批各推一次
+
+
+def closed_daily_rsi(df, window: int = HEDGE_G3_WINDOW):
+    """
+    套保建倉哨兵吃的三個 RSI 值，回傳 `(rsi14_closed, rsi_peak, closed_date)`。
+
+    口徑正本＝上方「RSI 判斷依據」，**呼叫端只傳日線 df，不得自行重算**。
+    2026-09-02 抽出：`scripts/daily_line_notify.py` 與 `BTC_WATCH.py` 原本各手刻一份，
+    而且兩份的長度守門已經不一致（前者沒有、後者 `len(df) >= window`）——
+    「口徑只寫在註解裡、程式碼各自為政」正是這次 90→20 與 `btc`→`btc_df` 的同一種成因。
+
+    資料不足（df 為 None／缺 RSI_14 欄／收完的日線不滿 window 根）一律回
+    `(None, None, None)`：湊不滿整個視窗算出來的 peak 會低估，寧可讓哨兵報缺值略過，
+    也不要拿一個偏低的峰值去判 G3 前提。
+    """
+    if df is None or "RSI_14" not in getattr(df, "columns", []):
+        return None, None, None
+    today = datetime.now(timezone.utc).date()
+    closed = df[df.index.date < today]
+    if len(closed) < window:
+        return None, None, None
+    return (float(closed["RSI_14"].iloc[-1]),
+            float(closed["RSI_14"].tail(window).max()),
+            str(closed.index[-1])[:10])
 
 
 def _read_json(path) -> Optional[dict]:
@@ -101,7 +138,7 @@ def sentinel_rows(top_score: Optional[int] = None,
                   gate: Optional[dict] = None,
                   d3: Optional[dict] = None,
                   rsi14: Optional[float] = None,
-                  rsi_max_90d: Optional[float] = None,
+                  rsi_peak: Optional[float] = None,
                   state: Optional[dict] = None,
                   allow_remote: bool = False) -> list:
     """
@@ -164,12 +201,12 @@ def sentinel_rows(top_score: Optional[int] = None,
         rows.append("5 熊底確認D3  —  " + _mark(st.get("d3_confirmed"), unavailable))
 
     # 6 套保建倉（G3 前提 + 三批）
-    if rsi14 is not None and rsi_max_90d is not None:
-        armed = rsi_max_90d > HEDGE_G3_PEAK
+    if rsi14 is not None and rsi_peak is not None:
+        armed = rsi_peak > HEDGE_G3_PEAK
         done = [n for n, _, _ in HEDGE_BATCHES if st.get(f"hedge_batch_{n}")]
         nxt = next((f"<{thr}" for n, thr, _ in HEDGE_BATCHES
                     if n not in done and rsi14 >= thr), None)
-        pre = "G3✅" if armed else f"G3✕(近90日峰 {rsi_max_90d:.0f}，需>{HEDGE_G3_PEAK})"
+        pre = "G3✅" if armed else f"G3✕(近{HEDGE_G3_WINDOW}日峰 {rsi_peak:.0f}，需>{HEDGE_G3_PEAK})"
         rows.append(f"6 套保建倉    RSI {rsi14:.1f}  {pre}"
                     f"  已建 {'?' if unavailable else len(done)}/3" + (f"  下一批 RSI {nxt}" if nxt and armed else ""))
     else:
@@ -193,7 +230,7 @@ def sentinel_rows(top_score: Optional[int] = None,
 
 
 def sentinel_compact(top_score=None, gate=None, d3=None,
-                     rsi14=None, rsi_max_90d=None,
+                     rsi14=None, rsi_peak=None,
                      state: Optional[dict] = None, allow_remote: bool = False) -> list:
     """
     兩行橫向摘要版（給垂直空間吃緊的 BTC 儀表板用）。
@@ -227,10 +264,10 @@ def sentinel_compact(top_score=None, gate=None, d3=None,
     else:
         d3s = "D3 —"
     done = sum(1 for n, _, _ in HEDGE_BATCHES if st.get(f"hedge_batch_{n}"))
-    if rsi14 is not None and rsi_max_90d is not None:
+    if rsi14 is not None and rsi_peak is not None:
         nxt = next((thr for n, thr, _ in HEDGE_BATCHES
                     if not st.get(f"hedge_batch_{n}") and rsi14 >= thr), None)
-        armed = "" if rsi_max_90d > HEDGE_G3_PEAK else "G3✕"
+        armed = "" if rsi_peak > HEDGE_G3_PEAK else "G3✕"
         hedge = f"套保 {'?' if unavailable else done}/3{armed}" + (f"(下批RSI<{nxt})" if nxt else "")
     else:
         hedge = f"套保 {'?' if unavailable else done}/3"
