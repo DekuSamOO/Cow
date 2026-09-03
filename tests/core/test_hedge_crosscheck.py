@@ -35,13 +35,13 @@ def harness(monkeypatch):
     monkeypatch.setattr(dln, "_save_escape_state", lambda s: saved.update(s))
     monkeypatch.setattr(dln, "send_line_message", lambda m: sent.append(m["text"]))
 
-    def run(main_rsi, main_peak, x_rsi, x_peak, st=None):
+    def run(main_rsi, main_peak, x_rsi, x_peak, st=None, x_date="2026-09-02"):
         state.clear()
         state.update(st or {})
         sent.clear()
         saved.clear()
         monkeypatch.setattr(dln, "crosscheck_daily_rsi",
-                            lambda *a, **k: (x_rsi, x_peak, "2026-09-02"))
+                            lambda *a, **k: (x_rsi, x_peak, x_date))
         dln.maybe_send_hedge_batch_alert({
             "rsi14_closed": main_rsi, "rsi_peak": main_peak,
             "current_price": 77340.0, "rsi_closed_date": "2026-09-02",
@@ -121,3 +121,33 @@ def test_main_source_g3_premise_fails_short_circuits(harness):
     """主源 G3 前提不成立時直接 return，連對拍都不用做（既有行為）。"""
     sent, _ = harness(64.20, 70.0, 64.10, 85.95)
     assert sent == []
+
+
+# --- 時序落差：「資料還沒到」不等於「兩源分歧」-------------------------------
+#
+# 15m DB 每天 01:00 UTC 才由本機 collector push，而三場檢查在
+# 00:23 / 05:39 / 10:27 UTC —— **第一場（台灣 08:23）checkout 到的是前一天那份 DB**，
+# 最後一根完整日線比主源少一天。把它當成分歧會在每個觸發日的早場推一則沒必要的警示。
+
+def test_one_day_lag_is_silent_not_a_divergence(harness):
+    """對拍源落後 1 天 → 當天稍晚場次會補上，本場不推任何訊息、也不標記。"""
+    sent, saved = harness(64.83, 86.01, 70.0, 85.95, x_date="2026-09-01")
+    assert sent == [], "落後 1 天推警示＝每個觸發日早場都會多一則雜訊"
+    assert not saved.get("hedge_batch_1")
+    assert not saved.get("hedge_batch_1_xcheck_warned"), \
+        "不可把時序落差記成已警示，否則當天真的分歧時就不會出聲了"
+
+
+def test_two_day_lag_does_warn(harness):
+    """落後 ≥2 天＝collector 可能斷了，那是真問題，必須出聲。"""
+    sent, _ = harness(64.83, 86.01, 70.0, 85.95, x_date="2026-08-31")
+    assert len(sent) == 1
+    assert "先不要建倉" in sent[0]
+    assert "collector" in sent[0] or "落後" in sent[0]
+
+
+def test_same_date_still_evaluated_normally(harness):
+    """日期一致時照常做對拍判定（不被落差邏輯誤吞）。"""
+    sent, saved = harness(64.20, 86.01, 64.10, 85.95, x_date="2026-09-02")
+    assert "第 1 批觸發" in sent[0]
+    assert saved.get("hedge_batch_1") is True

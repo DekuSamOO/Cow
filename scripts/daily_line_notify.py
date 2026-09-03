@@ -996,8 +996,30 @@ def maybe_send_hedge_batch_alert(data: dict, dry_run: bool = False) -> None:
     # 規則：**兩源都成立才推建倉**。分歧或對拍源不可得 → 不推建倉，但**推一則警示**
     # ——絕不靜默（2026-08-25~09-02 哨兵靜默 8 天的教訓）。
     x_rsi, x_peak, x_date = crosscheck_daily_rsi()
+
+    # ⚠️ 先分辨「資料還沒到」與「兩源分歧」——這兩件事處置完全不同（2026-09-03）。
+    # 15m DB 每天 **01:00 UTC** 才由本機 collector push，而三場檢查在
+    # 00:23 / 05:39 / 10:27 UTC。**第一場（台灣 08:23）checkout 到的是前一天那份 DB**，
+    # 它的最後一根完整日線比主源少一天。那不是分歧，是還沒到——
+    # 當天稍晚兩場就會補上，此時推「先不要建倉」只是製造雜訊。
+    main_date = data.get("rsi_closed_date")
+    lag_days = None
+    if x_date and main_date:
+        try:
+            lag_days = (date.fromisoformat(main_date) - date.fromisoformat(x_date)).days
+        except Exception:
+            lag_days = None
+    if lag_days is not None and lag_days == 1:
+        print(f"OK 套保建倉：第 {n} 批主源成立，但對拍源落後 1 天"
+              f"（主源 {main_date} / 對拍 {x_date}）——15m DB 尚未 push，"
+              f"當天稍晚場次會補上。本場不推任何訊息。")
+        return
+
     if x_rsi is None:
         xc_ok, xc_why = False, "對拍源不可得（15m DB 讀不到或資料不足）"
+    elif lag_days is not None and lag_days >= 2:
+        xc_ok, xc_why = False, (f"對拍源落後 {lag_days} 天（主源 {main_date} / 對拍 {x_date}）"
+                                f"——不是時序落差，是 collector 可能斷了")
     elif not (x_peak > HEDGE_G3_PEAK):
         xc_ok, xc_why = False, (f"對拍源 G3 前提不成立（近 {HEDGE_G3_WINDOW} 日峰 "
                                 f"{x_peak:.2f}，需 >{HEDGE_G3_PEAK}）")
