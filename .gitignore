@@ -48,3 +48,7 @@ logs/watch_journal.jsonl
 # S-1 覆蓋層延伸：三軌壓力測試腳本含真實部位數字（馬丁本金/成交價/網格保證金），
 # 不得入公開 repo；正本另存 vault Github\Cow\（f2_btc_stress.py 源檔曾佚失只剩 pyc）
 tests/f2_*
+
+# 四季論 v2 回放/抽查的產出（可由 tests/season_v2_*.py 重跑產生；
+# 每天資料長大就過期，入版控只會變成新的失真來源）
+tests/season_v2_*_result.txt

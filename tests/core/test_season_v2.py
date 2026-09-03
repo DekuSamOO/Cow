@@ -26,7 +26,7 @@ from core.season_forecast import (
 )
 
 _T = ("spring", "summer", "autumn", "winter")
-_M = ("bull", "mid", "bear")
+_M = ("bull", "mid", "bear", "deep_bear")   # 2026-09-02：三級擴為四級
 
 
 # ---------------------------------------------------------------------------
@@ -46,6 +46,11 @@ _EXPECTED = {
     ("winter", "bull"): ("observe",     "early_spring?"),
     ("winter", "mid"):  ("bear_bottom", "winter"),
     ("winter", "bear"): ("bear_bottom", "winter"),
+    # M-深熊（2026-09-02 新增）：四格一律 winter，對齊 v1 的 -30% override 語意
+    ("spring", "deep_bear"): ("bear_bottom", "winter"),
+    ("summer", "deep_bear"): ("bear_bottom", "winter"),
+    ("autumn", "deep_bear"): ("bear_bottom", "winter"),
+    ("winter", "deep_bear"): ("bear_bottom", "winter"),
 }
 
 
@@ -59,8 +64,12 @@ def test_derive_effective_state_matches_table(t, m):
 
 
 def test_table_has_no_undefined_quadrant():
-    """十二象限全定義，無遺漏（模組層 assert 已保證，這裡再從公開介面驗一次）。"""
-    assert len(_SEASON_V2_TABLE) == 12
+    """十六象限全定義，無遺漏（模組層 assert 已保證，這裡再從公開介面驗一次）。
+
+    2026-09-02：12 → 16（市場軸加 deep_bear）。**這個數字刻意寫死**——
+    改象限數是設計變更，必須連帶改測試，不能讓它默默通過。
+    """
+    assert len(_SEASON_V2_TABLE) == 16
     for t in _T:
         for m in _M:
             assert (t, m) in _SEASON_V2_TABLE
@@ -123,6 +132,27 @@ def test_market_axis_raw_classification():
     assert _raw_market_axis(-0.05, False) == "mid"   # dd 條件夠但 up 不符 → 不算 bull
 
 
+# --- M-深熊（2026-09-02 新增，findings 發現 A）-------------------------------
+
+def test_raw_axis_deep_bear_tier():
+    """dd<-30% 且跌破年線 → deep_bear；-20~-30% 仍是 bear。"""
+    assert _raw_market_axis(-0.35, False) == "deep_bear"
+    assert _raw_market_axis(-0.83, False) == "deep_bear"   # 2018-12-15 實例
+    assert _raw_market_axis(-0.25, False) == "bear"
+
+
+def test_raw_axis_deep_bear_boundary_is_strict():
+    """-30% 是嚴格門檻：剛好 -30.0% 不算 deep_bear（與 v1 的 `< -0.30` 對齊）。"""
+    assert _raw_market_axis(-0.30, False) == "bear"
+    assert _raw_market_axis(-0.3001, False) == "deep_bear"
+
+
+def test_deep_bear_requires_below_sma200():
+    """站上年線時再深的回撤都不是「空頭確認」——四級全都要求 not up。"""
+    assert _raw_market_axis(-0.50, True) == "mid"
+    assert _raw_market_axis(-0.83, True) == "mid"
+
+
 def test_hysteresis_dither_does_not_switch(monkeypatch):
     """原始狀態在 mid/bull 間逐日交替、從未連續 3 天一致 → 沿用窗內初始狀態，不反覆翻轉。
     序列長度須等於 _M_WINDOW_DAYS（15），否則 df 天數 > 回溯窗時 _derive_market_axis
@@ -151,6 +181,60 @@ def test_hysteresis_two_consistent_days_not_enough(monkeypatch):
     df = _mk_df(len(raw_seq))
     state, trace = _derive_market_axis(df, HALVING_DATES[3])
     assert state == "mid"
+
+
+# --- 防抖逃生門（2026-09-02 新增，findings 發現 B）---------------------------
+#
+# 發現 B：2021-08/10/12 與 2025-03 共 12 天，dd 已回到 -17.6%~-28% 且 **全部
+# up200=True**，v2 卻因原始判定在 mid/bear 間逐日跳動、湊不滿連續 3 日 mid 而
+# 卡在 bear，把牛市回檔判成熊底（v1 給 bull_peak、v2 給 bear_bottom），
+# 方向與 C-2 修復意圖相反。
+
+def test_escape_bear_immediately_when_above_sma200(monkeypatch):
+    """卡在 bear 時，只要出現一天站上年線就立刻脫離——不等 3 日防抖。
+
+    這組序列在**舊邏輯下會停在 bear**（mid/bear 嚴格交替，永遠湊不滿 3 日一致），
+    正是發現 B 那 12 天的形狀。
+    """
+    raw_seq = ["bear"] * 5 + (["mid", "bear"] * 5)[:10]
+    assert len(raw_seq) == 15
+    _script_axis(monkeypatch, raw_seq)
+    df = _mk_df(len(raw_seq))
+    state, trace = _derive_market_axis(df, HALVING_DATES[3])
+    assert trace == raw_seq
+    assert state == "mid", "站上年線後仍停在 bear＝把牛市回檔判成熊底（發現 B）"
+
+
+def test_escape_hatch_also_applies_to_deep_bear(monkeypatch):
+    """逃生門對 deep_bear 同樣有效（_BEAR_FAMILY 兩個都要涵蓋）。"""
+    def fake_ams(price, df, halving):
+        i = fake_ams.i
+        fake_ams.i += 1
+        dd, up = (-0.50, False) if i < 12 else (-0.15, True)
+        return {"drawdown_from_ath": dd, "is_above_sma200": up, "cycle_ath": price,
+                "sma200": price, "price_vs_sma200": 1.0, "cycle_ath_date": None}
+    fake_ams.i = 0
+    monkeypatch.setattr("core.season_forecast.analyze_market_state", fake_ams)
+    state, trace = _derive_market_axis(_mk_df(15), HALVING_DATES[3])
+    assert trace[0] == "deep_bear" and trace[-1] == "mid"
+    assert state == "mid"
+
+
+def test_escape_hatch_is_one_directional(monkeypatch):
+    """**進入**空頭 family 仍須連續 3 日——逃生門只開單向，不得讓急跌雜訊直接誤入。"""
+    raw_seq = ["mid"] * 5 + (["bear", "mid"] * 5)[:10]
+    assert len(raw_seq) == 15
+    _script_axis(monkeypatch, raw_seq)
+    state, _ = _derive_market_axis(_mk_df(len(raw_seq)), HALVING_DATES[3])
+    assert state == "mid", "單日 bear 就切換＝逃生門開成雙向，防抖失效"
+
+
+def test_enter_bear_still_works_with_3_consistent_days(monkeypatch):
+    """逃生門不得誤傷正常進入路徑：連續 3 日 bear 仍要切得進去。"""
+    raw_seq = ["mid"] * 10 + ["bear"] * 5
+    _script_axis(monkeypatch, raw_seq)
+    state, _ = _derive_market_axis(_mk_df(len(raw_seq)), HALVING_DATES[3])
+    assert state == "bear"
 
 
 def test_market_axis_empty_df_returns_mid():
@@ -213,8 +297,21 @@ def test_v2_observe_type_has_no_targets(monkeypatch):
         assert fc["ath_ref"] is None
 
 
-def test_season_engine_default_is_v1(monkeypatch):
-    """未傳 season_engine 時讀 config.SEASON_ENGINE，預設應為 "v1"（零行為變更保證）。"""
+def test_season_engine_default_is_v2():
+    """未傳 season_engine 時讀 config.SEASON_ENGINE —— **2026-09-03 起預設為 "v2"**。
+
+    原測試名為 `..._default_is_v1`、斷言 "v1"（當時的「零行為變更保證」）。
+    切換是使用者拍板的受保護設定變更，前置與證據見
+    `Github\\Cow\\歷程\\20260902findings_四季論v2象限擴充與回放.md`。
+    **這個斷言刻意寫死**：預設引擎變更是策略層決定，不能讓它默默漂掉。
+    """
     fc = forecast_price(70000.0)
+    assert fc["season_engine"] == "v2"
+    assert fc["forecast_type"] in ("bull_peak", "bear_bottom", "observe")
+
+
+def test_v1_still_selectable_as_fallback():
+    """v1 路徑必須完整保留——回滾只需把 config 改回一個字。"""
+    fc = forecast_price(70000.0, season_engine="v1")
     assert fc["season_engine"] == "v1"
     assert fc["forecast_type"] in ("bull_peak", "bear_bottom")   # v1 永遠不產生 "observe"

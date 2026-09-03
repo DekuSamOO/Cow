@@ -301,12 +301,34 @@ _M_HYSTERESIS_DAYS = 3   # 連續 N 個交易日一致才切換市場軸狀態
 _M_WINDOW_DAYS = 15      # 防抖掃描回溯天數（含 hysteresis 窗）
 
 
+_BEAR_FAMILY = ("bear", "deep_bear")
+
+
 def _raw_market_axis(dd: float, up: bool) -> str:
-    """單日原始市場軸判定（無防抖）：bull（多頭確認）/ mid（未確認）/ bear（空頭確認）。"""
+    """單日原始市場軸判定（無防抖）。
+
+    四級（2026-09-02 由三級擴充）：
+      bull      多頭確認    dd > -10% 且站上年線
+      mid       未確認      其餘
+      bear      空頭確認    dd < -20% 且跌破年線
+      deep_bear 深熊確認    dd < -30% 且跌破年線
+
+    **為什麼加 deep_bear**（`歷程\\20260902findings_四季論v2人工抽查.md` 發現 A）：
+    v1 用三層連續門檻（-10/-20/-30%）把「剛轉弱／已確認熊市／深熊」分三級，
+    最深一層 override 成 winter。v2 原本的市場軸最深只到 bear，**-30% 與 -83%
+    落在同一格**——2018-12-15 的 dd=-83.2% 歷史級崩盤，v2 仍只給 autumn。
+    這造成 v1/v2 回放差異 1,439 天裡有 **1,019 天（70.8%）** 純粹來自這個缺級，
+    而兩版的 forecast_type 其實一致（都 bear_bottom），差的只是嚴重度標籤。
+    這不是門檻調參，是補一個**結構上本來就缺的維度**——原 findings 三之2
+    自己指出的修法（「市場軸拆四級、象限表擴成 4×4」）。
+    """
     if dd > -0.10 and up:
         return "bull"
-    if dd < -0.20 and not up:
-        return "bear"
+    if not up:
+        if dd < -0.30:
+            return "deep_bear"
+        if dd < -0.20:
+            return "bear"
     return "mid"
 
 
@@ -333,14 +355,34 @@ def _derive_market_axis(df: Optional[pd.DataFrame], current_halving: datetime,
         return "mid", []
     n = len(df_naive.index)
     lookback = min(_M_WINDOW_DAYS, n)
-    raw_trace = []
+    raw_trace, up_trace = [], []
     for i in range(n - lookback, n):
         day_df = df_naive.iloc[: i + 1]
         price_i = float(day_df["close"].iloc[-1])
         ms_i = analyze_market_state(price_i, day_df, current_halving)
-        raw_trace.append(_raw_market_axis(ms_i["drawdown_from_ath"], ms_i["is_above_sma200"]))
+        up_i = bool(ms_i["is_above_sma200"])
+        raw_trace.append(_raw_market_axis(ms_i["drawdown_from_ath"], up_i))
+        up_trace.append(up_i)
     effective = raw_trace[0]
     for i in range(1, len(raw_trace)):
+        # 逃生門（2026-09-02 新增）：站上年線即刻脫離空頭 family，不等 3 日防抖。
+        #
+        # 理由是**語意自洽**不是調參：bear/deep_bear 的定義本身就含 `not up`，
+        # 一個 up200=True 的日子被標成「空頭確認」，與該狀態的定義直接矛盾。
+        # 防抖的用途是擋門檻邊界的雜訊翻轉，不該把一個定義上不可能成立的狀態鎖住。
+        #
+        # 實測（findings 發現 B，12 天）：2021-08/10/12 與 2025-03 兩段，
+        # dd 已回到 -17.6%~-28%、且**全部 up200=True**，v2 卻因原始判定在
+        # mid/bear 之間逐日跳動、湊不滿連續 3 日 mid 而卡在 bear，
+        # 於是把**牛市回檔判成熊底**（v1 給 bull_peak、v2 給 bear_bottom），
+        # 方向與 C-2 修復意圖相反。這 12 天靠擴充分級救不了，只能從這裡修。
+        #
+        # 只開單向：**離開**空頭 family 免防抖，**進入**仍需連續 3 日（避免急跌雜訊誤入）。
+        # up_trace[i] 為 True 時 raw_trace[i] 必為 bull 或 mid（兩個 bear 級都要求 not up），
+        # 故直接採用當日原始判定是安全的。
+        if up_trace[i] and effective in _BEAR_FAMILY:
+            effective = raw_trace[i]
+            continue
         if i >= _M_HYSTERESIS_DAYS - 1:
             window = raw_trace[i - (_M_HYSTERESIS_DAYS - 1): i + 1]
             if len(set(window)) == 1 and window[0] != effective:
@@ -348,7 +390,8 @@ def _derive_market_axis(df: Optional[pd.DataFrame], current_halving: datetime,
     return effective, raw_trace
 
 
-# 十二象限查表（design §2）：(時間軸 T, 市場軸 M) → {forecast_type, eff_season, conf_cap, note}。
+# 十六象限查表（design §2；2026-09-02 由十二格擴為 4×4，市場軸加 deep_bear）：
+#   (時間軸 T, 市場軸 M) → {forecast_type, eff_season, conf_cap, note}。
 # forecast_type ∈ {"bull_peak","bear_bottom","observe"}；observe 不輸出 target_low/mid/high。
 # eff_season 供 rationale 顯示與 bull_peak/bear_bottom 計算沿用既有 v1 公式（設計刻意不換公式，
 # 只換「哪個象限走哪條路」——C-2 修復格 (b) 即 autumn×bull 從 v1 的熊底誤判改為延長牛市）。
@@ -369,10 +412,23 @@ _SEASON_V2_TABLE: Dict[Tuple[str, str], Dict[str, Any]] = {
                         "note": "時間已冬但創新高——疑新輪提前，勿套舊週期模板"},
     ("winter", "mid"):  {"forecast_type": "bear_bottom", "eff_season": "winter", "conf_cap": 60, "note": "打底觀察"},
     ("winter", "bear"): {"forecast_type": "bear_bottom", "eff_season": "winter", "conf_cap": 80, "note": None},
+
+    # ── M-深熊（deep_bear，dd<-30% 且跌破年線）2026-09-02 新增 ──────────────
+    # 四格一律 eff_season="winter"：這正是 v1 的 -30% override 語意，補上它之後
+    # v1/v2 在「歷史級崩盤」的嚴重度標籤才對得起來（findings 發現 A，1,019 天）。
+    # conf_cap 相對同 T 的 bear 格 +5，唯 spring 例外——減半後一年內就深熊在歷史上
+    # 從未發生，訊號再明確也是範式外樣本，信心不該加。
+    ("spring", "deep_bear"): {"forecast_type": "bear_bottom", "eff_season": "winter", "conf_cap": 60,
+                              "note": "提前深熊（左尾週期，歷史無先例，偏離歷史模式）"},
+    ("summer", "deep_bear"): {"forecast_type": "bear_bottom", "eff_season": "winter", "conf_cap": 75,
+                              "note": "深熊已確認、時間仍在夏——週期壓縮，勿套夏季模板"},
+    ("autumn", "deep_bear"): {"forecast_type": "bear_bottom", "eff_season": "winter", "conf_cap": 85, "note": None},
+    ("winter", "deep_bear"): {"forecast_type": "bear_bottom", "eff_season": "winter", "conf_cap": 85, "note": None},
 }
 assert set(_SEASON_V2_TABLE.keys()) == {
-    (t, m) for t in ("spring", "summer", "autumn", "winter") for m in ("bull", "mid", "bear")
-}, "十二象限查表缺漏——每個 (T,M) 組合都必須有定義（design §2 無遺漏原則）"
+    (t, m) for t in ("spring", "summer", "autumn", "winter")
+    for m in ("bull", "mid", "bear", "deep_bear")
+}, "十六象限查表缺漏——每個 (T,M) 組合都必須有定義（design §2 無遺漏原則）"
 
 
 def derive_effective_state(time_season: str, market_axis: str) -> Dict[str, Any]:

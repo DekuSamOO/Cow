@@ -555,7 +555,35 @@ def build_weekly_flex(data, esc, low, today):
 
 
 def _build_forecast_box(s):
-    is_bear = s["forecast_type"] == "bear_bottom"
+    ftype = s.get("forecast_type")
+
+    # ── observe 分支（2026-09-02 補；四季論 v2 專屬型別）─────────────────────
+    # v2 的 autumn×mid 等格輸出 forecast_type="observe"＝「轉折觀察期，不出目標價」，
+    # target_low/median/high 皆為 None。
+    #
+    # ⚠️ 這裡原本是**二元判斷**（`is_bear = ... == "bear_bottom"`，其餘全走 else），
+    # observe 會掉進 else 而渲染成「🚀 牛市最高價預測」，配上 daily_line_notify
+    # 已把 None 轉成 0 的 target → 實際會推出「🚀 牛市最高價預測 $0 / $0 / $0」。
+    # 不是崩潰，是**看起來很確定的錯訊息**，而且方向完全相反。
+    # 2026-07-06 的消費端盤點只補了「不崩潰」（None→0），沒補「不誤導」，
+    # 2026-09-02 切換前複查才抓到（`歷程\20260902findings_四季論v2象限擴充與回放.md`）。
+    if ftype == "observe":
+        note = s.get("forecast_note") or "市場方向未確認，兩側條件成立前不輸出目標價"
+        return {
+            "type": "box", "layout": "vertical", "margin": "lg",
+            "backgroundColor": "#F5F5F5", "cornerRadius": "8px", "paddingAll": "md",
+            "contents": [
+                {"type": "text", "text": "🔭 轉折觀察期（不出目標價）",
+                 "color": "#7F8C8D", "size": "sm", "weight": "bold"},
+                {"type": "text", "text": note,
+                 "color": "#888888", "size": "xxs", "margin": "sm", "wrap": True},
+                {"type": "text",
+                 "text": "四季論在此狀態下刻意不給價位——寧可不預測，也不出錯錨的數字。",
+                 "color": "#888888", "size": "xxs", "margin": "xs", "wrap": True},
+            ],
+        }
+
+    is_bear = ftype == "bear_bottom"
     title = "❄️ 熊市最低價預測" if is_bear else "🚀 牛市最高價預測"
     accent_color = "#2980B9" if is_bear else "#E67E22"
     bg = "#FFF8F0" if is_bear else "#F0FFF4"
@@ -691,6 +719,24 @@ def _build_bottom_eval_box(s):
         rng = f"區間 ${fld:,.0f}~${fls:,.0f}｜" if (fld and fls) else ""
         sub = f"{rng}依據 {basis}" + (f"｜多錨中位數 ${ens:,.0f}" if ens else "")
         header.append({"type": "text", "text": sub, "color": "#888888", "size": "xxs", "margin": "xs", "wrap": True})
+
+        # ── P-2（2026-09-02 拍板 B 案）：observe 時標注四季論處於觀察期 ──────
+        # `compute_all_bottom_estimates()` 直接呼叫 `project_bear_bottom()`，
+        # **繞過 forecast_price 的象限判定、不受 season_engine 影響**。
+        # 所以四季論 v2 判 observe（不出目標價）時，這裡的 final_low 仍會照印，
+        # 同一張卡上會同時出現「不出目標價」與一個具體價位——語意打架。
+        #
+        # 拍板 B：**模型層照算**（那是原始估計，本來就該算），
+        # **只在呈現層標明它現在的可信度**。選 B 不選 A 的理由：
+        # A 會讓 `final_low = max(四季論, 礦工電費)` 退化成只剩電費地板、
+        # `ensemble_low` 也少一個錨——為了語意一致而砍掉真實資訊，代價太大。
+        if s.get("forecast_type") == "observe" and "四季論" in basis:
+            header.append({
+                "type": "text",
+                "text": "⚠️ 四季論目前處於「轉折觀察期」，本估計僅供參考——"
+                        "模型自己不出目標價時，這個依據它算出來的價位不應單獨當決策依據。",
+                "color": "#C0392B", "size": "xxs", "margin": "xs", "wrap": True,
+            })
 
     # LINE 版精簡：只取代表性幾項 = 最高估計 + 3 硬地板 + 最低估計（去重後依價排序）
     # 完整 10 項在 dashboard D2.5 顯示。
