@@ -77,6 +77,84 @@ def closed_daily_rsi(df, window: int = HEDGE_G3_WINDOW):
             str(closed.index[-1])[:10])
 
 
+def crosscheck_daily_rsi(window: int = HEDGE_G3_WINDOW):
+    """對拍源的 RSI：**15m DB 重採樣成 1D**，回傳 `(rsi14, rsi_peak, closed_date)`。
+
+    為什麼需要第二個源（2026-09-03 實測發現）：
+      `closed_daily_rsi()` 吃的是 `fetch_market_data()` 那條日線，
+      但**回測（`U2_expectation.py`）用的是 15m 重採樣成 1D**——上方「RSI 判斷依據」
+      自己就這麼寫。兩條序列的收盤價常常相同、**RSI 卻不同**：RSI 是路徑依賴的
+      （Wilder 平滑吃整段歷史），起點與缺漏日處理不同就會分岔。
+
+      2026 年 246 天實測：收盤價 163 天完全相同；RSI 差中位 0、標準差 1.26、**最大 11.35**；
+      **對門檻的判定不同 —— 75:0 天／65:2 天／55:2 天／50:1 天**。
+      99% 的日子兩源同調，**但門檻附近就是會分岔，而那正好是要下單的日子**。
+      2026-09-02 就是其中一天：生產 64.83（觸發）vs 回測 65.26（未觸發），門檻 65 夾在中間。
+
+    這是 **train/serve 口徑不一致**（與資費口徑那次同型）。根治要統一資料源並重跑
+    V1/E3，尚未做；在那之前先用對拍當守門：**兩源都成立才推建倉**。
+
+    取不到資料一律回 `(None, None, None)`（呼叫端須把它與「對拍不通過」分開處理，
+    不可當成靜默否決——2026-08-25~09-02 那次哨兵靜默 8 天就是這種吞掉造成的）。
+    """
+    # 延遲 import：本模組會被 BTC_WATCH 等 CLI 匯入，頂層拉 pandas 會拖慢啟動
+    # （Cow CLAUDE.md 陷阱〈檔案頂層 import 會拖進重依賴〉）。
+    try:
+        import glob
+        import sqlite3
+
+        import pandas as pd
+
+        from core.indicators import calculate_technical_indicators
+    except Exception:
+        return None, None, None
+
+    try:
+        paths = sorted(glob.glob(os.path.join(_COW, "db", "btcusdt_15m_*.db")))[-3:]
+        if not paths:
+            return None, None, None
+        frames = []
+        for p in paths:
+            con = sqlite3.connect(p)
+            try:
+                tbl = pd.read_sql(
+                    "SELECT name FROM sqlite_master WHERE type='table'", con)["name"]
+                if tbl.empty:
+                    continue
+                t = tbl.iloc[0]
+                cols = pd.read_sql("SELECT * FROM %s LIMIT 1" % t, con).columns.tolist()
+                low = {c.lower(): c for c in cols}
+                tcol = next((low[k] for k in
+                             ("open_time", "timestamp", "time", "date", "ts") if k in low), None)
+                need = {k: low[k] for k in ("open", "high", "low", "close") if k in low}
+                if tcol is None or len(need) < 4:
+                    continue
+                df = pd.read_sql(
+                    "SELECT %s FROM %s" % (", ".join([tcol] + list(need.values())), t), con)
+                frames.append(df.rename(
+                    columns={tcol: "t", **{v: k for k, v in need.items()}}))
+            finally:
+                con.close()
+        if not frames:
+            return None, None, None
+
+        raw = pd.concat(frames, ignore_index=True)
+        ts = raw["t"]
+        if pd.api.types.is_numeric_dtype(ts):
+            raw["t"] = pd.to_datetime(
+                ts, unit="ms" if ts.max() > 1e12 else "s", utc=True).dt.tz_localize(None)
+        else:
+            raw["t"] = pd.to_datetime(ts, errors="coerce")
+        raw = raw.dropna(subset=["t"]).sort_values("t").set_index("t")
+
+        daily = raw.resample("1D").agg({"open": "first", "high": "max",
+                                        "low": "min", "close": "last"}).dropna()
+        daily = calculate_technical_indicators(daily)
+        return closed_daily_rsi(daily, window)
+    except Exception:
+        return None, None, None
+
+
 def _read_json(path) -> Optional[dict]:
     try:
         with open(path, encoding="utf-8") as f:

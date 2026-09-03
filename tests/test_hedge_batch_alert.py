@@ -45,6 +45,14 @@ def sent(notify, tmp_path, monkeypatch):
     monkeypatch.setattr(notify, "_ESCAPE_STATE_FILE", str(tmp_path / "state.json"))
     box = []
     monkeypatch.setattr(notify, "send_line_message", lambda payload: box.append(payload))
+
+    # 2026-09-03：哨兵新增「兩源對拍」守門（見 maybe_send_hedge_batch_alert docstring）。
+    # 本檔測的是**批次判定與去重行為**，不是對拍本身，所以把對拍源固定成「與主源同調」
+    # ——否則這些測試會去讀真實的 15m DB，變成**非確定性、隨行情漂移**的測試
+    # （實際踩過：2026-09-03 真實對拍源回 65.26，把 rsi=63.9 的案例擋掉，兩個測試無故變紅）。
+    # 對拍守門本身的紅線在 tests/core/test_hedge_crosscheck.py。
+    monkeypatch.setattr(notify, "crosscheck_daily_rsi",
+                        lambda *a, **k: (0.0, 100.0, "2026-09-02"))
     return box
 
 

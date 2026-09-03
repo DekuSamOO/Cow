@@ -66,7 +66,8 @@ from core.season_forecast import forecast_price, STATS as _SEASON_STATS
 from core.bottom_floors import compute_all_bottom_estimates
 from core.risk import compute_atr_risk
 from service.bottom_metrics import get_latest_bottom_metrics, fetch_hashrate_history_ths
-from core.sentinel_board import (HEDGE_BATCHES, HEDGE_G3_PEAK, HEDGE_G3_WINDOW,
+from core.sentinel_board import (crosscheck_daily_rsi,
+                                 HEDGE_BATCHES, HEDGE_G3_PEAK, HEDGE_G3_WINDOW,
                                  closed_daily_rsi)
 
 
@@ -957,6 +958,15 @@ def maybe_send_hedge_batch_alert(data: dict, dry_run: bool = False) -> None:
 
     為什麼要哨兵：這三個觸發原本只寫在附錄裡，靠人每天自己看 RSI，漏看就錯過批次。
     每批只推一次，狀態存 escape_alert_state.json 的 hedge_batch_{n}。
+
+    **兩源對拍（2026-09-03 新增，使用者指示「兩源都通過才發推播」）**：
+      主源＝`fetch_market_data()` 日線；對拍源＝15m DB 重採樣成 1D（**回測用的那一套**）。
+      兩源 RSI 在門檻附近會分岔（2026 年 246 天：65 門檻 2 天判定不同），
+      而分岔的日子正好是要下單的日子。**只有一邊成立＝該訊號沒被回測驗證過。**
+      - 兩源都成立 → 推建倉（訊息標「兩源對拍通過」）
+      - 分歧／對拍源不可得 → **不推建倉**，改推一則「先不要建倉」警示，
+        用 `hedge_batch_{n}_xcheck_warned` 保證每批只警示一次（不洗版、但**絕不靜默**）
+      - 警示旗標**不會**擋住後續的正式推播：分歧解除當天照樣推建倉
     """
     rsi = data.get("rsi14_closed")      # 收完的日線收盤，不是盤中值
     rsi_max = data.get("rsi_peak")
@@ -977,9 +987,59 @@ def maybe_send_hedge_batch_alert(data: dict, dry_run: bool = False) -> None:
         return
 
     n, thr, qty = due[0]          # 一次只推一批，避免同日連推三則
+
+    # ── 兩源對拍守門（2026-09-03 新增，使用者指示）─────────────────────────
+    # 主源＝fetch_market_data 的日線；對拍源＝15m DB 重採樣成 1D（**回測用的那一套**）。
+    # 兩源的收盤價常常相同、RSI 卻不同（路徑依賴）。2026 年 246 天實測：
+    # 對門檻的判定不同 —— 65:2 天／55:2 天／50:1 天，而分岔的日子正好是要下單的日子。
+    # 2026-09-02 就是其中一天（主源 64.83 觸發、對拍 65.26 未觸發，門檻 65 夾在中間）。
+    # 規則：**兩源都成立才推建倉**。分歧或對拍源不可得 → 不推建倉，但**推一則警示**
+    # ——絕不靜默（2026-08-25~09-02 哨兵靜默 8 天的教訓）。
+    x_rsi, x_peak, x_date = crosscheck_daily_rsi()
+    if x_rsi is None:
+        xc_ok, xc_why = False, "對拍源不可得（15m DB 讀不到或資料不足）"
+    elif not (x_peak > HEDGE_G3_PEAK):
+        xc_ok, xc_why = False, (f"對拍源 G3 前提不成立（近 {HEDGE_G3_WINDOW} 日峰 "
+                                f"{x_peak:.2f}，需 >{HEDGE_G3_PEAK}）")
+    elif not (x_rsi < thr):
+        xc_ok, xc_why = False, (f"對拍源 RSI {x_rsi:.2f} 未跌破 {thr}"
+                                f"（{x_date}；主源 {rsi:.2f}，差 {abs(rsi - x_rsi):.2f}）")
+    else:
+        xc_ok, xc_why = True, f"對拍源 RSI {x_rsi:.2f} < {thr}（{x_date}）"
+
+    if not xc_ok:
+        print(f"OK 套保建倉：第 {n} 批主源成立但**未通過兩源對拍** → 不推建倉。{xc_why}")
+        warn_key = f"hedge_batch_{n}_xcheck_warned"
+        if state.get(warn_key) or dry_run:
+            if dry_run:
+                print(f"[dry-run] 對拍分歧警示第 {n} 批（未發送）")
+            return
+        wlines = [
+            f"[套保建倉] 第 {n} 批 — 踩線但**兩源對拍未通過，先不要建倉**",
+            f"主源 日線 RSI {rsi:.1f} < {thr}（{data.get('rsi_closed_date', '?')} 收盤）",
+            xc_why,
+            "",
+            "為什麼卡住：哨兵吃的日線與**回測驗證用的 15m 重採樣日線**是兩條序列，",
+            "RSI 路徑依賴、在門檻附近會分岔。只有一邊成立＝這個訊號沒被回測驗證過。",
+            "",
+            "該做的事：**不要建倉**，等下一根收完的日線兩源一致再說。",
+            "（本警示每批只推一次，不會每天洗版）",
+        ]
+        try:
+            send_line_message({"type": "text",
+                               "text": "\n".join(x for x in wlines if x != "")})
+            state[warn_key] = True
+            state[f"{warn_key}_date"] = str(date.today())
+            _save_escape_state(state)
+            print(f"! 套保建倉第 {n} 批：已推對拍分歧警示。")
+        except Exception as e:
+            print(f"X 對拍分歧警示發送失敗: {e}")
+        return
+
     lines = [
-        f"[套保建倉] 第 {n} 批觸發",
+        f"[套保建倉] 第 {n} 批觸發（**兩源對拍通過**）",
         f"日線 RSI {rsi:.1f} < {thr}（{data.get('rsi_closed_date', '?')} 收盤）",
+        xc_why,
         f"近 {HEDGE_G3_WINDOW} 日曾達 {rsi_max:.1f} > {HEDGE_G3_PEAK}（G3 前提成立）",
         f"BTC ${price:,.0f}" if price else "",
         "",
