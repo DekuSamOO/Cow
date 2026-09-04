@@ -38,6 +38,25 @@ D:\Users\63191\AppData\Local\anaconda3\python.exe collector/btc_price_collector.
 > （2026-08-06 評估過「push 前檢查是否有非資料 commit，有就只警告不推」的方案，
 > **否決**——會讓「價格資料每天上雲」這個核心功能變得不可靠，為罕見情況犧牲天天要用的東西。）
 
+> [!danger] 本機跑推播腳本**曾經**會真的發到使用者手機——已加閘門，但要知道為什麼
+> 2026-09-02：一個 subagent 在本機直接跑 `python scripts/daily_line_notify.py`，
+> **真的把當日完整 Flex 卡片推到使用者手機**，它以為那只是演練。
+> 成因：`__main__` 沒有 dry_run 參數，且憑證由 `.env` 的 `load_dotenv()` 自動載入
+> ——「在本機試一下」在這支腳本裡等於真的送出去。
+>
+> ✅ **已修（2026-09-04）**：`service/notification/core.py::_outbound_allowed()` 是
+> **所有**對外推播的單一閘門（日常 LINE／防守 LINE／Telegram 三條路都走它）：
+>
+> | 環境 | 行為 |
+> |---|---|
+> | 本機（無 `GITHUB_ACTIONS`、未設 `DRY_RUN`）| **擋下**，印出擋下原因與內容摘要 |
+> | GitHub Actions | 照送（`GITHUB_ACTIONS` 由 runner 自動設）|
+> | 明確 `DRY_RUN=0` | 允許真送——**這個顯式性本身就是「核准」** |
+> | `DRY_RUN` 任何其他非空值 | 擋下（CI 上也能演練）|
+>
+> 測試 `tests/test_outbound_gate.py` 18 項，負向驗證：停用閘門後 8 項失敗。
+> **不要為了方便把閘門拿掉**——全域規則 §0.4 是建議性的，這道閘門才是確定性的。
+
 ---
 
 ## service 層 fallback chain（讀 code 看不出順序，改動前必看）
