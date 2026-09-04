@@ -781,6 +781,67 @@ def maybe_send_leverage_window_alert(data: dict, dry_run: bool = False) -> None:
         _save_escape_state(state)
 
 
+def _maybe_send_d3_deadlock_alert(d3: dict, dry_run: bool = False) -> None:
+    """D3 死結告警（2026-09-04 立）：c1 與 c3 互斥時推播一次。
+
+    為什麼要這則：D3 的 c1（自低點彈 >=50%）與 c3（距 cycle ATH >=30%）在熊市夠淺時
+    **可行區間為空集合**——「彈 50%」的價位已經漲出「距 ATH 30%」的熊市定義。
+    此時情境二**結構性不可觸發**，但舊版哨兵只會報「反彈不足／天數不足」，
+    看起來像還在等，其實是等不到。逐日重放 2017-08~2026-09 共 594 天處於此狀態，
+    2025-11-20 起的這一段到 2026-09-04 已連續 288 天，**從未被任何一則推播提過**。
+
+    這是**揭露不是判定**：不改 D3 的 ok，只讓使用者知道情境二這條路現在是斷的，
+    以便決定要不要調 c3 門檻（分析見 vault `1b D3 死結與 c3 門檻研究`）。
+
+    去重：狀態存 escape_alert_state.json 的 `d3_deadlock_warned`，
+    **死結解除時清旗標**——下一次再發生會重新推，不會因為推過一次就永久靜音。
+    """
+    key = "d3_deadlock_warned"
+    state = _load_escape_state()
+
+    if not d3.get("deadlock"):
+        if state.get(key):                      # 死結已解除 → 清旗標，讓下次能再推
+            state.pop(key, None)
+            state.pop(f"{key}_date", None)
+            if not dry_run:
+                _save_escape_state(state)
+            print("OK D3 死結已解除（c1 與 c3 恢復有解），旗標已清。")
+        return
+
+    if state.get(key):
+        print("OK D3 死結持續中（已推播過，不重複）。")
+        return
+
+    c3_ceil = d3["cycle_ath"] * (1 + d3["drawdown_req"])
+    lines = [
+        "[D3 死結] 情境二目前結構性不可觸發",
+        "",
+        f"c1 需 BTC >= ${d3['price_req']:,.0f}（自低點 ${d3['low']:,.0f} 彈 "
+        f"+{d3['rebound_req'] * 100:.0f}%）",
+        f"c3 需 BTC <= ${c3_ceil:,.0f}（距 cycle ATH ${d3['cycle_ath']:,.0f} "
+        f"達 {abs(d3['drawdown_req']) * 100:.0f}%）",
+        "",
+        "兩者可行區間是空集合 —— 不管價格走到哪裡，D3 都不會成立。",
+        f"要有解，c3 門檻最多只能設到 {d3['deadlock_max_c3'] * 100:.2f}%"
+        f"（現行 {abs(d3['drawdown_req']) * 100:.0f}%）。",
+        "",
+        "這不是「還在等」，是「等不到」。情境一（AHR999 開窗）是目前唯一活著的出路。",
+        "完整分析與門檻選項 → vault `1b D3 死結與 c3 門檻研究`",
+    ]
+    if dry_run:
+        print("[dry-run] D3 死結告警：" + lines[0] + "（未發送）")
+        return
+    try:
+        send_line_message({"type": "text", "text": "\n".join(lines)})
+    except Exception as e:
+        print(f"X D3 死結告警發送失敗: {e}")
+        return
+    state[key] = True
+    state[f"{key}_date"] = str(date.today())
+    _save_escape_state(state)
+    print("! D3 死結告警已推播。")
+
+
 def maybe_send_bear_bottom_confirm_alert(data: dict, dry_run: bool = False) -> None:
     """熊底確認哨兵 D3（2026-08-25 立）：自最低點反彈 >= 50% 且距最低點 >= 90 天。
 
@@ -823,8 +884,14 @@ def maybe_send_bear_bottom_confirm_alert(data: dict, dry_run: bool = False) -> N
         _c3 = "" if d3.get("c3", True) else (
             f"；**c3 未過：距 cycle ATH {_dd * 100:+.1f}%／需 <= "
             f"{d3['drawdown_req'] * 100:.0f}%（仍在 ATH 附近，不視為熊底）**")
+        _dl = "" if not d3.get("deadlock") else (
+            f"；⚠️ **死結：c1 與 c3 互斥，情境二目前結構性不可觸發**"
+            f"（c1 需 >= ${d3['price_req']:,.0f}，c3 需 <= "
+            f"${d3['cycle_ath'] * (1 + d3['drawdown_req']):,.0f}）")
         print(f"OK 熊底確認 D3 未達成（反彈 {d3['rebound'] * 100:+.1f}%／需 "
-              f"+{d3['rebound_req'] * 100:.0f}%；距低 {d3['days']} 天／需 {d3['days_req']}{_c3}）。")
+              f"+{d3['rebound_req'] * 100:.0f}%；距低 {d3['days']} 天／需 "
+              f"{d3['days_req']}{_c3}{_dl}）。")
+        _maybe_send_d3_deadlock_alert(d3, dry_run=dry_run)
         return
 
     state = _load_escape_state()

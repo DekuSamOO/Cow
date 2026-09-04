@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.leverage_window import (  # noqa: E402
     gate_status, trigger_price, advance_batches, d3_status, compact_rows,
     find_bear_low, WINDOW_RESET_DAYS, d3_grid_plan,
+    BEAR_DRAWDOWN, D3_TRIGGER_DRAWDOWN,
 )
 
 AHR_MAX, MIN_DAYS = 0.40, 300
@@ -175,3 +176,93 @@ def test_d3_grid_plan_bounds_and_liq_estimate():
 def test_d3_grid_plan_missing_inputs_returns_none():
     assert d3_grid_plan(None, 80_000.0, 1.0074, 100, 0.667) is None
     assert d3_grid_plan(50_000.0, None, 1.0074, 100, 0.667) is None
+
+
+# ── D3 死結偵測 + c3 門檻拆參數（2026-09-04）──────────────────────────────
+# 背景：c3 原本重用 BEAR_DRAWDOWN(30%)，造成 c1 與 c3 互斥的死結。
+# 已拆成獨立的 D3_TRIGGER_DRAWDOWN(20%)，find_bear_low 仍用 BEAR_DRAWDOWN(30%)。
+# 紅線：
+#   1. 互斥時必須偵測到（不可靜默）
+#   2. 新預設值必須解除 2026-09 的實況死結
+#   3. 放寬門檻**不得**放行 2021-10-18 誤報
+#   4. 偵測與調參**不得**改變 c1/c2 的判定邏輯
+#   5. 兩個門檻必須是獨立參數（改 c3 不可動到找低點的定義）
+
+_ATH_2026, _LOW_2026 = 124_658.54, 58_538.0      # 2026-09-04 實況
+
+
+def test_d3_deadlock_detected_when_gates_mutually_exclusive():
+    """舊值 30% 下，2026-09 實況是死結 —— 這就是原本沒被說出來的問題。"""
+    r = d3_status(80_986.0, _LOW_2026, "2026-06-30", 66,
+                  cycle_ath=_ATH_2026, trigger_drawdown=0.30)
+    assert r["deadlock"] is True, "互斥卻沒偵測到 —— 這就是原本的靜默死結"
+    assert r["price_req"] > _ATH_2026 * 0.70          # c1 下限 > c3 上限
+    assert abs(r["deadlock_max_c3"] - (1 - 1.5 * _LOW_2026 / _ATH_2026)) < 1e-12
+    assert 0.294 < r["deadlock_max_c3"] < 0.296      # ≈29.56%
+
+
+def test_d3_new_default_resolves_the_2026_deadlock():
+    """紅線 2：改用 D3_TRIGGER_DRAWDOWN(20%) 之後，同一組資料必須不再死結。"""
+    r = d3_status(80_986.0, _LOW_2026, "2026-06-30", 66, cycle_ath=_ATH_2026)
+    assert D3_TRIGGER_DRAWDOWN == 0.20
+    assert r["deadlock"] is False, "新門檻沒解除死結，等於這次調整白做"
+    # 可行區間非空：c1 下限 87,807 <= c3 上限 99,727
+    assert r["price_req"] < _ATH_2026 * (1 - D3_TRIGGER_DRAWDOWN)
+    # 但今天仍未觸發（c1/c2 都還沒到）—— 調門檻不等於馬上進場
+    assert r["ok"] is False and r["c1"] is False and r["c2"] is False
+
+
+def test_d3_misfire_2021_10_18_still_blocked_at_new_threshold():
+    """紅線 3：放寬到 20% 後，2021-10-18 那次誤報仍必須被 c3 擋掉。
+
+    當時：price 62,010、cycle ATH ≈63,600（距 ATH −2.5%）、低點 29,800。
+    c1（+108%）與 c2 都成立，**只有 c3 能擋**——擋不住就會在大頂前一個月全押。
+    """
+    r = d3_status(62_010.0, 29_800.0, "2021-07-20", 90, cycle_ath=63_600.0)
+    assert r["c1"] is True and r["c2"] is True, "前提：這次誤報 c1/c2 本來就會過"
+    assert r["c3"] is False, "20% 門檻放行了 2021-10-18 誤報 —— 絕不可接受"
+    assert r["ok"] is False
+
+
+def test_d3_deadlock_clears_when_c3_relaxed():
+    """同一組低點/ATH，門檻放寬就有解 —— 證明死結來自門檻不是資料。"""
+    assert d3_status(80_986.0, _LOW_2026, "2026-06-30", 66,
+                     cycle_ath=_ATH_2026, trigger_drawdown=0.30)["deadlock"] is True
+    r25 = d3_status(80_986.0, _LOW_2026, "2026-06-30", 66,
+                    cycle_ath=_ATH_2026, trigger_drawdown=0.25)
+    assert r25["deadlock"] is False
+    assert r25["price_req"] < _ATH_2026 * 0.75
+
+
+def test_d3_deadlock_false_when_bear_is_deep_enough():
+    """夠深的熊市（低點離 ATH 夠遠）不該被誤報成死結。"""
+    r = d3_status(45_000.0, 30_000.0, "2026-01-01", 120, cycle_ath=100_000.0)
+    assert r["deadlock"] is False
+    assert r["ok"] is True                    # 且此時 D3 本來就該成立
+
+
+def test_d3_deadlock_is_none_without_cycle_ath():
+    """沒傳 cycle_ath 就沒有 c3，也就談不上死結 —— 必須回 None 不是 False。"""
+    r = d3_status(160.0, 100.0, "2026-01-01", 120)
+    assert r["deadlock"] is None and r["deadlock_max_c3"] is None
+
+
+def test_d3_thresholds_are_separate_parameters():
+    """紅線 5：c3 與「找低點」必須是兩個獨立參數，改 c3 不可動到 find_bear_low。"""
+    assert BEAR_DRAWDOWN == 0.30 and D3_TRIGGER_DRAWDOWN == 0.20
+    assert BEAR_DRAWDOWN != D3_TRIGGER_DRAWDOWN, "拆參數的意義就在兩者可以不同"
+    # find_bear_low 仍以 30% 為準：ATH 100 時，71 不算低點、69 才算
+    assert find_bear_low([100.0, 71.0], 100.0) == (None, None)
+    assert find_bear_low([100.0, 69.0], 100.0)[0] == 69.0
+
+
+def test_d3_deadlock_does_not_change_verdict():
+    """紅線 4：加了偵測之後，ok/c1/c2/c3 的判定必須與獨立算式一致。"""
+    for px, days in ((80_986.0, 66), (95_000.0, 200), (60_000.0, 10)):
+        r = d3_status(px, _LOW_2026, "2026-06-30", days, cycle_ath=_ATH_2026)
+        # 用獨立算式重算一次，不重用 d3_status 的中間值
+        exp_c1 = (px / _LOW_2026 - 1) >= 0.50
+        exp_c2 = days >= 90
+        exp_c3 = (px / _ATH_2026 - 1) <= -D3_TRIGGER_DRAWDOWN
+        assert r["c1"] is exp_c1 and r["c2"] is exp_c2 and r["c3"] is exp_c3
+        assert r["ok"] is bool(exp_c1 and exp_c2 and exp_c3)

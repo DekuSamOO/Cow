@@ -21,6 +21,27 @@ from __future__ import annotations
 WINDOW_RESET_DAYS = 90   # 連續關窗超過此天數，視為換一個熊市階段 → 批次計數歸零
 BEAR_DRAWDOWN = 0.30     # 「自 ATH 已跌逾 30%」之後才開始評判熊底（與回測同定義）
 
+# D3 觸發當下的 c3 門檻。**2026-09-04 自 BEAR_DRAWDOWN 拆出並由 30% 調為 20%。**
+#
+# 為什麼要拆：原本 c3 直接重用 BEAR_DRAWDOWN，理由是「不引入新參數」。但這兩者管的
+# 是不同的事——BEAR_DRAWDOWN 是「何時開始找低點」的資料前處理，c3 是「觸發當下仍在
+# 熊市」的閘門，合理值不同。共用的副作用是**死結**：c1 要求 price >= low x 1.5、
+# c3 要求 price <= ath x (1-c3)，當本輪熊市夠淺時兩者可行區間是空集合，D3 永遠不可能
+# 成立。逐日重放 2017-08~2026-09，c3=30% 下共 594 天處於死結（含 2025-11-20 起至今）。
+#
+# 為什麼是 20%：
+#   * **期望值選不出門檻**——以 BTC 幣數計價、H=730 天重放，c3 >= 2.5% 之後 E[幣數]
+#     完全平坦（1.832x，到小數第三位相同）；只有 < 2.5% 會崩到 1.582x（2021-10-18
+#     誤報漏進來、該輪強平）。門檻只能用結構理由選，不能用 EV 選。
+#   * **20% 是死結曲線的膝點**：死結天數 20%→141、25%→382、30%→594；往下走則平緩
+#     （20%→5% 只再省 39 天）。
+#   * **誤報安全邊際 8 倍**：擋掉 2021-10-18 只需 2.5%。
+#   * 歷史觸發集合：20% 下為 2019-04-02／2020-04-02／2023-02-19／2024-02-20，
+#     多出的 2024-02-20 是 2023-02-19 確認後 456 天的重複觸發，生產端 `d3_confirmed`
+#     只推一次，擋不擋都無害。
+# 完整證據 → vault `Literature Note\\1b D3 死結與 c3 門檻研究.md`。
+D3_TRIGGER_DRAWDOWN = 0.20
+
 
 def find_bear_low(closes, ath_value, start_pos=0, drawdown=BEAR_DRAWDOWN):
     """自 ATH 之後、且「已跌逾 drawdown」的區間裡找最低收盤。
@@ -124,7 +145,7 @@ def advance_batches(state, is_open, today_iso, batch_days, batch_count):
 
 def d3_status(current_price, low_since, low_date_iso, days_since_low,
               rebound_req=0.50, days_req=90, cycle_ath=None,
-              bear_drawdown=BEAR_DRAWDOWN):
+              trigger_drawdown=D3_TRIGGER_DRAWDOWN):
     """熊底確認（D3＝PREREG 預簽定義）：自最低點反彈 >= 50% 且距最低點 >= 90 天。
 
     回測（三次熊底、限「自 ATH 已跌逾 30%」後才評判）：中位延遲 +99 天、
@@ -146,9 +167,22 @@ def d3_status(current_price, low_since, low_date_iso, days_since_low,
        它是 2023-02-19 已確認底部之後 456 天的重複觸發；生產端哨兵只推一次
        （狀態 d3_confirmed），擋掉重複觸發無害。所以不是「完全分離」，
        而是「誤報一定被擋、被擋的另一次是無害的重複觸發」。
-    → 加一道「觸發當下仍需距 cycle ATH >= bear_drawdown」的閘門。
-    **刻意重用既有的 BEAR_DRAWDOWN(30%)，不引入新參數**——它本來就是本檔對「熊市」的定義，
-    只是原本只用來找低點、沒用在觸發當下。
+    → 加一道「觸發當下仍需距 cycle ATH >= trigger_drawdown」的閘門。
+
+    ⚠️ **2026-09-04 更正：原本這裡重用 BEAR_DRAWDOWN(30%)「不引入新參數」，該決定已被推翻。**
+    重用造成 c1 與 c3 互斥的**死結**（見下方死結偵測段），且 BEAR_DRAWDOWN 管的是
+    「何時開始找低點」、c3 管的是「觸發當下仍在熊市」，本來就是兩件事。
+    現已拆為獨立的 `D3_TRIGGER_DRAWDOWN = 0.20`（模組頂端有完整選值理由）。
+    `find_bear_low` 仍用 BEAR_DRAWDOWN(30%)，**不受本次調整影響**。
+
+    ── c3 門檻怎麼選（2026-09-04）──────────────────────────────────────────
+    **不能用期望值選**：以 BTC 幣數計價、H=730 天重放四個週期，c3 >= 2.5% 之後
+    E[幣數] 完全平坦（1.832x，到小數第三位相同），只有 < 2.5% 崩到 1.582x。
+    平坦的原因是門檻唯一改變的 2024-02-20 排在同週期 2023-02-19 之後，
+    而生產端只推一次 —— **門檻改了，實際動作的那一次沒變**。
+    且整條曲線的台階由**單一事件**（2021-10-18 誤報）決定、n=4 週期，
+    這個樣本數不足以分辨 20%/25%/30%。故改用結構理由（死結頻率 vs 誤報邊際）選 20%。
+    完整掃描 → vault `Literature Note\\1b D3 死結與 c3 門檻研究.md`。
 
     cycle_ath=None → 不套用 c3（向後相容；但生產端一律要傳，否則等於沒有這道閘門）。
     """
@@ -162,15 +196,35 @@ def d3_status(current_price, low_since, low_date_iso, days_since_low,
     c3 = True
     if cycle_ath:
         dd = cur / float(cycle_ath) - 1.0
-        c3 = dd <= -float(bear_drawdown)
+        c3 = dd <= -float(trigger_drawdown)
+
+    # ── 死結偵測（2026-09-04 新增）────────────────────────────────────────
+    # c1 要求 price >= low x (1+rebound_req)；c3 要求 price <= ath x (1-trigger_drawdown)。
+    # 這兩條的可行區間會是**空集合**——當本輪熊市夠淺（低點離 ATH 不夠遠）時，
+    # 「從低點彈 50%」的價位已經漲出「距 ATH c3%」的熊市定義，D3 永遠不可能成立。
+    # 逐日重放 2017-08~2026-09：c3=30%（舊值）下共 594 天處於此狀態，c3=20%（現值）降到 141 天
+    # （2021-05~10、2021-12~2022-05、2025-11-20 起至今），**而哨兵從未說過**
+    # ——它只報「反彈不足／天數不足」，看起來像是還在等，其實是等不到。
+    # 這裡只**偵測與揭露**，不改變任何判定：ok 的計算完全不受影響。
+    #   deadlock          : 目前 c1 與 c3 是否互斥
+    #   deadlock_max_c3   : 要讓兩者有解，c3 門檻最大只能設到多少（1 - (1+reb_req)*low/ath）
+    deadlock, max_c3 = None, None
+    if cycle_ath:
+        ath_f = float(cycle_ath)
+        c1_floor = float(low_since) * (1.0 + rebound_req)   # c1 的最低可行價
+        c3_ceil = ath_f * (1.0 - float(trigger_drawdown))      # c3 的最高可行價
+        deadlock = bool(c1_floor > c3_ceil)
+        max_c3 = 1.0 - (1.0 + rebound_req) * float(low_since) / ath_f
+
     return {
         "ok": bool(c1 and c2 and c3), "c1": bool(c1), "c2": bool(c2), "c3": bool(c3),
         "rebound": reb, "rebound_req": rebound_req,
         "days": int(days_since_low or 0), "days_req": days_req,
         "low": float(low_since), "low_date": low_date_iso,
         "price_req": float(low_since) * (1.0 + rebound_req),
-        "drawdown_from_ath": dd, "drawdown_req": -float(bear_drawdown),
+        "drawdown_from_ath": dd, "drawdown_req": -float(trigger_drawdown),
         "cycle_ath": (None if cycle_ath is None else float(cycle_ath)),
+        "deadlock": deadlock, "deadlock_max_c3": max_c3,
     }
 
 
