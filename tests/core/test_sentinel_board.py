@@ -4,10 +4,13 @@ import core.sentinel_board as SB
 from core.sentinel_board import sentinel_rows, HEDGE_BATCHES, HEDGE_G3_PEAK
 
 
-def test_all_seven_sentinels_always_listed():
-    """七個哨兵一律列出——取不到值標「—」而不是整段消失（死項要看得見）。"""
+def test_all_six_sentinels_always_listed():
+    """六個哨兵一律列出——取不到值標「—」而不是整段消失（死項要看得見）。
+
+    2026-09-07：原第 3 個「馬丁重啟」整組移除，7 → 6，其後編號各往前一位。
+    """
     rows = sentinel_rows(state={})
-    assert len(rows) == 7
+    assert len(rows) == 6
     for i, r in enumerate(rows, 1):
         assert r.startswith(str(i)), f"第 {i} 列順序錯：{r}"
 
@@ -22,11 +25,11 @@ def test_unreadable_state_is_not_reported_as_no_record(tmp_path, monkeypatch):
     monkeypatch.setattr(SB, "STATE_FILE", str(tmp_path / "no.json"))
     monkeypatch.setattr(SB, "REMOTE_CACHE", str(tmp_path / "no2.json"))
     rows = sentinel_rows()                       # state=None → 走 load_state
-    for i in (1, 2, 6):                          # 2/3/7 列（index 1,2,6）
+    for i in (1, 5):                             # 2 行動翻轉 / 6 週報（index 1,5）
         assert "尚無紀錄" not in rows[i], f"讀不到狀態卻宣稱沒紀錄：{rows[i]}"
         assert "讀不到" in rows[i]
-    assert "狀態未知" in rows[4]                  # D3 不得說「待命」
-    assert "已建 ?/3" in rows[5]                  # 套保批次不得說 0/3
+    assert "狀態未知" in rows[3]                  # 4 熊底 D3 不得說「待命」
+    assert "已建 ?/3" in rows[4]                  # 5 套保批次不得說 0/3
     assert any("不可信" in r for r in rows)
 
 
@@ -34,7 +37,7 @@ def test_no_record_still_says_no_record_when_state_is_readable():
     """有狀態、只是該鍵沒紀錄 → 仍要說「尚無紀錄」，不可一律推給讀不到。"""
     rows = sentinel_rows(state={"last_action_label": "順勢持有"})
     assert "順勢持有" in rows[1]
-    assert "尚無紀錄" in rows[2]      # 馬丁重啟真的沒紀錄
+    assert "尚無紀錄" in rows[5]      # 6 週報真的沒紀錄
 
 
 def test_no_side_effects_on_state_file(tmp_path, monkeypatch):
@@ -68,19 +71,19 @@ def test_escape_tier_thresholds_are_reachable():
 
 
 def test_hedge_row_reflects_g3_precondition_and_progress():
-    armed = sentinel_rows(rsi14=60.0, rsi_peak=86.0, state={})[5]
+    armed = sentinel_rows(rsi14=60.0, rsi_peak=86.0, state={})[4]
     assert "G3✅" in armed and "已建 0/3" in armed
-    not_armed = sentinel_rows(rsi14=60.0, rsi_peak=70.0, state={})[5]
+    not_armed = sentinel_rows(rsi14=60.0, rsi_peak=70.0, state={})[4]
     assert "G3✕" in not_armed
     done = sentinel_rows(rsi14=60.0, rsi_peak=86.0,
-                         state={"hedge_batch_1": True})[5]
+                         state={"hedge_batch_1": True})[4]
     assert "已建 1/3" in done
 
 
 def test_d3_row_surfaces_new_c3_gate():
     """c3（仍在熊市）未過時必須在畫面上說出來，否則使用者只會看到『沒觸發』。"""
     row = sentinel_rows(d3={"ok": False, "c1": True, "c2": True, "c3": False,
-                            "rebound": 1.08, "days": 90}, state={})[4]
+                            "rebound": 1.08, "days": 90}, state={})[3]
     assert "c3未過" in row
 
 
@@ -123,9 +126,9 @@ def test_compact_view_fits_panel_width():
             assert _dw(r) <= limit, f"寬 {_dw(r)} > 版面下限 {limit}：{r}"
 
 
-def test_full_view_still_seven_rows_for_entry_screen():
+def test_full_view_still_six_rows_for_entry_screen():
     """watcher 進場畫面仍用完整版（該頁沒有東西跟它搶垂直空間）。"""
-    assert len(sentinel_rows(state={})) == 7
+    assert len(sentinel_rows(state={})) == 6
 
 
 # ── 標籤欄對齊（2026-08-26）───────────────────────────────────────────────────

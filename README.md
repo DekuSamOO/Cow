@@ -59,7 +59,7 @@ core/
   watch_plan.py       交易計畫檔（watch_plan.json）載入/驗證/衍生計算，純函數零網路（E1，2026-07-04）：TradePlan dataclass（entry 區間/stop/targets/size_pct/valid_until）＋載入即擋的價位順序驗證（long 須 stop<entry≤targets 遞增、short 鏡像；壞計畫收 errors 不拋，監控不因打錯字中斷）＋R 風報比＋過期判定；`load_plans_cached` mtime 快取（watcher 60s 輪詢、檔案沒動不重讀、盤中改檔下輪生效）＋`plan_panel_rows` 面板列。watch_plan.json 必留在 .gitignore（公開 repo，個人部位計畫不入庫）
   watch_alerts.py     警戒引擎（E2/E3，2026-07-04）純函數核心：`check_price_events`（入進場區/破停損/達目標，各自獨立武裝；遲滯防抖沿用 scripts/price_alert.py 實戰 pattern——觸發解除武裝、離開觸發價位 0.5% 才重武裝，免費源延遲價震盪不狂響；過期計畫不觸發）＋`check_signal_change`（composite action_key 變化、同 key 去重、首次觀測不觸發）＋`journal_append`/`journal_record`（logs/watch_journal.jsonl 一行一事件，含觸發當下訊號快照；寫入失敗靜默不干擾盯盤）＋`notify_beep`（winsound 兩短音、非 Windows 退終端 bell）。通知本地 only，LINE 推播明確不在 v1
   relative_high_us.py／relative_low_us.py 美股相對高低點（逃頂/抄底雷達）純函數 v0.1〔2026-07 新建〕：美股個股槓桿/法人/IV 無免費源，改用純 OHLCV 三維（技術背離50＋量價背離30＋結構轉折20，理論/實際總分皆 100）——技術維度複用 `relative_high_tw._score_technical_high`／`relative_low_tw._score_technical_low`（跨市場外插）並以 `rescale_dim` 換算到本框架宣告的 max 50（原函式固定 max 30/25，須 rescale 才不會讓實際上限被鎖在 80/75）；量價/結構維度來自 `core.relative_universal`。全數規則式、尚未在美股資料上跑過回測。compute_relative_high_us/low_us + relative_high_us_meta/relative_low_us_meta。⛔ **2026-08-26 端到端重驗：確認零訊號，維持撤下**（八檔 SPY/QQQ/AAPL/NVDA/MSFT/AMZN/GOOGL/META，波動標準化事件門檻）——逃頂計時 AUC 中位 **0.500**、體制 r 中位 **+0.011（方向還反了，4/8）**；抄底 0.521／+0.035（6/8）。**重啟條件三條寫在 `relative_high_us.py` 檔尾，缺一不可**
-  sentinel_board.py   七個 LINE 哨兵的**總覽與共用常數單一來源**（2026-08-25 立）：純顯示零副作用，只讀 `escape_alert_state.json`（本機沒有時用 gh CLI 抓 GH Actions artifact，6 小時 TTL）。套保建倉哨兵的三個常數也收在這裡供 `daily_line_notify` 與 `BTC_WATCH` 共用——`HEDGE_BATCHES`（65/55/50 各 0.0428 BTC）、`HEDGE_G3_PEAK`=75、`HEDGE_G3_WINDOW`=20。**檔頭寫著 RSI 判斷依據正本**：日線 RSI-14（Wilder）、口徑為**收完的日線收盤**（排除當日未收 K 棒）、前提為近 20 日曾 >75、觸發為嚴格小於門檻；**口徑的實作正本＝`closed_daily_rsi(df, window)`**（回 `(rsi14_closed, rsi_peak, closed_date)`，收完的日線不滿 window 根就回三個 None——湊不滿整個視窗算出的 peak 會低估，寧可讓哨兵報缺值略過），`daily_line_notify` 與 `BTC_WATCH` **都呼叫它、不各自實作**：口徑只寫在註解裡而程式碼各自為政，正是這次 90→20 與 `btc`→`btc_df` 的同一種成因。20 日對齊回測 `V1_bottom_and_hedge.py` 的 `rolling(20).max()`；實作一度寫成 90 日（從未被回測支持），2026-09-02 掃過 20/40/60/90 四個視窗確認分不出來後改回 20
+  sentinel_board.py   六個 LINE 哨兵的**總覽與共用常數單一來源**（2026-08-25 立；原七個，馬丁重啟哨兵已於 2026-09-07 移除）：純顯示零副作用，只讀 `escape_alert_state.json`（本機沒有時用 gh CLI 抓 GH Actions artifact，6 小時 TTL）。套保建倉哨兵的三個常數也收在這裡供 `daily_line_notify` 與 `BTC_WATCH` 共用——`HEDGE_BATCHES`（65/55/50 各 0.0428 BTC）、`HEDGE_G3_PEAK`=75、`HEDGE_G3_WINDOW`=20。**檔頭寫著 RSI 判斷依據正本**：日線 RSI-14（Wilder）、口徑為**收完的日線收盤**（排除當日未收 K 棒）、前提為近 20 日曾 >75、觸發為嚴格小於門檻；**口徑的實作正本＝`closed_daily_rsi(df, window)`**（回 `(rsi14_closed, rsi_peak, closed_date)`，收完的日線不滿 window 根就回三個 None——湊不滿整個視窗算出的 peak 會低估，寧可讓哨兵報缺值略過），`daily_line_notify` 與 `BTC_WATCH` **都呼叫它、不各自實作**：口徑只寫在註解裡而程式碼各自為政，正是這次 90→20 與 `btc`→`btc_df` 的同一種成因。20 日對齊回測 `V1_bottom_and_hedge.py` 的 `rolling(20).max()`；實作一度寫成 90 日（從未被回測支持），2026-09-02 掃過 20/40/60/90 四個視窗確認分不出來後改回 20
   leverage_window.py  升槓桿窗口 + 熊底確認 D3 **單一真實來源**（2026-08-25 立，`scripts/daily_line_notify.py` 的 LINE 哨兵與 `BTC_WATCH.py` 的終端機摘要共用；純計算、零 IO、零 Streamlit 依賴）：`gate_status`（AHR999／距 ATH 兩道閘門，缺值回 ok=None 不可判定）＋`trigger_price`（AHR999 對價格是二次式 → 門檻價 = P×sqrt(ahr_max/ahr)，**是下界**，真跌下去 SMA200 會跟著下移故實際觸發價更高，只作「還差多少」的量級顯示不作下單價）＋`advance_batches`（分批推進，見下）＋`find_bear_low`（自 ATH 之後、且**已跌逾 `BEAR_DRAWDOWN`=30%** 的區間裡取最低收盤；不加這道跌幅門檻，熊市初期價格還在高檔就會被當成低點而誤判 D3。只回「值與位置」不回天數——兩個呼叫端的天數基準本就不同：BTC_WATCH 手上是完整日線用 K 棒位移，LINE 哨兵是 cron 執行、當日 K 棒可能還沒收故用日曆天）＋`d3_status`（熊底確認＝自最低點反彈 ≥50% 且距最低點 ≥90 天，PREREG 預簽定義）＋`compact_rows`（兩行橫向摘要，見 BTC_WATCH 版面說明）。**`advance_batches` 以「訊號日」累計而非日曆日**：回測 `D1_batching.py` 的 gap 是訊號日索引，閘門暫時不成立的日子只是不計數、不重置建構；舊版用「日曆日＋開窗即重置」，2018 那段窗口被 2~6 天的小反彈切成 7 截＝重置 6 次、六批永遠投不完。關窗只暫停不歸零，連續關窗超過 `WINDOW_RESET_DAYS`=90 天才視為換一個熊市階段而重置
 
 service/
@@ -94,7 +94,7 @@ strategy/
   notifier.py           LINE Bot 主動推播通知模組
 
 scripts/
-  daily_line_notify.py     GitHub Actions 雲端自動推播腳本（Kraken 備援，台灣 08:23 / 13:39 / 18:27 三時段，含新聞輿情、逃頂警報分級/分數Δ/遲滯狀態機、OI 快照過期警告、週日傍晚場次加推文字週報，時段閘門 hour<17 早退使本地/手動執行也僅傍晚才發；另含 maybe_send_mart_restart_alert 每日馬丁止盈重啟偵測，見下方 price_alert 說明；另含 maybe_send_leverage_window_alert 每日升槓桿窗口哨兵，AHR999 與距 ATH 兩道閘門同時成立才開窗、**分批以「訊號日」累計、關窗只暫停不歸零**；另含 maybe_send_bear_bottom_confirm_alert 熊底確認 D3 哨兵，成立即只推一次、語意為「本輪熊市視為結束→升槓桿窗口可能不再開，馬丁的 USDT 該考慮換現貨」。兩者的判定邏輯與門檻皆委由 `core/leverage_window`，本檔只負責取數與組推播文案；另含 maybe_send_hedge_batch_alert 套保分批建倉哨兵 G3，門檻與視窗取自 `core/sentinel_board`，RSI 一律用**收完的日線收盤**、每批只推一次）
+  daily_line_notify.py     GitHub Actions 雲端自動推播腳本（Kraken 備援，台灣 08:23 / 13:39 / 18:27 三時段，含新聞輿情、逃頂警報分級/分數Δ/遲滯狀態機、OI 快照過期警告、週日傍晚場次加推文字週報，時段閘門 hour<17 早退使本地/手動執行也僅傍晚才發；另含 maybe_send_leverage_window_alert 每日升槓桿窗口哨兵，AHR999 與距 ATH 兩道閘門同時成立才開窗、**分批以「訊號日」累計、關窗只暫停不歸零；開窗與關窗兩條計數皆同日去重（計日曆天不計場次）**；另含 maybe_send_bear_bottom_confirm_alert 熊底確認 D3 哨兵，成立即只推一次、語意為「本輪熊市視為結束→升槓桿窗口可能不再開，馬丁的 USDT 該考慮換現貨」。兩者的判定邏輯與門檻皆委由 `core/leverage_window`，本檔只負責取數與組推播文案；另含 maybe_send_hedge_batch_alert 套保分批建倉哨兵 G3，門檻與視窗取自 `core/sentinel_board`，RSI 一律用**收完的日線收盤**、每批只推一次）
   price_alert.py           GitHub Actions 每小時價格警報（防守線＝config.ALERT_PRICE_LOW；文案由 config.DEFENSE_LADDER 三階推移表動態組裝，含同日去重 + armed 遲滯：跌破推一次、回升門檻+$500 才重新武裝。觸發價/釋出量等真實數字自 2026-07-06 起改由私有來源載入，見 config_private.py.example。**2026-08-21 起 ALERT_PRICE_LOW 與第 1 階觸發價解耦**——馬丁止盈重啟會讓階梯觸發價上飄並改變執行順序，警報價則刻意不跟漲，定位為「高於全部三階、留足台股 T+2 的獨立預警價」，守門判準為 >= 而非 ==）
   test_flex_message.py     本地端測試 LINE Flex Message 排版的除錯腳本
   test_compare_backtest.py 驗證腳本：對相同參數同時執行 swing.py 與 Walk-Forward，確認結果量級一致
@@ -410,6 +410,36 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 ---
 
 ## 版本紀錄
+
+### v3.51 (2026-09-07)
+**P4 馬丁止盈重啟哨兵整組移除**（使用者拍板）＋ **升槓桿關窗計數器修正**。
+
+- **remove(notify)**: 刪除 `maybe_send_mart_restart_alert()`、`detect_mart_restart()`、
+  `_mart_restart_lines()` 與私有設定 `MART_TP_BASELINE`。LINE 哨兵由 7 個減為 6 個
+  （`core/sentinel_board.py` 清單與顯示列同步重編號）。
+  三個移除理由，缺一都不足以刪：
+  ① **取不到資料**——GitHub Actions 的美國 IP 遇 Binance 451、Kraken 備援也空，
+     `detect_mart_restart` 恆回 `None`，抽查 2026-08-23/08-24/09-03~09-06 六場全印
+     「馬丁重啟偵測不可用（行情取數失敗），略過」；
+  ② **從未推播過一則**——狀態 artifact 裡沒有 `last_mart_restart_key`，
+     而兩台馬丁 2026-08-24／08-25 就已跨過推斷止盈價（基線 08-22，後高 $82,300）；
+  ③ **追蹤對象已退場**——六台幣本位網格全關、無槓桿部位，`DEFENSE_LADDER` 語義
+     已由「補保證金」降為「彈藥動員」，沒有階梯要防守。
+  防守推播的「執行前必對帳重算」提醒**保留為固定一行**（它是靜態警語不是哨兵），
+  由 `tests/test_defense_ladder.py::test_message_keeps_static_recalc_warning` 守住。
+- **fix(ops)**: 同步指紋由五元組改回四元組（拿掉 `mart_tp_baseline`）。
+  本地與 Actions 走同一份程式碼，兩邊同時改變、指紋照樣一致；
+  Secret `DEFENSE_CONFIG_JSON` 裡殘留的 `mart_tp_baseline` 鍵會被忽略，**不必動 secret**。
+- **fix(leverage)**: `advance_batches` 關窗那條補同日去重（`lev_last_closed_date`）。
+  修正前 `lev_closed_days` **數的是哨兵場次不是日曆天**——工作流一天跑三場、每場 +1，
+  `WINDOW_RESET_DAYS = 90` 實際 30 個日曆天就到，會把「窗口暫時關掉、之後續接」
+  誤判成「換一個熊市階段」而重頭投第 1 批（同一個熊市可能投超過 6 批，
+  違反 vault「1b 開窗後分批執行研究」七方案對決選出的「最多 6 批」）。
+  實證：狀態 artifact 2026-08-25 為 2、2026-09-06 為 38，相隔 12 天恰好 +36＝12×3。
+  開窗那條本來就有去重（`lev_last_open_date`），本次補上對稱的那一半。
+- **test**: 舊 `test_long_close_resets` 用 `f"d{i}"` 假日期（每個都不同），
+  同日去重的缺口被繞過；改用真實連續日期，並新增三條紅線：
+  「三天三場只計 3 天」「close 當天的另外兩場不重複計數」「同日去重不得誤傷重開續接」。
 
 ### v3.50 (2026-09-03)
 **四季論引擎切換為 v2**（`config.SEASON_ENGINE: "v1" → "v2"`，受保護設定，使用者拍板）。
@@ -1366,4 +1396,4 @@ watcher 面板誠實化：移除已回測無效的 Hash Ribbons 參考訊號、�
 
 ---
 
-**最後更新：2026-09-02（v3.49）**
+**最後更新：2026-09-07（v3.51）**

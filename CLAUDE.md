@@ -287,10 +287,19 @@ S-1 私有化時**直接抄了真實防守數字**（觸發價／釋出量／加
 重啟後 24h 內告警（去重 key＝基線日＋已重啟名單，更新基線後可再告警）。
 **通則：偵測器的觸發條件不可與「它要保護的那件事」同時成立**，否則等於沒有偵測。
 
+> [!note] **2026-09-07：本偵測器已整組移除**（使用者拍板，見 README v3.51）。
+> 條目與編號保留不重排（引用要引標題不引序號）。移除理由是它換一種方式重演了同一件事：
+> 改成每日驅動之後**照樣沒出聲**——Actions 美國 IP 取不到行情，`detect_mart_restart`
+> 恆回 `None`，呼叫端只 `print` 一行「略過」就結束，六場抽查全是這樣；
+> 而兩台馬丁 08-24／08-25 就已重啟。
+> **通則要再補一句：偵測器「取不到資料」時不可靜默**——
+> 那和「偵測到沒事」是兩件事，處置也不同（同一系統的套保對拍守門就做對了：
+> 分歧或對拍源不可得 → 不下單但**推警示**）。
+
 ## 受保護決策（改動需使用者裁定）
 
 | 項目 | 規則 | 正本 |
 |---|---|---|
-| 防守通知數字 | 真實數字在 `config_private.py`（gitignored）或 Actions Secret `DEFENSE_CONFIG_JSON`，公開 `config.py` 只留載入邏輯（fail-loud）。**馬丁止盈重啟即整表作廢**（新最後加倉價＝新起始價×0.659，整表重算；每日由 `maybe_send_mart_restart_alert` 偵測告警）。防守為**條件式**：每階執行前看 `final_low`/`ensemble_low`。**`ALERT_PRICE_LOW` 自 2026-08-21 起與第 1 階解耦**（獨立預警價，判準 `>=` 不再是 `==`）| vault「1b 1 BTC ROAD.md」；驗算見「1b 馬丁格爾數學稽核」；`_governance\STRESS-btc-three-tracks.md` |
+| 防守通知數字 | 真實數字在 `config_private.py`（gitignored）或 Actions Secret `DEFENSE_CONFIG_JSON`，公開 `config.py` 只留載入邏輯（fail-loud）。**馬丁止盈重啟即整表作廢**（新最後加倉價＝新起始價×0.659，整表重算）——2026-09-07 起**無自動偵測**，防守推播固定帶一行「執行前必對帳重算」靜態警語。防守為**條件式**：每階執行前看 `final_low`/`ensemble_low`。**`ALERT_PRICE_LOW` 自 2026-08-21 起與第 1 階解耦**（獨立預警價，判準 `>=` 不再是 `==`）| vault「1b 1 BTC ROAD.md」；驗算見「1b 馬丁格爾數學稽核」；`_governance\STRESS-btc-three-tracks.md` |
 | 雙幣回測 | **舊曲線與據其做的結論全部作廢**（權利金曾在結算日才定價，全史 +1733%→−90%）。**雙幣加碼決策不可依據此回測模組** —— 實際用法是梯形建議＋偏保守權重。殘留已知偏差：σ 用 ATR/close proxy 高估 ~1.6×（方向已知、接受） | `calculate_ladder_strategy` docstring（2026-06-17 拍板） |
 | 四季論引擎 | `SEASON_ENGINE` 維持 `"v1"`，**切換 v2 需使用者裁定**。回放 2,992 天後不建議切換：v2 十二象限表對深熊嚴重度分級有結構性缺口。**不可回頭調參數讓驗收準則「看起來過」** | `Github\Cow\season_v2_replay_findings.md`；設計正本 `Github\Cow\season_v2_design.md`（皆在 vault） |

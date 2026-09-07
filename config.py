@@ -110,11 +110,10 @@ DEFAULT_APY_THRESHOLD: float = 20.0  # 20%
 # 不受影響——只有真正讀取 ALERT_PRICE_LOW/DEFENSE_LADDER/DEFENSE_DECISION_CARD 才觸發載入
 # （等同「用到防守數字才要求私有來源存在」，未設定時該功能停止，其餘功能不受拖累）。
 # 數字正本：vault「1b 1 BTC ROAD.md」§4.2 防守推移表；驗算：vault「1b 馬丁格爾數學稽核.md」。
-# ⚠️ 馬丁重啟即作廢／防守為條件式／決策卡設計說明見 config_private.py.example 與 vault 正本，
+# ⚠️ 防守為條件式／決策卡設計說明見 config_private.py.example 與 vault 正本，
 #   本檔不再重複列出（數字已不在此處，說明留在私有檔與 vault）。
 _DEFENSE_ATTRS = frozenset(
-    ("ALERT_PRICE_LOW", "DEFENSE_LADDER", "DEFENSE_DECISION_CARD", "MART_TP_BASELINE",
-     "D3_GRID_LIQ_PRICE")
+    ("ALERT_PRICE_LOW", "DEFENSE_LADDER", "DEFENSE_DECISION_CARD", "D3_GRID_LIQ_PRICE")
 )
 _defense_cache = None
 
@@ -131,10 +130,9 @@ def _load_defense_config():
             float(data["alert_price_low"]),
             tuple(tuple(row) for row in data["defense_ladder"]),
             tuple(data["defense_decision_card"]),
-            # P4（2026-07-13）：馬丁止盈重啟偵測基線——「可選」鍵，缺值=偵測停用
-            # 回退舊靜態警語（非防守數字本體，不觸發 fail-loud）。
-            data.get("mart_tp_baseline"),
             # D3 網格緩衝哨兵（2026-08-26）：「可選」鍵，缺值=無活躍 D3 網格，哨兵略過。
+            # ⚠️ 2026-09-07：舊的 "mart_tp_baseline" 鍵已隨馬丁哨兵移除，本載入器不再讀取。
+            #    Actions secret 若仍留著該鍵，會被直接忽略，不需另外改 secret。
             data.get("d3_grid_liq_price"),
         )
         return _defense_cache
@@ -143,7 +141,6 @@ def _load_defense_config():
         _alp, _dl, _ddc = (
             _cp.ALERT_PRICE_LOW, _cp.DEFENSE_LADDER, _cp.DEFENSE_DECISION_CARD,
         )
-        _mtb = getattr(_cp, "MART_TP_BASELINE", None)
         _d3glp = getattr(_cp, "D3_GRID_LIQ_PRICE", None)
     except ImportError as e:
         raise RuntimeError(
@@ -152,15 +149,15 @@ def _load_defense_config():
             "  GitHub Actions：設定 Repository Secret DEFENSE_CONFIG_JSON\n"
             "防守推播已停止，直到私有來源就緒。"
         ) from e
-    _defense_cache = (_alp, _dl, _ddc, _mtb, _d3glp)
+    _defense_cache = (_alp, _dl, _ddc, _d3glp)
     return _defense_cache
 
 
 def __getattr__(name):
     if name in _DEFENSE_ATTRS:
-        alp, dl, ddc, mtb, d3glp = _load_defense_config()
+        alp, dl, ddc, d3glp = _load_defense_config()
         return {"ALERT_PRICE_LOW": alp, "DEFENSE_LADDER": dl,
-                "DEFENSE_DECISION_CARD": ddc, "MART_TP_BASELINE": mtb,
+                "DEFENSE_DECISION_CARD": ddc,
                 "D3_GRID_LIQ_PRICE": d3glp}[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

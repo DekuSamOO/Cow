@@ -18,7 +18,13 @@ core/leverage_window.py — 升槓桿窗口與熊底確認的單一真實來源�
 """
 from __future__ import annotations
 
-WINDOW_RESET_DAYS = 90   # 連續關窗超過此天數，視為換一個熊市階段 → 批次計數歸零
+# 連續關窗超過此**日曆天數**，視為換一個熊市階段 → 批次計數歸零。
+# ⚠️ 單位是「天」不是「哨兵場次」：每日推播 workflow 一天跑三場（台北 08:23/13:39/18:27），
+#    2026-09-07 修正前 `lev_closed_days` 在關窗那條沒有同日去重、每跑一場就 +1，
+#    等於一天加 3 —— 90 天的門檻實際 30 個日曆天就到，會把「窗口暫時關掉、之後續接」
+#    誤判成「換一個熊市階段」而重頭投第 1 批（同一個熊市可能投超過 6 批）。
+#    實證：狀態 artifact 2026-08-25 為 2、2026-09-06 為 38，相隔 12 天恰好 +36＝12×3。
+WINDOW_RESET_DAYS = 90
 BEAR_DRAWDOWN = 0.30     # 「自 ATH 已跌逾 30%」之後才開始評判熊底（與回測同定義）
 
 # D3 觸發當下的 c3 門檻。**2026-09-04 自 BEAR_DRAWDOWN 拆出並由 30% 調為 20%。**
@@ -99,7 +105,11 @@ def advance_batches(state, is_open, today_iso, batch_days, batch_count):
 
     事件字串：'open'（關→開）／'batch'（窗口內到期）／'close'（開→關）／None。
     state 需含（皆可缺）：lev_window_open、lev_signal_days、lev_batches_sent、
-    lev_window_start、lev_last_open_date、lev_closed_days。
+    lev_window_start、lev_last_open_date、lev_closed_days、lev_last_closed_date。
+
+    **同日重跑一律不重複計數，開窗與關窗兩條都是**（去重鍵分別為 lev_last_open_date
+    與 lev_last_closed_date）——少了任何一邊，該邊的計數器就會變成「數場次」而不是
+    「數天」（關窗那條在 2026-09-07 之前正是如此，實證見頂端 WINDOW_RESET_DAYS 註解）。
     """
     s = dict(state or {})
     was_open = bool(s.get("lev_window_open"))
@@ -132,9 +142,15 @@ def advance_batches(state, is_open, today_iso, batch_days, batch_count):
     s["lev_window_open"] = False
     if was_open:
         s["lev_closed_days"] = 1
+        s["lev_last_closed_date"] = today_iso
         return s, None, "close"
+    # 同一天重複跑不重複計數（與上方開窗那條對稱，去重靠 lev_last_closed_date）。
+    # 缺這一段的後果與實證數字，見本檔頂端 WINDOW_RESET_DAYS 的註解（唯一正本，勿在此重述）。
+    if s.get("lev_last_closed_date") == today_iso:
+        return s, None, None
     closed_days += 1
     s["lev_closed_days"] = closed_days
+    s["lev_last_closed_date"] = today_iso
     if closed_days > WINDOW_RESET_DAYS and sig > 0:
         s["lev_signal_days"] = 0
         s["lev_batches_sent"] = 0

@@ -1,21 +1,23 @@
 """
 core/sentinel_board.py · 哨兵總覽（單一真實來源）
 
-2026-08-25 建立。動機：LINE 哨兵目前有 7 個，但**它們的狀態只存在推播那一刻**——
+2026-08-25 建立。動機：LINE 哨兵目前有 6 個，但**它們的狀態只存在推播那一刻**——
 在 watcher / BTC_WATCH 畫面上完全看不到「哪些已經響過、哪些還在待命、離觸發多遠」。
 本模組把 `escape_alert_state.json` 的推播狀態與當下的live 條件併成一張表。
 
 純顯示、零副作用：**只讀狀態檔，不寫、不推播**。推播邏輯仍只在
 `scripts/daily_line_notify.py`（那支才有 send_line_message）。
 
-7 個哨兵與其去重鍵：
+6 個哨兵與其去重鍵：
   1 逃頂警報      escape_alert           分級門檻 config.ESCAPE_ALERT_TIERS
   2 行動翻轉      action_alert           last_action_key
-  3 馬丁重啟      mart_restart_alert     last_mart_restart_key
-  4 升槓桿窗口    leverage_window_alert  兩道閘門 + 批次計數
-  5 熊底確認 D3   bear_bottom_confirm    d3_confirmed
-  6 套保建倉      hedge_batch_alert      hedge_batch_1/2/3
-  7 週報          weekly_summary         last_weekly_date
+  3 升槓桿窗口    leverage_window_alert  兩道閘門 + 批次計數
+  4 熊底確認 D3   bear_bottom_confirm    d3_confirmed
+  5 套保建倉      hedge_batch_alert      hedge_batch_1/2/3
+  6 週報          weekly_summary         last_weekly_date
+
+2026-09-07：原第 3 個「馬丁重啟」（`last_mart_restart_key`）整組移除，
+哨兵由 7 個減為 6 個，其後編號各往前一位。移除理由見 README 更新紀錄。
 """
 import json
 import os
@@ -255,44 +257,41 @@ def sentinel_rows(top_score: Optional[int] = None,
     # 2 行動翻轉
     rows.append("2 行動翻轉    " + _hist("last_action_label", "行動翻轉"))
 
-    # 3 馬丁重啟
-    rows.append("3 馬丁重啟    " + _hist("last_mart_restart_key", "馬丁重啟"))
-
-    # 4 升槓桿窗口
+    # 3 升槓桿窗口
     if gate and gate.get("ok") is not None and gate.get("ahr") is not None:
         g1 = "✅" if gate.get("g1") else "✕"
         g2 = "✅" if gate.get("g2") else "✕"
         # ahr/dath 缺值時走下面的「—」分支：不可在 f-string 直接格式化 None（獨立檢核 🟡 No.10）
-        rows.append(f"4 升槓桿窗口  AHR999 {float(gate['ahr']):.3f}{g1}  距ATH {gate.get('dath')}天{g2}"
+        rows.append(f"3 升槓桿窗口  AHR999 {float(gate['ahr']):.3f}{g1}  距ATH {gate.get('dath')}天{g2}"
                     + ("  🟢 開窗中" if gate.get("ok") else "  ⚪ 未開"))
     else:
-        rows.append("4 升槓桿窗口  —")
+        rows.append("3 升槓桿窗口  —")
 
-    # 5 熊底確認 D3（含 2026-08-25 新增的 c3「仍在熊市」閘門）
+    # 4 熊底確認 D3（含 2026-08-25 新增的 c3「仍在熊市」閘門）
     if d3 and d3.get("ok") is not None:
         c1 = "✅" if d3.get("c1") else "✕"
         c2 = "✅" if d3.get("c2") else "✕"
         c3 = "" if d3.get("c3", True) else "  ⚠c3未過(距ATH太近)"
-        rows.append(f"5 熊底確認D3  反彈 {d3.get('rebound', 0) * 100:+.1f}%{c1}"
+        rows.append(f"4 熊底確認D3  反彈 {d3.get('rebound', 0) * 100:+.1f}%{c1}"
                     f"  距低 {d3.get('days', 0)}天{c2}{c3}  {_mark(st.get('d3_confirmed'), unavailable)}")
     else:
-        rows.append("5 熊底確認D3  —  " + _mark(st.get("d3_confirmed"), unavailable))
+        rows.append("4 熊底確認D3  —  " + _mark(st.get("d3_confirmed"), unavailable))
 
-    # 6 套保建倉（G3 前提 + 三批）
+    # 5 套保建倉（G3 前提 + 三批）
     if rsi14 is not None and rsi_peak is not None:
         armed = rsi_peak > HEDGE_G3_PEAK
         done = [n for n, _, _ in HEDGE_BATCHES if st.get(f"hedge_batch_{n}")]
         nxt = next((f"<{thr}" for n, thr, _ in HEDGE_BATCHES
                     if n not in done and rsi14 >= thr), None)
         pre = "G3✅" if armed else f"G3✕(近{HEDGE_G3_WINDOW}日峰 {rsi_peak:.0f}，需>{HEDGE_G3_PEAK})"
-        rows.append(f"6 套保建倉    RSI {rsi14:.1f}  {pre}"
+        rows.append(f"5 套保建倉    RSI {rsi14:.1f}  {pre}"
                     f"  已建 {'?' if unavailable else len(done)}/3" + (f"  下一批 RSI {nxt}" if nxt and armed else ""))
     else:
         done = [n for n, _, _ in HEDGE_BATCHES if st.get(f"hedge_batch_{n}")]
-        rows.append(f"6 套保建倉    —  已建 {'?' if unavailable else len(done)}/3")
+        rows.append(f"5 套保建倉    —  已建 {'?' if unavailable else len(done)}/3")
 
-    # 7 週報
-    rows.append("7 週報        " + _hist("last_weekly_date", "週報"))
+    # 6 週報
+    rows.append("6 週報        " + _hist("last_weekly_date", "週報"))
 
     # 狀態來源與新鮮度：讀不到 vs 有紀錄，使用者必須分得出來
     if unavailable:
@@ -313,7 +312,7 @@ def sentinel_compact(top_score=None, gate=None, d3=None,
     """
     兩行橫向摘要版（給垂直空間吃緊的 BTC 儀表板用）。
 
-    為什麼要有：完整版 7 列 + 標題 + 來源 = 10 列，而儀表板**改動前就已經 51 列**、
+    為什麼要有：完整版 6 列 + 標題 + 來源 = 9 列，而儀表板**改動前就已經 51 列**、
     本來就超過一般終端機高度；再加 10 列等於把表頭與即時行情推出畫面
     （2026-08-25 實測 51 → 61 列）。橫向沒撐開是因為兩欄區把 W 壓在 102 欄、
     哨兵最寬才 62 —— 那是運氣不是設計，所以這裡也一併把寬度壓在 102 以內。
@@ -356,17 +355,17 @@ def sentinel_compact(top_score=None, gate=None, d3=None,
     else:
         act = st.get("last_action_label") or "—"
         # `[5:]` 是要把 "2026-08-26" 去掉年份成 "08-26"；**不可套在 fallback 上**
-        # ——"—"[5:] 會切成空字串，畫面顯示「週報 ｜馬丁」中間憑空缺一塊（2026-08-26 修）。
+        # ——"—"[5:] 會切成空字串，畫面會憑空缺一塊（2026-08-26 修；當時後面還接著
+        # 「｜馬丁 X」欄，缺口夾在中間更明顯。該欄已於 2026-09-07 隨馬丁哨兵一併移除）。
         _wk = st.get("last_weekly_date")
         wk = _wk[5:] if _wk else "—"
-        mart = "已推" if st.get("last_mart_restart_key") else "—"
         src = ""
         if source == "remote":
             try:
                 src = f"｜狀態源 artifact {(time.time() - os.path.getmtime(REMOTE_CACHE)) / 3600:.1f}h 前"
             except Exception:
                 src = "｜狀態源 artifact"
-        line2 = f"行動 {act}｜週報 {wk}｜馬丁 {mart}{src}"
+        line2 = f"行動 {act}｜週報 {wk}{src}"
 
     # ⚠️ 標籤欄一律補到**顯示寬度 16**（含開頭兩個空白），與同區其他行對齊
     #    （現價／升槓桿哨兵／熊底確認 D3／哨兵狀態…全部是 16）。

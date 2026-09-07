@@ -88,13 +88,59 @@ def test_short_close_does_not_reset_batches():
     assert sig < BATCH_DAYS   # 證明中間確實有累積過程，不是一次跳到位
 
 
+def _iso(n):
+    """關窗計數測試用的**真實連續日期**（不可用 f"d{i}" 這種假日期——
+    假日期每個都不同，同日去重的缺口會被測試繞過，2026-09-07 就是這樣漏掉的）。"""
+    from datetime import date, timedelta
+    return str(date(2026, 10, 1) + timedelta(days=n))
+
+
 def test_long_close_resets():
     st = {"lev_window_open": True, "lev_signal_days": 30, "lev_batches_sent": 3}
-    st, b, ev = advance_batches(st, False, "2026-10-01", BATCH_DAYS, BATCH_N)
+    st, b, ev = advance_batches(st, False, _iso(0), BATCH_DAYS, BATCH_N)
     assert ev == "close" and st["lev_batches_sent"] == 3
-    for i in range(WINDOW_RESET_DAYS + 2):
-        st, b, ev = advance_batches(st, False, f"d{i}", BATCH_DAYS, BATCH_N)
+    for i in range(1, WINDOW_RESET_DAYS + 3):
+        st, b, ev = advance_batches(st, False, _iso(i), BATCH_DAYS, BATCH_N)
     assert st["lev_batches_sent"] == 0 and st["lev_signal_days"] == 0
+
+
+def test_closed_days_counts_calendar_days_not_runs():
+    """紅線：WINDOW_RESET_DAYS 的單位是**日曆天**，不是哨兵場次。
+
+    每日推播 workflow 一天跑三場。2026-09-07 修正前，關窗那條沒有同日去重、
+    每跑一場 +1，導致 90 天的門檻 30 個日曆天就到——窗口暫時關掉再重開會被
+    誤判成「換一個熊市階段」，批次計數歸零、重頭投第 1 批。
+    """
+    st = {}
+    for i in range(3):                       # 3 個日曆天
+        for _ in range(3):                   # 每天三場
+            st, _b, _ev = advance_batches(st, False, _iso(i), BATCH_DAYS, BATCH_N)
+    assert st["lev_closed_days"] == 3, (
+        f"三天三場應只計 3 天，實得 {st['lev_closed_days']}（每場都加＝數場次不是數天）")
+
+
+def test_close_event_day_also_deduped():
+    """關窗第一天（close 事件當天）之後同日重跑，不得再往上加。"""
+    st = {"lev_window_open": True, "lev_signal_days": 5, "lev_batches_sent": 1}
+    st, _b, ev = advance_batches(st, False, _iso(0), BATCH_DAYS, BATCH_N)
+    assert ev == "close" and st["lev_closed_days"] == 1
+    for _ in range(2):                       # 同一天剩下兩場
+        st, _b, _ev = advance_batches(st, False, _iso(0), BATCH_DAYS, BATCH_N)
+    assert st["lev_closed_days"] == 1, "close 當天的另外兩場不得重複計數"
+    st, _b, _ev = advance_batches(st, False, _iso(1), BATCH_DAYS, BATCH_N)
+    assert st["lev_closed_days"] == 2, "隔天才該加到 2"
+
+
+def test_reopen_after_close_dedupe_keeps_batches():
+    """同日去重不得誤傷『關窗不歸零、重開續接』這條主規則。"""
+    st = {}
+    st, b1, ev1 = advance_batches(st, True, "2026-09-01", BATCH_DAYS, BATCH_N)
+    assert (b1, ev1) == (1, "open")
+    for _ in range(3):                       # 關窗一天、跑滿三場
+        st, _b, _ev = advance_batches(st, False, "2026-09-02", BATCH_DAYS, BATCH_N)
+    assert st["lev_closed_days"] == 1 and st["lev_batches_sent"] == 1
+    st, b, ev = advance_batches(st, True, "2026-09-03", BATCH_DAYS, BATCH_N)
+    assert ev == "reopen" and b is None and st["lev_batches_sent"] == 1
 
 
 def test_same_day_rerun_does_not_double_count():
