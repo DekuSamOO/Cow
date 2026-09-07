@@ -440,6 +440,26 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 - **test**: 舊 `test_long_close_resets` 用 `f"d{i}"` 假日期（每個都不同），
   同日去重的缺口被繞過；改用真實連續日期，並新增三條紅線：
   「三天三場只計 3 天」「close 當天的另外兩場不重複計數」「同日去重不得誤傷重開續接」。
+- **fix(notify)**: **資料缺值不得靜默**——把 P4 的死法變成機制而不是自律。
+  新增 `_maybe_send_data_gap_alert()`／`_clear_data_gap_flag()`，套在**會影響下單決策的
+  四個哨兵**（升槓桿窗口／熊底 D3／D3 網格緩衝／套保建倉）：取不到資料就推一則
+  「哨兵失明」警示，資料恢復即清旗標。逃頂雷達與合成行動**刻意不納入**
+  （SOP F-4 已定為不作賣出依據，替它們推缺值警報只會淹掉真正該看的）。
+  連帶推翻 `test_skips_when_rsi_missing` 的舊斷言「資料缺值時只能沉默略過」。
+- **fix(leverage)**: 補上**第三把同日去重鑰匙** `lev_last_batch_date`。
+  前兩把（`lev_last_open_date`／`lev_last_closed_date`）之外，`lev_batches_sent`
+  這條路徑原本也沒去重：`sig` 大幅領先 `sent` 時，發完第 N 批後 `due` 上移、
+  若 `sig` 仍 >= 新 `due`，同一天的下一場就再發一批（實測 `sig=40, sent=1` ＋
+  生產參數 14/6 → 同日連發第 2、3 批）。回測定義是「每 14 個**訊號日**投 1/6」，
+  一天投掉兩三批不在定義內。正常路徑不可達，但門檻常數可調，屬 correctness 缺陷。
+- **fix(leverage)**: 舊格式狀態一次性遷移 `_migrate_legacy_closed_days()`。
+  同日去重只讓**往後**的計數恢復成日曆天，**存量灌水值不會自己校正**——線上
+  artifact 接手時是 38（實際關窗約 19 個日曆天），照舊值續算會讓
+  `WINDOW_RESET_DAYS=90` 提早約 19 天觸發。辨識法：無 `lev_last_closed_date` 鍵
+  且 `lev_closed_days > 0`。**歸零而非還原真實天數**：舊值是「場次數」，
+  每天幾場會隨排程改動、除不回去，猜係數等於製造另一個無法驗證的數字；
+  歸零的偏差方向安全（reset 只會晚到不會早到，而早到才會弄丟批次連續性）。
+  留痕 `lev_closed_days_migrated` 方便事後對帳。
 
 ### v3.50 (2026-09-03)
 **四季論引擎切換為 v2**（`config.SEASON_ENGINE: "v1" → "v2"`，受保護設定，使用者拍板）。

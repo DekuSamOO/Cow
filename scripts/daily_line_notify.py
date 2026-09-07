@@ -488,6 +488,70 @@ def _save_escape_state(state: dict) -> None:
         json.dump(state, f)
 
 
+# ── 資料缺值告警（2026-09-07 立）────────────────────────────────────────────
+# 立規原因＝P4 馬丁重啟哨兵的死法：偵測器取不到行情就 `print("...略過")` 收工，
+# 於是「該響卻響不了」與「偵測到沒事」在畫面上長得一模一樣，靜默了兩週沒人知道。
+# CLAUDE.md 陷阱 No.22 已把通則寫進去：**偵測器「取不到資料」時不可靜默。**
+#
+# 適用範圍＝**會影響下單決策的四個哨兵**：升槓桿窗口、熊底確認 D3、
+# D3 網格緩衝、套保建倉。逃頂雷達與合成行動**刻意不納入**——SOP 附錄 F-4 已把
+# 逃頂分數定為「僅供參考、不作賣出依據」，替一個不會據以下單的分數推缺值警報
+# 只會製造雜訊，反而讓真正該看的那幾則被淹掉。
+#
+# 去重採本檔既有的「推一次、恢復時清旗標」模式（同 D3 死結告警）：
+# 一天三場不會洗版，連續故障也只提醒一次；資料恢復就清旗標，下次再壞會重推。
+_DATA_GAP_ALERTS = {
+    "leverage": "升槓桿窗口哨兵",
+    "d3": "熊底確認 D3 哨兵",
+    "d3_grid": "D3 網格緩衝哨兵",
+    "hedge": "套保建倉哨兵",
+}
+
+
+def _maybe_send_data_gap_alert(key: str, detail: str, dry_run: bool = False) -> None:
+    """哨兵因資料缺值而無法判定時，推一則「哨兵目前是瞎的」警示（每次故障只推一次）。"""
+    label = _DATA_GAP_ALERTS[key]
+    flag = f"datagap_{key}"
+    state = _load_escape_state()
+    if state.get(flag):
+        print(f"OK {label}：資料缺值持續中（已推播過，不重複）。")
+        return
+    lines = [
+        f"[哨兵失明] {label} 取不到資料，本場無法判定",
+        "",
+        detail,
+        "",
+        "這**不是**「偵測到沒事」，是「偵測不了」——兩者處置不同。",
+        "資料恢復後會自動清旗標，下次再故障會重新提醒。",
+        "（前例：P4 馬丁重啟哨兵就是這樣靜默兩週，最後整組移除）",
+    ]
+    if dry_run:
+        print(f"[dry-run] 資料缺值告警：{label}（未發送）")
+        return
+    try:
+        send_line_message({"type": "text", "text": "\n".join(lines)})
+    except Exception as e:
+        print(f"X 資料缺值告警發送失敗: {e}")
+        return
+    state[flag] = True
+    state[f"{flag}_date"] = str(date.today())
+    _save_escape_state(state)
+    print(f"! {label}：已推資料缺值告警。")
+
+
+def _clear_data_gap_flag(key: str, dry_run: bool = False) -> None:
+    """資料恢復 → 清旗標，讓下一次故障能重新提醒（不因推過一次就永久靜音）。"""
+    flag = f"datagap_{key}"
+    state = _load_escape_state()
+    if not state.get(flag):
+        return
+    state.pop(flag, None)
+    state.pop(f"{flag}_date", None)
+    if not dry_run:
+        _save_escape_state(state)
+    print(f"OK {_DATA_GAP_ALERTS[key]}：資料已恢復，缺值旗標已清。")
+
+
 def attach_score_deltas(data: dict) -> None:
     """
     每日 Flex 的逃頂/抄底分數 Δ（vs 前一個推播日），寫入 data['escape_delta']/['low_delta']，
@@ -628,8 +692,14 @@ def maybe_send_leverage_window_alert(data: dict, dry_run: bool = False) -> None:
     gate = gate_status(data.get("ahr999"), data.get("days_since_ath"),
                        LEVERAGE_AHR999_MAX, LEVERAGE_MIN_DAYS_FROM_ATH)
     if gate["ok"] is None:
-        print("OK 升槓桿哨兵：AHR999 或距 ATH 天數缺值，略過。")
+        _maybe_send_data_gap_alert(
+            "leverage",
+            f"AHR999＝{data.get('ahr999')!r}／距 ATH 天數＝{data.get('days_since_ath')!r}"
+            "（任一為 None 就無法判定兩道閘門）。"
+            "情境一是目前唯一活著的出路，這則哨兵瞎掉＝窗口開了也不會有人通知。",
+            dry_run=dry_run)
         return
+    _clear_data_gap_flag("leverage", dry_run=dry_run)
 
     state = _load_escape_state()
     ahr, dath = gate["ahr"], gate["dath"]
@@ -806,15 +876,20 @@ def maybe_send_bear_bottom_confirm_alert(data: dict, dry_run: bool = False) -> N
     lo = data.get("bear_low_since_ath")
     price = data.get("current_price")
     if lo is None or price is None:
-        print("OK 熊底確認 D3：低點資料缺值，略過。")
+        _maybe_send_data_gap_alert(
+            "d3", f"本波低點＝{lo!r}／現價＝{price!r}（任一為 None 就無法判定 c1/c2/c3）。",
+            dry_run=dry_run)
         return
     # cycle_ath 必傳：沒有它就等於少掉 c3「仍在熊市」閘門（2026-08-25 新增）
     d3 = d3_status(price, lo, data.get("bear_low_date"),
                    data.get("days_since_bear_low"),
                    cycle_ath=(data.get("cycle_ath") or None))
     if d3.get("ok") is None:
-        print("OK 熊底確認 D3：無法判定，略過。")
+        _maybe_send_data_gap_alert(
+            "d3", "d3_status 回傳 ok=None（低點日期或距低天數缺值），三道條件全部無法判定。",
+            dry_run=dry_run)
         return
+    _clear_data_gap_flag("d3", dry_run=dry_run)
     if not d3["ok"]:
         _dd = d3.get("drawdown_from_ath")
         _c3 = "" if d3.get("c3", True) else (
@@ -901,8 +976,13 @@ def maybe_send_d3_grid_buffer_alert(data: dict, dry_run: bool = False) -> None:
         print("OK D3 網格緩衝：目前無活躍 D3 網格（D3_GRID_LIQ_PRICE 未設），略過。")
         return
     if price is None:
-        print("OK D3 網格緩衝：現價缺值，略過。")
+        _maybe_send_data_gap_alert(
+            "d3_grid",
+            f"有活躍 D3 網格（強平價 ${float(liq):,.0f}）但現價缺值，"
+            "無法判定是否跌破緩衝觸發點。",
+            dry_run=dry_run)
         return
+    _clear_data_gap_flag("d3_grid", dry_run=dry_run)
 
     liq = float(liq)
     threshold = liq * _config.D3_GRID_BUFFER_MULT
@@ -975,8 +1055,13 @@ def maybe_send_hedge_batch_alert(data: dict, dry_run: bool = False) -> None:
     rsi_max = data.get("rsi_peak")
     price = data.get("current_price")
     if rsi is None or rsi_max is None:
-        print("OK 套保建倉：RSI 資料缺值，略過。")
+        _maybe_send_data_gap_alert(
+            "hedge",
+            f"收盤 RSI＝{rsi!r}／近 {HEDGE_G3_WINDOW} 日峰值＝{rsi_max!r}"
+            "（任一為 None 就無法判定 G3 前提與三批門檻）。",
+            dry_run=dry_run)
         return
+    _clear_data_gap_flag("hedge", dry_run=dry_run)
     if rsi_max <= HEDGE_G3_PEAK:
         print(f"OK 套保建倉：G3 前提未成立（近 {HEDGE_G3_WINDOW} 日 RSI 最高 {rsi_max:.1f}，"
               f"需 >{HEDGE_G3_PEAK}）。")

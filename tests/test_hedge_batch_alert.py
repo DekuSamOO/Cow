@@ -93,11 +93,22 @@ def test_skips_when_g3_precondition_not_met(notify, sent):
     assert sent == [], "近 %d 日峰值未 >%d，G3 前提不成立" % (HEDGE_G3_WINDOW, HEDGE_G3_PEAK)
 
 
-def test_skips_when_rsi_missing(notify, sent):
+def test_missing_rsi_alerts_instead_of_going_silent(notify, sent):
+    """2026-09-07 推翻舊斷言「資料缺值時只能沉默略過」。
+
+    舊行為與 P4 馬丁重啟哨兵的死法同型：取不到資料就靜默，於是「該響卻響不了」
+    與「偵測到沒事」長得一樣。現在缺值改推一則「哨兵失明」警示（每次故障一次），
+    但**不得推成建倉指示**——那才是「亂推」。
+    """
     d = _data(63.9)
     d["rsi_peak"] = None
     notify.maybe_send_hedge_batch_alert(d)
-    assert sent == [], "資料缺值時只能沉默略過，不可亂推"
+    assert len(sent) == 1, "資料缺值不得靜默"
+    text = sent[0]["text"]
+    assert "哨兵失明" in text
+    # 不可誤推成建倉指示——用正式建倉訊息的專屬字串判別，不用「建倉」二字
+    # （告警標題本來就叫「套保建倉哨兵」，拿那兩個字判會自己咬自己）。
+    assert "[套保建倉]" not in text and "全倉套保" not in text and "批觸發" not in text
 
 
 def test_one_batch_per_run_even_if_multiple_due(notify, sent):

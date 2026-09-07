@@ -312,3 +312,69 @@ def test_d3_deadlock_does_not_change_verdict():
         exp_c3 = (px / _ATH_2026 - 1) <= -D3_TRIGGER_DRAWDOWN
         assert r["c1"] is exp_c1 and r["c2"] is exp_c2 and r["c3"] is exp_c3
         assert r["ok"] is bool(exp_c1 and exp_c2 and exp_c3)
+
+
+# ── 第三把鑰匙：批次同日去重（2026-09-07）────────────────────────────────
+# 前兩把是 lev_last_open_date（訊號日）與 lev_last_closed_date（關窗天數）。
+# 第三條計數路徑 lev_batches_sent 原本沒有日期去重：sig 大幅領先 sent 時，
+# 發完第 N 批後 sent+1、due 上移，若 sig 仍 >= 新 due，同一天的下一場就再發一批。
+# 回測定義是「每 batch_days 個**訊號日**投 1/n」，一天投掉兩三批不在定義內。
+
+def test_only_one_batch_per_calendar_day():
+    """紅線：sig 大幅領先 sent 時，同一天跑三場也只能發一批。"""
+    st = {"lev_window_open": True, "lev_signal_days": 40, "lev_batches_sent": 1,
+          "lev_last_open_date": "2026-09-01"}
+    fired = []
+    for _ in range(3):                      # 同一天三場
+        st, b, ev = advance_batches(st, True, "2026-09-01", BATCH_DAYS, BATCH_N)
+        if b:
+            fired.append(b)
+    assert fired == [2], f"同一天只能發一批，實得 {fired}"
+    assert st["lev_batches_sent"] == 2
+
+
+def test_next_day_can_fire_next_batch():
+    """同日去重不得卡死正常推進：隔天該發的還是要發。"""
+    st = {"lev_window_open": True, "lev_signal_days": 40, "lev_batches_sent": 1,
+          "lev_last_open_date": "2026-09-01"}
+    st, b, _ = advance_batches(st, True, "2026-09-01", BATCH_DAYS, BATCH_N)
+    assert b == 2
+    st, b, _ = advance_batches(st, True, "2026-09-02", BATCH_DAYS, BATCH_N)
+    assert b == 3, "隔天應能發第 3 批"
+
+
+def test_first_batch_on_open_also_deduped():
+    """開窗當天（open 事件）之後同日重跑，不得再發一批。"""
+    st = {}
+    st, b, ev = advance_batches(st, True, "2026-09-01", BATCH_DAYS, BATCH_N)
+    assert (b, ev) == (1, "open")
+    for _ in range(2):
+        st, b2, _ev = advance_batches(st, True, "2026-09-01", BATCH_DAYS, BATCH_N)
+        assert b2 is None, "開窗當天的另外兩場不得再發批次"
+    assert st["lev_batches_sent"] == 1
+
+
+# ── 舊格式狀態遷移（2026-09-07）──────────────────────────────────────────
+
+def test_legacy_closed_days_is_zeroed_once():
+    """線上 artifact 接手時 lev_closed_days=38（數的是場次），必須歸零重算。
+
+    同日去重只讓**往後**的計數正確，存量灌水值不會自己校正——照舊值續算的話
+    WINDOW_RESET_DAYS=90 會提早約 19 天觸發，正是本次要修掉的那個病。
+    """
+    legacy = {"lev_window_open": False, "lev_closed_days": 38}     # 無 lev_last_closed_date
+    st, _b, _ev = advance_batches(legacy, False, _iso(0), BATCH_DAYS, BATCH_N)
+    assert st["lev_closed_days"] == 1, f"舊值應歸零後重新計第 1 天，實得 {st['lev_closed_days']}"
+    assert st.get("lev_closed_days_migrated") is True, "遷移要留痕，方便事後對帳"
+    # 遷移只做一次：之後照常一天加一
+    st, _b, _ev = advance_batches(st, False, _iso(1), BATCH_DAYS, BATCH_N)
+    assert st["lev_closed_days"] == 2
+
+
+def test_new_format_state_is_not_migrated():
+    """已是新格式（有 lev_last_closed_date）就不得再歸零，否則計數永遠回不到 90。"""
+    st = {"lev_window_open": False, "lev_closed_days": 50,
+          "lev_last_closed_date": _iso(0)}
+    st, _b, _ev = advance_batches(st, False, _iso(1), BATCH_DAYS, BATCH_N)
+    assert st["lev_closed_days"] == 51
+    assert "lev_closed_days_migrated" not in st

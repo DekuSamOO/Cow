@@ -204,3 +204,72 @@ def test_weekly_summary_insufficient_data_skipped(notify, patched_state):
     _, sent = patched_state
     notify.maybe_send_weekly_summary({}, now=_SUN_EVE)   # 無價格也無分數史
     assert sent == []
+
+
+# ── 資料缺值不得靜默（2026-09-07 立）──────────────────────────────────────
+# 立規原因＝P4 馬丁重啟哨兵的死法：取不到行情就 print("略過") 收工，於是
+# 「該響卻響不了」與「偵測到沒事」長得一模一樣，靜默兩週沒人發現，最後整組移除。
+# 三條紅線：①缺值必須推警示 ②同一次故障不得洗版 ③資料恢復必須清旗標。
+
+def _gap_flag(state_file, key):
+    return json.loads(state_file.read_text()).get(f"datagap_{key}")
+
+
+def test_leverage_data_gap_is_not_silent(notify, patched_state):
+    """升槓桿哨兵缺 AHR999／距 ATH → 必須推警示，不可只 print 略過。"""
+    state_file, sent = patched_state
+    notify.maybe_send_leverage_window_alert({"ahr999": None, "days_since_ath": None})
+    assert len(sent) == 1, "資料缺值時哨兵靜默＝P4 的死法重演"
+    text = sent[0][0]["text"]
+    assert "哨兵失明" in text and "升槓桿窗口哨兵" in text
+    assert "偵測不了" in text, "必須說清楚這不是『偵測到沒事』"
+    assert _gap_flag(state_file, "leverage") is True
+
+
+def test_data_gap_alert_does_not_spam(notify, patched_state):
+    """一天三場＋連續故障數週，同一次故障只推一次。"""
+    _, sent = patched_state
+    for _ in range(9):                      # 三天 × 每天三場
+        notify.maybe_send_leverage_window_alert({"ahr999": None, "days_since_ath": None})
+    assert len(sent) == 1
+
+
+def test_data_gap_flag_cleared_when_data_returns(notify, patched_state):
+    """資料恢復 → 清旗標；下次再故障要能重新提醒（不可推過一次就永久靜音）。"""
+    state_file, sent = patched_state
+    notify.maybe_send_leverage_window_alert({"ahr999": None, "days_since_ath": None})
+    assert len(sent) == 1
+    # 資料恢復（窗口未開，不會有其他推播）
+    notify.maybe_send_leverage_window_alert({"ahr999": 0.53, "days_since_ath": 336,
+                                             "current_price": 79_800.0})
+    assert _gap_flag(state_file, "leverage") is None, "資料恢復必須清旗標"
+    # 再故障 → 重新提醒
+    notify.maybe_send_leverage_window_alert({"ahr999": None, "days_since_ath": None})
+    assert len(sent) == 2
+
+
+def test_hedge_rsi_gap_is_not_silent(notify, patched_state):
+    """套保哨兵缺 RSI → 同樣不得靜默（2026-08-25~09-02 曾因此靜默 8 天）。"""
+    state_file, sent = patched_state
+    notify.maybe_send_hedge_batch_alert({"rsi14_closed": None, "rsi_peak": None})
+    assert len(sent) == 1 and "套保建倉哨兵" in sent[0][0]["text"]
+    assert _gap_flag(state_file, "hedge") is True
+
+
+def test_d3_data_gap_is_not_silent(notify, patched_state):
+    """熊底 D3 哨兵缺低點／現價 → 不得靜默。"""
+    state_file, sent = patched_state
+    notify.maybe_send_bear_bottom_confirm_alert({"bear_low_since_ath": None,
+                                                 "current_price": None})
+    assert len(sent) == 1 and "熊底確認 D3 哨兵" in sent[0][0]["text"]
+    assert _gap_flag(state_file, "d3") is True
+
+
+def test_advisory_sentinels_stay_quiet_on_missing_data(notify, patched_state):
+    """刻意的反面：逃頂／合成行動**不**納入缺值告警（SOP F-4 已定為不作賣出依據）。
+
+    這條守的是「別把雜訊也一起推上來」——四個會影響下單的哨兵才推缺值警示。
+    """
+    _, sent = patched_state
+    notify.maybe_send_action_alert({})            # 無 composite_action
+    assert sent == []

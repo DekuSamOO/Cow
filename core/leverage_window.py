@@ -100,6 +100,28 @@ def trigger_price(price, ahr999, ahr_max):
     return float(price) * (float(ahr_max) / float(ahr999)) ** 0.5
 
 
+def _migrate_legacy_closed_days(s):
+    """一次性遷移：把 2026-09-07 之前那份「數場次」的 lev_closed_days 歸零。
+
+    為什麼需要：同日去重只讓**往後**的計數恢復成日曆天，**存量灌水值不會自己校正**。
+    線上 artifact 接手時是 38（實際關窗約 19 個日曆天），照舊值續算的話
+    WINDOW_RESET_DAYS=90 會提早 19 天觸發，正是本次要修掉的那個病。
+
+    辨識法：舊格式**沒有** lev_last_closed_date 這個鍵，而 lev_closed_days > 0。
+    兩者同時成立就是舊狀態，且**只會發生一次**（本函式跑完就補上該鍵）。
+
+    為什麼歸零而不是還原成真實天數：舊值是「場次數」，而每天幾場會隨 workflow
+    排程改動（曾是 3 場，未來可能不同），**除不回去**——猜一個係數等於製造另一個
+    無法驗證的數字。歸零的偏差方向是安全的：reset 只會**晚到**不會早到，
+    而早到才是會弄丟批次連續性的那一邊（晚到只是多等幾天才視為換熊市階段）。
+    """
+    if s.get("lev_closed_days") and "lev_last_closed_date" not in s:
+        s = dict(s)
+        s["lev_closed_days"] = 0
+        s["lev_closed_days_migrated"] = True   # 留痕，方便事後對帳
+    return s
+
+
 def advance_batches(state, is_open, today_iso, batch_days, batch_count):
     """依『訊號日』推進分批計數。回傳 (新 state, 該發第幾批 or None, 事件)。
 
@@ -112,6 +134,7 @@ def advance_batches(state, is_open, today_iso, batch_days, batch_count):
     「數天」（關窗那條在 2026-09-07 之前正是如此，實證見頂端 WINDOW_RESET_DAYS 註解）。
     """
     s = dict(state or {})
+    s = _migrate_legacy_closed_days(s)
     was_open = bool(s.get("lev_window_open"))
     sig = int(s.get("lev_signal_days") or 0)
     sent = int(s.get("lev_batches_sent") or 0)
@@ -125,16 +148,25 @@ def advance_batches(state, is_open, today_iso, batch_days, batch_count):
         s["lev_signal_days"] = sig
         s["lev_closed_days"] = 0
         s["lev_window_open"] = True
+        # 一天最多發一批（去重靠 lev_last_batch_date）。缺這道閘門時，
+        # sig 大幅領先 sent 的狀態會在同一天連發多批：發完第 N 批後 sent+1、
+        # due 隨之上移，若 sig 仍 >= 新的 due，同場次之後的下一場就再發一批。
+        # 回測定義是「每 batch_days 個**訊號日**投 1/n」，一天投掉兩三批不在定義內。
+        batched_today = (s.get("lev_last_batch_date") == today_iso)
         if not was_open:
             s.setdefault("lev_window_start", today_iso)
             if sent == 0:
+                if batched_today:
+                    return s, None, None
                 s["lev_batches_sent"] = 1
+                s["lev_last_batch_date"] = today_iso
                 return s, 1, "open"
             # 窗口重開但批次已在進行 → 不重置，續接（本模組與舊版最大差異）
             return s, None, "reopen"
         due = sent * batch_days
-        if sent < batch_count and sig >= due:
+        if sent < batch_count and sig >= due and not batched_today:
             s["lev_batches_sent"] = sent + 1
+            s["lev_last_batch_date"] = today_iso
             return s, sent + 1, "batch"
         return s, None, None
 
