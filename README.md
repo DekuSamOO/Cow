@@ -411,6 +411,37 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 
 ## 版本紀錄
 
+### v3.52 (2026-09-11)
+**哨兵狀態鏈斷裂修復**——套保第 1 批在 09-09、09-10 兩晚各重推了一則建倉指示，
+但那批早在 09-08 就已建倉。**根因不在判定邏輯，在狀態怎麼跨 run 接力。**
+
+- **fix(workflow)**: `.github/workflows/daily_line_notify.yml` 的還原步驟原本用
+  `gh run list --workflow=... --status success --limit 1` 找「最近一個成功 run」，
+  再下載它的 `escape-alert-state` artifact。**那支 API 回傳了過期結果**：兩個晚場的
+  log 都印著 `restored state from run 33361776478`（2026-08-31 的 run），
+  而當下真正最新的成功 run 是同日稍早那兩場。還原到十天前的狀態 →
+  `hedge_batch_1` 旗標不存在 → 哨兵認定第 1 批沒推過 → 再推一次。
+  佐證：該份 artifact 的 `score_history` 從 08-31 直接跳到 09-10、`last_weekly_date`
+  停在 08-30（09-06 那個週日的週報沒被記錄）。同一命令在本機與另外兩場都正確，
+  屬 workflow-runs API 的讀取一致性問題。
+  → 改為直接查 artifacts API（`?name=` 過濾），自己依 `created_at` 取最新一個未過期的，
+  用 artifact id 下載 zip 解開，**不再依賴 run 的排序**。
+- **fix(sentinel_board)**: `fetch_remote_state()` 有**同一個**寫法，哨兵總覽面板因此
+  長期顯示 08-25 的舊狀態（`hedge_batch_1` 看不到）。一併改走 artifacts API；
+  隨之移除不再需要的 `WORKFLOW` 常數。
+- **feat(notify)**: 新增第二道守門 `_state_chain_broken()`。還原步驟把 artifact 的
+  `created_at` 寫進 `GITHUB_ENV`，Python 端比對現在時間，超過 `STATE_STALE_HOURS`=30
+  就**不送任何「只推一次」的建倉指示**，改推一則「[狀態鏈斷裂]」告警。
+  套用於套保建倉與熊底確認 D3 兩個哨兵。
+  不用 state 自己的存檔時間，因為 `attach_score_deltas()` 每場開頭就會重寫一次 state，
+  「上次存檔時間」永遠是幾秒前——唯一沒被本次執行污染的時間點是 artifact 的 `created_at`。
+- **feat(scripts)**: 新增 `scripts/sop_status.py`，一次印出 BTC 部位 SOP 的全部現況
+  （行情／AHR999／主源對拍源 RSI／G3 前提與到期日／三批狀態／開窗與 D3 閘門／狀態檔全鍵）。
+  口徑全部沿用生產路徑，不自己重算。
+- **test**: `tests/test_hedge_batch_alert.py` 新增四條——舊狀態不可推建倉／舊狀態不可靜默／
+  新鮮狀態不可被誤擋／本機無環境變數時守門不生效。44 passed；
+  **負向驗證**：把守門改成恆回 False，2 failed 且 log 重現 `! 套保建倉第 1 批已推播。`
+
 ### v3.51 (2026-09-07)
 **P4 馬丁止盈重啟哨兵整組移除**（使用者拍板）＋ **升槓桿關窗計數器修正**。
 
@@ -1416,4 +1447,4 @@ watcher 面板誠實化：移除已回測無效的 Hash Ribbons 參考訊號、�
 
 ---
 
-**最後更新：2026-09-07（v3.51）**
+**最後更新：2026-09-11（v3.52）**

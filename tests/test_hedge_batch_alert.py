@@ -205,3 +205,54 @@ def test_no_undefined_global_names():
     assert not offenders, (
         f"以下檔案讀取了哪裡都沒綁定的名稱：{offenders} —— 這正是 2026-08-25 `btc` "
         f"那個 bug 的類別：NameError 會被外層 except 吞掉，哨兵靜默死掉不報錯。")
+
+
+# ── C. 狀態鏈斷裂守門（2026-09-11 立）──────────────────────────────────────────
+# 立規原因：workflow 還原狀態時拿到 08-31 的舊 artifact（`gh run list --status success
+# --limit 1` 回傳過期結果），`hedge_batch_1` 旗標消失 → 套保第 1 批在 09-09、09-10
+# 兩個晚場**重複推了兩次建倉指示**。workflow 已改走 artifacts API，這裡守的是第二道。
+#
+# 三條紅線：舊狀態不可推建倉／舊狀態不可靜默／新鮮狀態不可被誤擋。
+def _seed_state(notify, **kv):
+    """寫一份「有內容但缺 hedge_batch_1」的舊狀態，模擬旗標被抹掉的情境。"""
+    st = {"last_action_key": "RIDE", "score_history": {"2026-08-31": {"escape": 3, "low": 29}}}
+    st.update(kv)
+    with open(notify._ESCAPE_STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(st, f)
+
+
+def test_stale_state_artifact_blocks_batch_alert(notify, sent, monkeypatch):
+    """還原到十天前的 state → 已建過的批次會被當成沒建過，絕不可再推一次建倉。"""
+    _seed_state(notify)
+    monkeypatch.setenv("STATE_ARTIFACT_CREATED_AT", "2026-08-31T05:50:00Z")
+    notify.maybe_send_hedge_batch_alert(_data(63.9))
+    texts = [p["text"] for p in sent]
+    assert not any("[套保建倉]" in t for t in texts), \
+        "還原到舊狀態時推建倉＝2026-09-09／09-10 重複推第 1 批的重演"
+
+
+def test_stale_state_artifact_is_not_silent(notify, sent, monkeypatch):
+    """不可靜默：擋掉建倉的同時必須說「狀態鏈斷了」，否則和『今天沒訊號』長得一樣。"""
+    _seed_state(notify)
+    monkeypatch.setenv("STATE_ARTIFACT_CREATED_AT", "2026-08-31T05:50:00Z")
+    notify.maybe_send_hedge_batch_alert(_data(63.9))
+    assert len(sent) == 1 and "[狀態鏈斷裂]" in sent[0]["text"], \
+        "狀態鏈斷裂必須推一則告警，不可默默跳過"
+
+
+def test_fresh_state_artifact_does_not_block(notify, sent, monkeypatch):
+    """新鮮的 artifact 不可被守門誤擋——誤擋等於把真正的建倉訊號吃掉。"""
+    _seed_state(notify)
+    fresh = (notify.datetime.now(notify.timezone.utc)
+             - notify.timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    monkeypatch.setenv("STATE_ARTIFACT_CREATED_AT", fresh)
+    notify.maybe_send_hedge_batch_alert(_data(63.9))
+    assert len(sent) == 1 and "[套保建倉]" in sent[0]["text"]
+
+
+def test_no_env_var_means_no_guard(notify, sent, monkeypatch):
+    """本機／手動執行沒有這個環境變數，守門必須整段不生效（否則本機永遠推不出東西）。"""
+    _seed_state(notify)
+    monkeypatch.delenv("STATE_ARTIFACT_CREATED_AT", raising=False)
+    notify.maybe_send_hedge_batch_alert(_data(63.9))
+    assert len(sent) == 1 and "[套保建倉]" in sent[0]["text"]

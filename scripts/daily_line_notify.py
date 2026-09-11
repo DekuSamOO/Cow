@@ -539,6 +539,76 @@ def _maybe_send_data_gap_alert(key: str, detail: str, dry_run: bool = False) -> 
     print(f"! {label}：已推資料缺值告警。")
 
 
+# ── 狀態鏈斷裂守門（2026-09-11 立）──────────────────────────────────────────
+# 立規原因＝套保第 1 批**重複推播兩次**（09-09 22:44、09-10 22:34）。
+# 根因在 workflow：定位「最近一個成功 run」的那支 GitHub API 回傳了 08-31 的舊 run，
+# 狀態被打回 10 天前，`hedge_batch_1` 旗標消失 → 已建過的批次又推一次建倉指示。
+# workflow 已改走 artifacts API（見 .github/workflows/daily_line_notify.yml），
+# 但**還原正確與否不能只靠一個外部 API 的排序**——這裡是第二道：
+# 拿還原到的 artifact 的 created_at 比對現在，太舊就**不准送「只推一次」的建倉指示**。
+#
+# 為什麼不用 state 自己的時戳：`attach_score_deltas()` 每場開頭就會寫一次 state，
+# 等哨兵跑到時「上次存檔時間」永遠是幾秒前，測不出還原到的是十天前的內容。
+# 唯一沒被本次執行污染的時間點就是 artifact 的 created_at，所以由 workflow 傳進來。
+#
+# 門檻 30 小時：正常一天三場、最長間隔約 10 小時，30 小時＝連續三場都沒接上。
+STATE_STALE_HOURS = 30
+
+
+def _state_artifact_age_hours():
+    """還原到的 state artifact 距今幾小時。本機執行或 workflow 沒傳值時回 None（不守門）。"""
+    raw = (os.getenv("STATE_ARTIFACT_CREATED_AT") or "").strip()
+    if not raw:
+        return None
+    try:
+        t = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - t).total_seconds() / 3600.0
+
+
+def _state_chain_broken(label: str, dry_run: bool = False) -> bool:
+    """
+    還原到的狀態太舊 → 回 True，呼叫端必須**放棄本場的「只推一次」推播**。
+
+    順帶推一則告警：靜默才是這次真正的傷害來源（旗標消失沒人知道，於是重推建倉）。
+    去重旗標寫在**當下這份（舊的）state** 裡，所以「每次還原到同一份舊 artifact」
+    的情況下仍會重複提醒——那是刻意的：鏈還斷著就該一直吵。
+    """
+    age = _state_artifact_age_hours()
+    if age is None or age <= STATE_STALE_HOURS:
+        return False
+    state = _load_escape_state()
+    if not state:
+        # 空 state＝第一次跑或 artifact 全過期，沒有「旗標被抹掉」的風險，照常放行。
+        return False
+    print(f"X {label}：還原到的狀態 artifact 已是 {age:.1f} 小時前的內容"
+          f"（門檻 {STATE_STALE_HOURS} 小時）→ 本場不送任何『只推一次』的指示。")
+    if state.get("state_chain_warned_date") == str(date.today()) or dry_run:
+        if dry_run:
+            print(f"[dry-run] 狀態鏈斷裂告警（未發送）")
+        return True
+    lines = [
+        "[狀態鏈斷裂] 哨兵還原到的是舊狀態，本場暫停建倉類推播",
+        "",
+        f"還原到的 state artifact 是 {age:.0f} 小時前的（門檻 {STATE_STALE_HOURS} 小時）。",
+        "舊狀態裡「已推播過」的旗標是缺的，照常跑會把**已經建過的批次再推一次**。",
+        "",
+        "該做的事：不要照舊訊息下單；去 GitHub Actions 看還原步驟印出的 artifact 時間。",
+        "前例：2026-09-09、09-10 兩晚就是這樣重推了套保第 1 批。",
+    ]
+    try:
+        send_line_message({"type": "text", "text": "\n".join(lines)})
+    except Exception as e:
+        print(f"X 狀態鏈斷裂告警發送失敗: {e}")
+        return True
+    state["state_chain_warned_date"] = str(date.today())
+    _save_escape_state(state)
+    return True
+
+
 def _clear_data_gap_flag(key: str, dry_run: bool = False) -> None:
     """資料恢復 → 清旗標，讓下一次故障能重新提醒（不因推過一次就永久靜音）。"""
     flag = f"datagap_{key}"
@@ -905,6 +975,10 @@ def maybe_send_bear_bottom_confirm_alert(data: dict, dry_run: bool = False) -> N
         _maybe_send_d3_deadlock_alert(d3, dry_run=dry_run)
         return
 
+    # 與套保批次同理：d3_confirmed 也是「只推一次」的旗標，還原到舊 state 會讓它消失。
+    if _state_chain_broken("熊底確認 D3", dry_run=dry_run):
+        return
+
     state = _load_escape_state()
     if state.get("d3_confirmed"):
         print("OK 熊底確認 D3 已推播過，不重複。")
@@ -1065,6 +1139,11 @@ def maybe_send_hedge_batch_alert(data: dict, dry_run: bool = False) -> None:
     if rsi_max <= HEDGE_G3_PEAK:
         print(f"OK 套保建倉：G3 前提未成立（近 {HEDGE_G3_WINDOW} 日 RSI 最高 {rsi_max:.1f}，"
               f"需 >{HEDGE_G3_PEAK}）。")
+        return
+
+    # 狀態鏈守門必須在讀 hedge_batch_* 旗標**之前**：旗標缺不缺，取決於還原到的
+    # 是不是最新那份 state（2026-09-11 重複推播第 1 批的根因就在這一步）。
+    if _state_chain_broken("套保建倉", dry_run=dry_run):
         return
 
     state = _load_escape_state()

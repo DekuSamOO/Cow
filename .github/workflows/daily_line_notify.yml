@@ -34,21 +34,40 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    # 還原上一個成功 run 的警報狀態（供逃頂「每日一次」/ 行動翻轉 / 週報去重跨 run 持久化）。
+    # 還原最新的警報狀態（供逃頂「每日一次」/ 行動翻轉 / 週報 / 套保批次去重跨 run 持久化）。
     # 踩坑（2026-06）：原用 actions/download-artifact 只能拿「當前 run」自己的 artifact，
     # 拿不到前一個 run → 跨 run 去重從未生效（週報曾因此重複、行動翻轉警報從不觸發）。
-    # 改用 gh 從「最近一個成功 run」下載其 escape-alert-state artifact。
-    - name: Restore alert state from latest prior run
+    #
+    # 踩坑（2026-09-11，本次）：改用 `gh run list --status success --limit 1` 定位
+    # 「最近一個成功 run」之後，**那支 API 會回傳過期結果**——2026-09-09 14:42 與
+    # 2026-09-10 14:32 兩場都拿到 08-31 的 run 33361776478（當時真正最新的成功 run 是
+    # 同日稍早那兩場），狀態被打回 10 天前 → `hedge_batch_1` 旗標消失 →
+    # **套保第 1 批重複推播兩次**（09-09 22:44、09-10 22:34），使用者差點重複建倉。
+    # 同一命令在本機與其他場次都回傳正確值，屬 workflow-runs API 的讀取一致性問題，
+    # 不是本 repo 的邏輯錯 —— 所以改成**不再依賴 run 的排序**：
+    # 直接查 artifacts API（`?name=` 過濾），自己用 created_at 取最新一個未過期的，
+    # 並把它的 created_at 傳給 Python 當「狀態新鮮度」的第二道守門（見
+    # scripts/daily_line_notify.py 的 _state_artifact_age_hours）。
+    - name: Restore alert state from latest artifact
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
-        PREV=$(gh run list --workflow=daily_line_notify.yml --status success \
-               --limit 1 --json databaseId -q '.[0].databaseId' || echo "")
-        if [ -n "$PREV" ]; then
-          gh run download "$PREV" -n escape-alert-state -D . \
-            && echo "restored state from run $PREV" || echo "run $PREV 無 state artifact（可能已過期）"
+        META=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=escape-alert-state&per_page=100" \
+               --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last
+                     | "\(.id) \(.created_at)"' || echo "")
+        ART_ID="${META%% *}"
+        ART_AT="${META#* }"
+        if [ -n "$ART_ID" ] && [ "$ART_ID" != "null" ]; then
+          if gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ART_ID/zip" > state.zip \
+             && unzip -o -q state.zip && rm -f state.zip; then
+            echo "restored state from artifact $ART_ID (created_at $ART_AT)"
+            echo "STATE_ARTIFACT_CREATED_AT=$ART_AT" >> "$GITHUB_ENV"
+          else
+            rm -f state.zip
+            echo "artifact $ART_ID 下載失敗，從空 state 開始"
+          fi
         else
-          echo "無前一個成功 run，從空 state 開始"
+          echo "查無未過期的 escape-alert-state artifact，從空 state 開始"
         fi
       continue-on-error: true
 

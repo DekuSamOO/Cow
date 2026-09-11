@@ -36,7 +36,8 @@ STATE_FILE = os.path.join(_COW, "escape_alert_state.json")
 # → 這裡用 gh CLI 把 artifact 抓成本機快取，並**區分「讀不到狀態」與「該鍵沒紀錄」**。
 REMOTE_CACHE = os.path.join(_COW, "db", "cache", "escape_alert_state.json")
 ARTIFACT_NAME = "escape-alert-state"
-WORKFLOW = "daily_line_notify.yml"
+# 2026-09-11：原有的 WORKFLOW 常數（"daily_line_notify.yml"）隨「先找最近一個成功 run」
+# 那條路徑一起移除 —— 現在直接查 artifacts API，不再需要知道是哪支 workflow 產的。
 REMOTE_TTL_SEC = 6 * 3600
 
 HEDGE_BATCHES = ((1, 65, 0.0428), (2, 55, 0.0428), (3, 50, 0.0429))
@@ -167,20 +168,37 @@ def _read_json(path) -> Optional[dict]:
 
 def fetch_remote_state(timeout: int = 20) -> Optional[dict]:
     """
-    用 gh CLI 從最近一個成功的 workflow run 下載狀態 artifact，落地成本機快取。
+    用 gh CLI 下載最新一份狀態 artifact，落地成本機快取。
     需要 gh 已登入；任何失敗都回 None（呼叫端沿用舊快取），**不擋畫面**。
+
+    ⚠️ 2026-09-11 改寫：原本先用 `gh run list --status success --limit 1` 找「最近一個
+    成功 run」再下載它的 artifact —— **那支 API 會回傳過期結果**。workflow 裡同一段
+    寫法害 2026-09-09／09-10 兩晚還原到 08-31 的狀態，`hedge_batch_1` 旗標消失，
+    套保第 1 批重複推播兩次（見 vault `Github/Cow/歷程/20260911fix_哨兵狀態鏈斷裂.md`）。
+    這裡改成直接查 artifacts API：`?name=` 過濾後自己依 created_at 取最新的未過期者。
     """
     try:
         os.makedirs(os.path.dirname(REMOTE_CACHE), exist_ok=True)
-        run_id = subprocess.run(
-            ["gh", "run", "list", "--workflow", WORKFLOW, "--status", "success",
-             "--limit", "1", "--json", "databaseId", "-q", ".[0].databaseId"],
-            capture_output=True, text=True, timeout=timeout).stdout.strip()
-        if not run_id:
+        jq = ('[.artifacts[] | select(.expired == false)] | sort_by(.created_at) '
+              '| last | .id')
+        art_id = subprocess.run(
+            ["gh", "api",
+             "repos/:owner/:repo/actions/artifacts?name=%s&per_page=100" % ARTIFACT_NAME,
+             "--jq", jq],
+            cwd=_COW, capture_output=True, text=True, timeout=timeout).stdout.strip()
+        if not art_id or art_id == "null":
             return None
-        out_dir = os.path.dirname(REMOTE_CACHE)
-        subprocess.run(["gh", "run", "download", run_id, "-n", ARTIFACT_NAME,
-                        "-D", out_dir], capture_output=True, text=True, timeout=timeout)
+        blob = subprocess.run(
+            ["gh", "api", "repos/:owner/:repo/actions/artifacts/%s/zip" % art_id],
+            cwd=_COW, capture_output=True, timeout=timeout).stdout
+        if not blob:
+            return None
+        import io
+        import zipfile
+        with zipfile.ZipFile(io.BytesIO(blob)) as z:
+            payload = z.read(z.namelist()[0]).decode("utf-8")
+        with open(REMOTE_CACHE, "w", encoding="utf-8") as f:
+            f.write(payload)
         return _read_json(REMOTE_CACHE)
     except Exception:
         return None
