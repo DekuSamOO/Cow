@@ -109,6 +109,7 @@ def crosscheck_daily_rsi(window: int = HEDGE_G3_WINDOW):
         import pandas as pd
 
         from core.indicators import calculate_technical_indicators
+        from service.local_db_reader import drop_incomplete_last_day
     except Exception:
         return None, None, None
 
@@ -152,6 +153,9 @@ def crosscheck_daily_rsi(window: int = HEDGE_G3_WINDOW):
 
         daily = raw.resample("1D").agg({"open": "first", "high": "max",
                                         "low": "min", "close": "last"}).dropna()
+        # 最後一天沒收滿就丟掉——本檔自己重採樣，所以要自己擋一次
+        # （`read_btc_daily()` 那條路徑有同一道守門，兩邊吃的是同一批 15m DB）。
+        daily = drop_incomplete_last_day(daily, raw.index[-1])
         daily = calculate_technical_indicators(daily)
         return closed_daily_rsi(daily, window)
     except Exception:

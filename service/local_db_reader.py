@@ -147,6 +147,34 @@ def read_btc_15m(start_date: str = "2017-01-01", end_date: Optional[str] = None)
     return result
 
 
+# 一天要 96 根 15m K 棒，最後一根在 23:45 開盤。收得到 23:45 那根才算這天收完。
+LAST_BAR_OF_DAY = pd.Timedelta(hours=23, minutes=45)
+
+
+def drop_incomplete_last_day(df_daily: pd.DataFrame, last_15m_ts) -> pd.DataFrame:
+    """把「資料還沒收滿一整天」的最後一根日線丟掉，回傳新的 DataFrame。
+
+    **為什麼一定要這道（2026-09-11 實帳事故）**：collector 每天 09:00 本地跑一次，
+    抓到當日 01:00 UTC 就 commit push，所以 DB 裡**最後一天永遠是殘根**（只有 5 根
+    15m K 棒）。平常無害——那個殘根就是「今天」，`closed_daily_rsi()` 本來就會把
+    當日排除。但 2026-09-11 那次 collector 被 Ctrl+C 中斷（LastTaskResult
+    0xC000013A）沒推上去，於是雲端 checkout 到的 DB 最後一天是 **09-10 的殘根**，
+    它隔天就變成「昨天」而逃過當日排除：
+        09-10 只有 00:00~01:00 的資料 → 收盤被當成 78,180.69（真值 76,568.72）
+        → 套保哨兵算出 RSI 58.97，真值 52.83 → 第 2 批（<55）該響沒響，而且全程無聲。
+    殘缺的殘根與完整的日線在資料結構上長得一模一樣，**不擋就只能事後對帳才發現**。
+
+    只丟最後一根，不掃整段：中間那些缺漏是交易所停機之類的歷史事實，
+    一起丟等於改寫回測輸入。最後一根才是這個 collector 設計必然產生的殘根。
+    """
+    if df_daily.empty:
+        return df_daily
+    last_day = df_daily.index[-1]
+    if last_15m_ts < last_day + LAST_BAR_OF_DAY:
+        return df_daily.iloc[:-1]
+    return df_daily
+
+
 @st.cache_data(ttl=86400)
 def read_btc_daily(start_date: str = "2015-01-01") -> pd.DataFrame:
     """
@@ -155,6 +183,7 @@ def read_btc_daily(start_date: str = "2015-01-01") -> pd.DataFrame:
     解決 Streamlit Cloud 抓不到 2015 年以來完整歷史的問題。
 
     回傳：DatetimeIndex 的日線 DataFrame（open/high/low/close/volume）
+    **最後一根若不完整會被丟掉**，理由見 drop_incomplete_last_day。
     """
     df_15m = read_btc_15m(start_date=start_date)
     if df_15m.empty:
@@ -168,7 +197,7 @@ def read_btc_daily(start_date: str = "2015-01-01") -> pd.DataFrame:
         volume=("volume", "sum"),
     ).dropna(subset=["close"])
 
-    return df_daily
+    return drop_incomplete_last_day(df_daily, df_15m.index[-1])
 
 
 def get_coverage_info() -> dict:

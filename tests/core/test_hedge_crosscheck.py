@@ -20,6 +20,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 import scripts.daily_line_notify as dln
@@ -35,7 +37,16 @@ def harness(monkeypatch):
     monkeypatch.setattr(dln, "_save_escape_state", lambda s: saved.update(s))
     monkeypatch.setattr(dln, "send_line_message", lambda m: sent.append(m["text"]))
 
-    def run(main_rsi, main_peak, x_rsi, x_peak, st=None, x_date="2026-09-02"):
+    def run(main_rsi, main_peak, x_rsi, x_peak, st=None, x_lag_days=0):
+        """`x_lag_days`＝對拍源比主源落後幾天。
+
+        兩個日期**都相對今天算**，不寫死：2026-09-11 起主源自己也有落後守門
+        （`HEDGE_MAX_CLOSED_BAR_LAG_DAYS`，見 tests/test_incomplete_last_day.py），
+        寫死日期會讓整檔在守門上線後全紅。主源固定用「昨天」＝
+        `closed_daily_rsi()` 能拿到的最新值。
+        """
+        main_date = datetime.now(timezone.utc).date() - timedelta(days=1)
+        x_date = str(main_date - timedelta(days=x_lag_days))
         state.clear()
         state.update(st or {})
         sent.clear()
@@ -44,7 +55,7 @@ def harness(monkeypatch):
                             lambda *a, **k: (x_rsi, x_peak, x_date))
         dln.maybe_send_hedge_batch_alert({
             "rsi14_closed": main_rsi, "rsi_peak": main_peak,
-            "current_price": 77340.0, "rsi_closed_date": "2026-09-02",
+            "current_price": 77340.0, "rsi_closed_date": str(main_date),
         })
         return sent, saved
 
@@ -131,7 +142,7 @@ def test_main_source_g3_premise_fails_short_circuits(harness):
 
 def test_one_day_lag_is_silent_not_a_divergence(harness):
     """對拍源落後 1 天 → 當天稍晚場次會補上，本場不推任何訊息、也不標記。"""
-    sent, saved = harness(64.83, 86.01, 70.0, 85.95, x_date="2026-09-01")
+    sent, saved = harness(64.83, 86.01, 70.0, 85.95, x_lag_days=1)
     assert sent == [], "落後 1 天推警示＝每個觸發日早場都會多一則雜訊"
     assert not saved.get("hedge_batch_1")
     assert not saved.get("hedge_batch_1_xcheck_warned"), \
@@ -140,7 +151,7 @@ def test_one_day_lag_is_silent_not_a_divergence(harness):
 
 def test_two_day_lag_does_warn(harness):
     """落後 ≥2 天＝collector 可能斷了，那是真問題，必須出聲。"""
-    sent, _ = harness(64.83, 86.01, 70.0, 85.95, x_date="2026-08-31")
+    sent, _ = harness(64.83, 86.01, 70.0, 85.95, x_lag_days=2)
     assert len(sent) == 1
     assert "先不要建倉" in sent[0]
     assert "collector" in sent[0] or "落後" in sent[0]
@@ -148,6 +159,6 @@ def test_two_day_lag_does_warn(harness):
 
 def test_same_date_still_evaluated_normally(harness):
     """日期一致時照常做對拍判定（不被落差邏輯誤吞）。"""
-    sent, saved = harness(64.20, 86.01, 64.10, 85.95, x_date="2026-09-02")
+    sent, saved = harness(64.20, 86.01, 64.10, 85.95, x_lag_days=0)
     assert "第 1 批觸發" in sent[0]
     assert saved.get("hedge_batch_1") is True

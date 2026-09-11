@@ -524,6 +524,22 @@ def _date_gap_days(d1: str, d2: str) -> int:
         return 10 ** 6
 
 
+# ── 收完日線的落後上限（2026-09-11 立）──────────────────────────────────────
+# `closed_daily_rsi()` 本來就排除當日未收的 K 棒，所以最新只可能是「昨天」＝落後 1 天。
+# 落後 2 天以上代表資料源少了一天（實帳事故：collector 被中斷沒 push，雲端 checkout
+# 到的 15m DB 少一天，哨兵拿前天的收盤當最新值算 RSI，第 2 批該響沒響且全程無聲）。
+HEDGE_MAX_CLOSED_BAR_LAG_DAYS = 1
+
+
+def _closed_bar_lag_days(closed_date):
+    """收完的日線距今天（UTC）幾天；缺值或格式壞掉回 None（呼叫端一律當成不可信）。"""
+    try:
+        return (datetime.now(timezone.utc).date()
+                - date.fromisoformat(str(closed_date)[:10])).days
+    except Exception:
+        return None
+
+
 # ── 資料缺值告警（2026-09-07 立）────────────────────────────────────────────
 # 立規原因＝P4 馬丁重啟哨兵的死法：偵測器取不到行情就 `print("...略過")` 收工，
 # 於是「該響卻響不了」與「偵測到沒事」在畫面上長得一模一樣，靜默了兩週沒人知道。
@@ -1180,6 +1196,15 @@ def maybe_send_hedge_batch_alert(data: dict, dry_run: bool = False) -> None:
             "hedge",
             f"收盤 RSI＝{rsi!r}／近 {HEDGE_G3_WINDOW} 日峰值＝{rsi_max!r}"
             "（任一為 None 就無法判定 G3 前提與三批門檻）。",
+            dry_run=dry_run)
+        return
+    lag = _closed_bar_lag_days(data.get("rsi_closed_date"))
+    if lag is None or lag > HEDGE_MAX_CLOSED_BAR_LAG_DAYS:
+        _maybe_send_data_gap_alert(
+            "hedge",
+            f"收完日線停在 {data.get('rsi_closed_date')!r}（落後 {lag!r} 天，"
+            f"上限 {HEDGE_MAX_CLOSED_BAR_LAG_DAYS} 天）。**RSI 用的不是最新的收盤**，"
+            "門檻判定不可信，本輪不推任何建倉指示。",
             dry_run=dry_run)
         return
     _clear_data_gap_flag("hedge", dry_run=dry_run)

@@ -21,6 +21,7 @@ import json
 import os
 import sys
 import types
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -51,15 +52,26 @@ def sent(notify, tmp_path, monkeypatch):
     # ——否則這些測試會去讀真實的 15m DB，變成**非確定性、隨行情漂移**的測試
     # （實際踩過：2026-09-03 真實對拍源回 65.26，把 rsi=63.9 的案例擋掉，兩個測試無故變紅）。
     # 對拍守門本身的紅線在 tests/core/test_hedge_crosscheck.py。
+    # 日期同樣相對今天算（與 `_data()` 同一個理由）：寫死的話對拍會被判成
+    # 「落後 N 天」而走進分歧分支，這些測試就不是在測批次判定了。
     monkeypatch.setattr(notify, "crosscheck_daily_rsi",
-                        lambda *a, **k: (0.0, 100.0, "2026-09-02"))
+                        lambda *a, **k: (0.0, 100.0, str(
+                            datetime.now(timezone.utc).date() - timedelta(days=1))))
     return box
 
 
-def _data(rsi_closed, peak=86.0, price=76992.0):
-    """哨兵吃的是收盤口徑的鍵；rsi14 是盤中值，故意給一個會誤觸的數字當陷阱。"""
+def _data(rsi_closed, peak=86.0, price=76992.0, closed_date=None):
+    """哨兵吃的是收盤口徑的鍵；rsi14 是盤中值，故意給一個會誤觸的數字當陷阱。
+
+    `rsi_closed_date` **必須相對今天算**：2026-09-11 起哨兵會擋下落後超過
+    `HEDGE_MAX_CLOSED_BAR_LAG_DAYS` 天的收盤（見 tests/test_incomplete_last_day.py）。
+    舊版這裡寫死 "2026-09-02"，守門一上線整個檔就會全紅。
+    預設給「昨天」＝ `closed_daily_rsi()` 能拿到的最新值。
+    """
     return {"rsi14": 30.0, "rsi14_closed": rsi_closed, "rsi_peak": peak,
-            "rsi_closed_date": "2026-09-02", "current_price": price}
+            "rsi_closed_date": closed_date or str(
+                datetime.now(timezone.utc).date() - timedelta(days=1)),
+            "current_price": price}
 
 
 # ── A. 行為 ────────────────────────────────────────────────────────────────────
