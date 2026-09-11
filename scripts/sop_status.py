@@ -87,7 +87,8 @@ def main():
     from dotenv import load_dotenv
     load_dotenv()
     from core.indicators import calculate_ahr999, calculate_technical_indicators
-    from scripts.daily_line_notify import get_decision_data
+    from scripts.daily_line_notify import (_migrate_hedge_batch_1_date,
+                                           get_decision_data)
     from service.market_data import fetch_market_data
 
     data = get_decision_data()
@@ -98,7 +99,9 @@ def main():
     x_rsi, x_peak, x_date = crosscheck_daily_rsi()
     _, last_hot, premise_until = g3_premise(btc_df)
     state, state_src = fetch_state_via_artifacts_api()
-    state = state or {}
+    # 線上 artifact 要等下一輪排程跑完才會帶著校正值重新上傳，這裡先套一次，
+    # 免得本檔在那之前還印著被重推洗掉的舊首推日。
+    state = _migrate_hedge_batch_1_date(state or {})
 
     out = []
     out.append("=== BTC 部位 SOP 現況 ===")
@@ -128,7 +131,10 @@ def main():
         done = state.get("hedge_batch_%d" % n)
         both = (rsi is not None and x_rsi is not None and rsi < thr and x_rsi < thr)
         one = (rsi is not None and x_rsi is not None and (rsi < thr) != (x_rsi < thr))
-        mark = "已建（%s）" % state.get("hedge_batch_%d_date" % n) if done else (
+        # 「已推播」不是「已建倉」：state 記的是哨兵喊的日子（推播成功後才寫），
+        # 哨兵不知道你實際幾點下單。2026-09-11 由「已建（…）」改名——舊字面害人把
+        # 推播日讀成建倉日，兩批實際都是使用者跑在哨兵前面幾小時建的。
+        mark = "已推播（%s）" % state.get("hedge_batch_%d_date" % n) if done else (
             "兩源皆過" if both else ("兩源分歧→不可建" if one else "未達門檻"))
         out.append("  第 %d 批 <%d（%.4f BTC）: %s" % (n, thr, qty, mark))
     out.append("")
@@ -148,11 +154,26 @@ def main():
     for k in sorted(state):
         if k == "score_history":
             hist = state[k] or {}
-            out.append("  score_history 最後日期: %s" % (sorted(hist)[-1] if hist else None))
+            # 印筆數與**日期跨度**，不只印最後一天：狀態鏈斷過的話筆數看起來還是滿的，
+            # 洞卻完全看不出來（2026-09-11 實測 8 筆橫跨 17 天、中間缺 9 天）。
+            days = sorted(hist)
+            span = (_span_days(days[0], days[-1]) + 1) if days else 0
+            gap = "  ⚠️ 有洞：缺 %d 天" % (span - len(days)) if span > len(days) else ""
+            out.append("  score_history: %d 筆，%s ~ %s（跨 %d 天）%s"
+                       % (len(days), days[0] if days else None,
+                          days[-1] if days else None, span, gap))
             continue
         out.append("  %s = %s" % (k, state[k]))
 
     print("\n".join(out))
+
+
+def _span_days(d1, d2) -> int:
+    """兩個 YYYY-MM-DD 相距幾天；格式壞掉回 0（當成無法判斷跨度，不報洞）。"""
+    try:
+        return abs((date.fromisoformat(str(d2)[:10]) - date.fromisoformat(str(d1)[:10])).days)
+    except Exception:
+        return 0
 
 
 def _cmp_lt(v, thr):

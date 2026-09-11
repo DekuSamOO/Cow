@@ -3,7 +3,7 @@ import sys
 import os
 import json
 import importlib.util
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _REPO)
@@ -122,14 +122,18 @@ def test_escape_alert_disarm_on_drop(notify, patched_state):
 def test_attach_score_deltas(notify, patched_state):
     state_file, _ = patched_state
     # 前一日分數 50/40 → 今日 62/35 → Δ +12/-5
+    # 基準日**必須相對今天算**：2026-09-11 起 Δ 有新鮮度守門（見
+    # tests/test_score_history_freshness.py），舊版這裡寫死 "2020-01-01"，
+    # 名義上叫「前一日」實際是六年前，守門一上線就整條不給 Δ。
+    yesterday = str(date.today() - timedelta(days=1))
     state_file.write_text(json.dumps(
-        {"score_history": {"2020-01-01": {"escape": 50, "low": 40}}}))
+        {"score_history": {yesterday: {"escape": 50, "low": 40}}}))
     data = {"escape_score": 62, "low_score": 35}
     notify.attach_score_deltas(data)
     assert data["escape_delta"] == 12
     assert data["low_delta"] == -5
     hist = json.loads(state_file.read_text())["score_history"]
-    assert any(v == {"escape": 62, "low": 35} for k, v in hist.items() if k != "2020-01-01")
+    assert any(v == {"escape": 62, "low": 35} for k, v in hist.items() if k != yesterday)
 
 
 def test_attach_score_deltas_first_run_no_delta(notify, patched_state):

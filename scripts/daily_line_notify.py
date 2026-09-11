@@ -473,11 +473,32 @@ _ESCAPE_STATE_FILE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "escape_alert_state.json")
 
 
+def _migrate_hedge_batch_1_date(s: dict) -> dict:
+    """一次性校正：把第 1 批的首推日由 2026-09-10 改回真正的 2026-09-08。
+
+    為什麼會錯：`hedge_batch_{n}_date` 記的是**推播日**，寫在推播成功之後。狀態鏈斷裂
+    期間第 1 批被重推兩次（09-09 22:41、09-10 22:31 台北），每次都覆寫這個欄位，
+    於是線上只剩最後一次重推的日期。真正的首推是 run 34188465889，
+    2026-09-08T04:53:33Z（台北 12:53）印出「! 套保建倉第 1 批已推播。」。
+
+    為什麼要改而不是放著：這個欄位是事後對帳「哨兵哪天喊的」的唯一依據，
+    留著錯值等於把一次故障的殘留寫成事實。重推的根因已由 75b1f44 修掉，
+    未來不會再被覆寫，所以只需要修這一筆存量。
+
+    辨識法窄到只咬這一筆：旗標為真、且日期正好是被覆寫成的 2026-09-10。
+    """
+    if s.get("hedge_batch_1") and s.get("hedge_batch_1_date") == "2026-09-10":
+        s = dict(s)
+        s["hedge_batch_1_date"] = "2026-09-08"
+        s["hedge_batch_1_date_migrated"] = True   # 留痕，方便事後對帳
+    return s
+
+
 def _load_escape_state() -> dict:
     if os.path.exists(_ESCAPE_STATE_FILE):
         try:
             with open(_ESCAPE_STATE_FILE) as f:
-                return json.load(f)
+                return _migrate_hedge_batch_1_date(json.load(f))
         except Exception:
             pass
     return {}
@@ -486,6 +507,21 @@ def _load_escape_state() -> dict:
 def _save_escape_state(state: dict) -> None:
     with open(_ESCAPE_STATE_FILE, "w") as f:
         json.dump(state, f)
+
+
+# ── score_history 的日期新鮮度（2026-09-11 立）──────────────────────────────
+# 為什麼用「天數」不用「筆數」：狀態鏈一斷，留下來的筆數看起來還是滿的，
+# 但它們可能橫跨兩三週——「8 筆」與「近 8 日」在有洞的時候不是同一件事。
+SCORE_DELTA_MAX_GAP_DAYS = 3   # Δ 基準最多容忍 3 天前（容得下週末/單場漏跑，容不下斷鏈）
+SCORE_HISTORY_KEEP_DAYS = 14   # 超過 14 天的舊分數直接丟，別讓它混進「本週」
+
+
+def _date_gap_days(d1: str, d2: str) -> int:
+    """兩個 YYYY-MM-DD 相距幾天（絕對值）；格式壞掉回一個大數＝視為過舊。"""
+    try:
+        return abs((date.fromisoformat(str(d1)[:10]) - date.fromisoformat(str(d2)[:10])).days)
+    except Exception:
+        return 10 ** 6
 
 
 # ── 資料缺值告警（2026-09-07 立）────────────────────────────────────────────
@@ -627,19 +663,30 @@ def attach_score_deltas(data: dict) -> None:
     每日 Flex 的逃頂/抄底分數 Δ（vs 前一個推播日），寫入 data['escape_delta']/['low_delta']，
     並把今日分數存回 state（與逃頂警報共用 escape_alert_state.json，同一 artifact 持久化）。
     同日多次推播以首次寫入的當日分數為準更新，Δ 基準恆為「最近的前一日」。
+
+    ⚠️ 2026-09-11 加上「日期新鮮度」兩道守門。起因：狀態鏈斷裂那 9 天
+    （09-01~09-09，見 vault `Github/Cow/歷程/20260911fix_哨兵狀態鏈斷裂.md`）讓
+    score_history 只剩 08-25~08-31 + 09-10，中間整段是洞。舊碼用「最近的前一筆」當
+    Δ 基準、且只按排序留最後 8 筆，於是：
+      · 09-10 那天的 Δ 是拿 **08-31** 當基準，畫面上照樣標成「vs 昨日」；
+      · 留下的 8 筆橫跨 17 天，週報拿去算「週高/週低」等於在拼接資料上算。
+    修法＝比日期不比筆數：基準過舊就不給 Δ、超過保留天數的舊筆直接丟。
     """
     state = _load_escape_state()
     hist = state.get("score_history") or {}
     today = str(date.today())
     prev_dates = sorted(d for d in hist if d < today)
-    if prev_dates:
+    if prev_dates and _date_gap_days(prev_dates[-1], today) <= SCORE_DELTA_MAX_GAP_DAYS:
         prev = hist[prev_dates[-1]]
         if prev.get("escape") is not None and data.get("escape_score") is not None:
             data["escape_delta"] = int(data["escape_score"]) - int(prev["escape"])
         if prev.get("low") is not None and data.get("low_score") is not None:
             data["low_delta"] = int(data["low_score"]) - int(prev["low"])
     hist[today] = {"escape": data.get("escape_score"), "low": data.get("low_score")}
-    state["score_history"] = {d: hist[d] for d in sorted(hist)[-8:]}  # 留近 8 日（Δ 用昨日、週報用整週）
+    # 先按「日期」丟掉過舊的，再按筆數留 8 筆（Δ 用昨日、週報用整週）
+    fresh = {d: v for d, v in hist.items()
+             if _date_gap_days(d, today) <= SCORE_HISTORY_KEEP_DAYS}
+    state["score_history"] = {d: fresh[d] for d in sorted(fresh)[-8:]}
     _save_escape_state(state)
 
 
@@ -1256,7 +1303,7 @@ def maybe_send_hedge_batch_alert(data: dict, dry_run: bool = False) -> None:
 def maybe_send_weekly_summary(data: dict, now=None) -> None:
     """
     週日「傍晚 cron 場次」加推一則週報，每週一次。
-    內容：本週價格區間/漲跌、逃頂/抄底分數週高低（score_history 近 8 日）、趨勢與今日行動。
+    內容：本週價格區間/漲跌、逃頂/抄底分數週高低（score_history 近 7 個日曆天）、趨勢與今日行動。
     """
     tw_now = now or datetime.now(timezone(timedelta(hours=8)))
     if tw_now.weekday() != 6:
@@ -1276,7 +1323,11 @@ def maybe_send_weekly_summary(data: dict, now=None) -> None:
         print("ℹ️ 本週週報已推播，略過。")
         return
 
-    hist_vals = [v for _, v in sorted((state.get("score_history") or {}).items())]
+    # 「本週」＝近 7 個日曆天，**用日期篩不是用筆數**：狀態鏈一斷，留存的筆數還是滿的，
+    # 但可能橫跨兩三週，照舊寫法會把兩週前的分數算進「週高/週低」（2026-09-11 修）。
+    hist = state.get("score_history") or {}
+    week_dates = [d for d in sorted(hist) if _date_gap_days(d, today) <= 6]
+    hist_vals = [hist[d] for d in week_dates]
     esc = [v["escape"] for v in hist_vals if v.get("escape") is not None]
     low = [v["low"] for v in hist_vals if v.get("low") is not None]
 
