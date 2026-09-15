@@ -66,10 +66,10 @@ def test_alert_threshold_leads_stage1_trigger():
     兩者天然同值。2026-08-21 兩台馬丁在高位連續止盈重啟，兩階最後加倉價上移後
     雙雙落到台股階觸發價**之下**，第 1 階因此換成台股；警報價經使用者複審維持
     原值不跟降，語義改為「高於全部三階、留足台股 T+2 的獨立預警價」
-    （vault「1b 1 BTC ROAD」§4.2 結論 No.3）。
+    （vault「1a 1 BTC ROAD」「二、防守機制」〈2026-08-21 重算後的三點結論〉No.3）。
 
     （數字一律不寫進本檔——CLAUDE.md 陷阱 No.21：公開版控只寫顯假值。
-    真值在 config_private.py／DEFENSE_CONFIG_JSON secret／vault §4.2。）
+    真值在 config_private.py／DEFENSE_CONFIG_JSON secret／vault 同一節。）
 
     故判準由 == 放寬為 >=；真正要守的不變量是「警報必須先於任何行動響起」。
     """

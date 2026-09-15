@@ -240,7 +240,7 @@ JSON。**只要 import 那個檔案就會連帶 import streamlit**，公司網�
 只為相容 yfinance `'Date'`/`'date'`，卻把 `fundingRate` 這種**資料欄**也轉小寫 → 消費端讀不到、
 增量 concat 產生大小寫分裂雙欄、`to_sql` 因 SQLite 欄名大小寫不敏感 `duplicate column name` 崩潰。
 修法：**只在 `index_col` 找不到時**才嘗試不分大小寫改名。
-詳 `_governance\AUDIT-data-internals-batch4.md` C-17~C-19。
+詳 `_governance\歷程\20260705audit_data-internals-batch4.md` C-17~C-19。
 
 ### 18. 分位型維度的「母體長度」是口徑的一部分
 
@@ -305,10 +305,32 @@ S-1 私有化時**直接抄了真實防守數字**（觸發價／釋出量／加
 > 紅線測試在 `tests/test_alert_logic.py`（缺值必推／不洗版／恢復清旗標）
 > 與 `tests/test_hedge_batch_alert.py`（舊斷言「缺值只能沉默」已被推翻並改寫）。
 
+### 23. 測試自己會騙人的兩種形狀（2026-09-11 同日各踩一次）
+
+**① 語意是「今天／昨天／前一日」的日期不可寫死。**
+當天新增兩道時間守門（`SCORE_DELTA_MAX_GAP_DAYS`、`HEDGE_MAX_CLOSED_BAR_LAG_DAYS`），
+一口氣打紅三個測試檔——`test_alert_logic.py` 的基準日寫 `2020-01-01`、
+`test_hedge_batch_alert.py` 與 `tests/core/test_hedge_crosscheck.py` 的
+`rsi_closed_date` 寫 `2026-09-02`。三處**名義上都叫「前一日」，實際是幾年前或幾天前**，
+守門一上線全被判成過期。寫法：`str(date.today() - timedelta(days=1))`；
+兩個日期之間的落差用「差幾天」當參數表達（見 `test_hedge_crosscheck.py` 的 `x_lag_days`），
+不要各自寫死一個日期再靠減法碰運氣。
+
+**② 斷言「某訊息有送出」要用該分支專屬的字串，不可用共用前綴。**
+當天寫的 `assert "[套保建倉]" in text` 綠燈了，但理由是錯的——
+**分歧警示訊息也以同一個前綴開頭**，那條斷言其實分不出正式建倉與「先不要建倉」。
+同一個檔案早就有這個註解（「不用『建倉』二字判別，告警標題本來就叫套保建倉哨兵，
+拿那兩個字判會自己咬自己」），沒沿用就又踩一次。
+判正式建倉用 `全倉套保`／`批觸發`，判警示用 `先不要建倉`。
+
+> 兩者的共通點：**測試綠燈不等於測試有效**。
+> 收尾一律再跑一次負向驗證（把守門停用，確認該紅的真的紅）——
+> 本檔 No.22 的資料缺值告警、套保對拍守門都是這樣驗的。
+
 ## 受保護決策（改動需使用者裁定）
 
 | 項目 | 規則 | 正本 |
 |---|---|---|
-| 防守通知數字 | 真實數字在 `config_private.py`（gitignored）或 Actions Secret `DEFENSE_CONFIG_JSON`，公開 `config.py` 只留載入邏輯（fail-loud）。**馬丁止盈重啟即整表作廢**（新最後加倉價＝新起始價×0.659，整表重算）——2026-09-07 起**無自動偵測**，防守推播固定帶一行「執行前必對帳重算」靜態警語。防守為**條件式**：每階執行前看 `final_low`/`ensemble_low`。**`ALERT_PRICE_LOW` 自 2026-08-21 起與第 1 階解耦**（獨立預警價，判準 `>=` 不再是 `==`）| vault「1b 1 BTC ROAD.md」；驗算見「1b 馬丁格爾數學稽核」；`_governance\STRESS-btc-three-tracks.md` |
+| 防守通知數字 | 真實數字在 `config_private.py`（gitignored）或 Actions Secret `DEFENSE_CONFIG_JSON`，公開 `config.py` 只留載入邏輯（fail-loud）。**馬丁止盈重啟即整表作廢**（新最後加倉價＝新起始價×0.659，整表重算）——2026-09-07 起**無自動偵測**，防守推播固定帶一行「執行前必對帳重算」靜態警語。防守為**條件式**：每階執行前看 `final_low`/`ensemble_low`。**`ALERT_PRICE_LOW` 自 2026-08-21 起與第 1 階解耦**（獨立預警價，判準 `>=` 不再是 `==`）| vault「1a 1 BTC ROAD.md」「二、防守機制」；驗算見「1b 馬丁格爾數學稽核」；`_governance\歷程\20260706stress_btc三軌壓測.md` |
 | 雙幣回測 | **舊曲線與據其做的結論全部作廢**（權利金曾在結算日才定價，全史 +1733%→−90%）。**雙幣加碼決策不可依據此回測模組** —— 實際用法是梯形建議＋偏保守權重。殘留已知偏差：σ 用 ATR/close proxy 高估 ~1.6×（方向已知、接受） | `calculate_ladder_strategy` docstring（2026-06-17 拍板） |
-| 四季論引擎 | `SEASON_ENGINE` 維持 `"v1"`，**切換 v2 需使用者裁定**。回放 2,992 天後不建議切換：v2 十二象限表對深熊嚴重度分級有結構性缺口。**不可回頭調參數讓驗收準則「看起來過」** | `Github\Cow\season_v2_replay_findings.md`；設計正本 `Github\Cow\season_v2_design.md`（皆在 vault） |
+| 四季論引擎 | `SEASON_ENGINE` **現為 `"v2"`**（2026-09-03 使用者拍板由 `"v1"` 切換；十六象限＝市場軸補 `deep_bear` 一級＋防抖逃生門，見 README v3.50）。**切回 v1、改象限表或防抖參數都需使用者裁定**；回滾＝改回 `"v1"` 一個字（已實測）。回滾／重驗條件：某次熊底**下跌段**出現 v1/v2 分歧即回滾；新一輪熊底走完以準則 2a/2b 重驗。**不可回頭調參數讓驗收準則「看起來過」** | vault `Github\Cow\歷程\20260902findings_四季論v2象限擴充與回放.md`（切換依據）；`Github\Cow\歷程\20260706findings_四季論v2回放對照.md`（初版回放）；設計正本 `Github\Cow\season_v2_design.md`；觸發條件 `_governance\LEDGER-constants-liveness.md` |

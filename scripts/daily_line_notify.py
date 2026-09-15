@@ -811,7 +811,7 @@ _WEEKLY_CRON = "27 10 * * *"   # 台灣 18:27 場次（與 daily_line_notify.yml
 def maybe_send_leverage_window_alert(data: dict, dry_run: bool = False) -> None:
     """升槓桿窗口哨兵（2026-08-23 立）：AHR999 與距 ATH 兩道閘門同時成立才開窗。
 
-    正本：vault「1b 1 BTC ROAD」第八、九節。三種推播：
+    正本：vault「1a BTC部位SOP」情境一（閘門證據「1b 要開槓桿時間點策略研究」、分批證據「1b 開窗後分批執行研究」）。三種推播：
       1. 窗口開啟（關→開）：發第 1 批指示
       2. 窗口開啟中且距上批 >= LEVERAGE_BATCH_DAYS：發第 N 批（至多 LEVERAGE_BATCH_COUNT 批）
       3. 窗口關閉（開→關）：發收尾，剩餘批次留到下一個窗口（回測：停止優於補完）
@@ -1169,10 +1169,10 @@ def maybe_send_hedge_batch_alert(data: dict, dry_run: bool = False) -> None:
     套保分批建倉哨兵（2026-08-25 立）— G3 觸發，分三批。
 
     規則正本：vault `Literature Note/1a BTC部位SOP.md`（2026-08-26 更名並移入 Literature Note，
-    原放 `Work/BTC幣本位網格去留評估/`、原名「升槓桿窗口執行清單」）附錄 E-1／E-2。
+    原放 `Work/BTC幣本位網格去留評估/`、原名「升槓桿窗口執行清單」）情境一的「套保機器人」小節。
       規模 0.1285 BTC（現貨的一半）｜產品＝**全倉套保**（非分段/網格套保）
       G3 前提：日線 RSI **曾 >HEDGE_G3_PEAK**（近 HEDGE_G3_WINDOW 日）後回落
-      三批：RSI <65 / <55 / <50，各 0.0428 BTC
+      三批：RSI <65 / <55 / <50，依序 0.0428 / 0.0428 / 0.0429 BTC（正本 core/sentinel_board.HEDGE_BATCHES）
       口徑：**收完的日線收盤**（排除當日未收 K 棒），依據見 core/sentinel_board.py 檔頭
       平倉（優先於一切）：AHR999<0.40 開窗，或 D3 熊底確認 → **全部平倉**
 

@@ -88,7 +88,7 @@ def test_d3_row_surfaces_new_c3_gate():
 
 
 def test_hedge_constants_match_appendix():
-    """三批門檻與規模需與執行清單附錄 E-1 一致（0.0428×2 + 0.0429 = 0.1285）。"""
+    """三批門檻與規模需與 vault「1a BTC部位SOP」情境一「套保機器人」小節一致（0.0428×2 + 0.0429 = 0.1285）。"""
     assert [thr for _, thr, _ in HEDGE_BATCHES] == [65, 55, 50]
     assert round(sum(q for _, _, q in HEDGE_BATCHES), 4) == 0.1285
     assert HEDGE_G3_PEAK == 75
