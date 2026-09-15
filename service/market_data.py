@@ -32,7 +32,11 @@ from service.local_db_reader import has_local_data, read_btc_daily
 if not SSL_VERIFY:
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-BTC_CSV = "db/cache/BTC_HISTORY.csv"
+# 2026-09-15 改絕對路徑：原本寫相對路徑 "db/cache/BTC_HISTORY.csv"，快取跟著「執行目錄」走——
+# 在 vault 目錄跑腳本會把快取寫進 vault，而 Cow 目錄那份舊快取的 06-30 列是殘缺日線，
+# 同一支 sop_status.py 在兩個目錄跑出不同的 D3 低點（59,577.01 vs 58,624.71）。
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BTC_CSV = os.path.join(_REPO_ROOT, "db", "cache", "BTC_HISTORY.csv")
 # 每次更新都重抓最後 N 天覆蓋（見 fetch_market_data 內註解）。3 天足以蓋掉盤中殘值，
 # 又不會把整段歷史重拉。
 REFETCH_TAIL_DAYS = 3
