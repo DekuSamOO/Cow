@@ -21,8 +21,9 @@ config_private.py
 # 由 collector/btc_price_collector.py 在本地端生成後 push 至雲端
 # Streamlit Cloud 部署時直接從 repo 讀取，免 API 呼叫
 
-# Claude Code 本地設定
-.claude/
+# Claude Code 本地設定——但 .claude/rules/ 是 CLAUDE.md 搬出來的專案規則，要進版控（2026-09-15 L1 瘦身）
+.claude/*
+!.claude/rules/
 
 # 編輯器本地設定（僅本機 conda 直譯器指定，非可攜、與程式行為無關）
 .vscode/

@@ -9,6 +9,8 @@
 > **回測數據正本** → `_governance\FINDINGS-cow-radar-backtests.md`
 > **台股/美股資料源細節** → `docs\tw-us-data-sources.md`
 > 版本與部署狀態以 README 為準，本檔不複述。
+> **專題陷阱 → `.claude/rules/`**（2026-09-15 起；官方 path-scoped rules，**Read 到對應檔才自動載入**，
+> 不佔每次對話的 context）。本檔〈已知陷阱〉留標題索引，外部引用照舊引標題即可找到。
 
 ---
 
@@ -59,84 +61,15 @@ D:\Users\63191\AppData\Local\anaconda3\python.exe collector/btc_price_collector.
 
 ---
 
-## service 層 fallback chain（讀 code 看不出順序，改動前必看）
+## 三大核心系統（改動守則；實作細節在 rules）
 
-```
-歷史K線：本地DB → Yahoo → Binance → Kraken → CryptoCompare（五層）
-即時價格：Binance 現貨 → Kraken Ticker → 本地 15m DB 最新一筆（三層）
-宏觀：FRED CSV → Yahoo → FRED 備援 → 靜態 _FALLBACK（四層）
-```
-Kraken Ticker 端點 `api.kraken.com/0/public/Ticker?pair=XBTUSD`，取 `result['XXBTZUSD']['c'][0]`。
-資金費率三層見〈資金費率即時備援鏈〉；台股籌碼走 `tw_chip.get_chip_bundle`。
-`db/` 為年度分割 SQLite（`btcusdt_15m_YYYY.db`），**雲端直接讀 repo 內 db**。
-
-**來源追蹤慣例**：`fetch_realtime_data()` 回傳 dict 含 `price_source`／`funding_rate_source`／
-`tvl_source`；UI 層直接讀 `rt.get('price_source', '歷史收盤')`，**不在 UI 層做 `is not None`
-判斷**（leaky abstraction）。`get_latest_local_price()` 不帶快取供即時備援；
-`read_btc_15m()` 有 `ttl=86400`，**不可**用於即時價格。
-
----
-
-## 三大核心系統
-
-### 最低價綜合評估（四季論底部）
-
-**單一真實來源 `core/bottom_floors.py::compute_all_bottom_estimates()`**，LINE 推播與
-dashboard（tab D2.5）**共用同一函式**，杜絕兩邊算法漂移。
-`final_low = max(四季論趨勢底, 礦工電費硬地板)`；ensemble = 強錨中位數。
-組成與回測倍數 → FINDINGS No.1。
-
-- **bitcoin-data.com 429 burst 限流**：連續 ~6 次即冷卻數分鐘。端點間隔 4s ＋ 遇 429 長退避
-  ＋ **12h 持久化快取**。**勿密集探測。**
-- on-chain 指標**僅約 4 年歷史**，只能驗證 2022 輪；2015/2018 靠礦工成本回測。
-- `compute_all_bottom_estimates(now=...)` 須傳 **naive datetime**（tz-aware 會與 naive
-  `HALVING_DATES` 比較拋錯）。
-
-### 相對高/低點雷達（逃頂＋抄底）
-
-**單一真實來源**：`core/relative_high.py`（逃頂五維）＋`relative_low.py`（抄底六維）＋
-`trend_direction.py`（趨勢方向四維）。dashboard、`BTC_WATCH.py`、LINE 推播共用。
-
-**三軸要合看**：可同時「強多頭＋逃頂高」或「空頭＋抄底高」——**勿純憑估值接刀**。
-配重與 AUC → FINDINGS No.2~No.4；權重以 `WEIGHTS`／`WEIGHTS_LOW` 為單一真實來源，
-**勿手動精算複寫**。
-
-**`BTC_WATCH.py` 正本在本 repo 根目錄**（2026-06-10 起不再維護 Crypto repo 那份，該 repo
-已無此檔）：OI 用 `openInterestHist`（5m×13 滾動清洗＋1d×30 分位）取代失效的相鄰 60s 差值；
-防線用 `bottom_floors.final_low`（fallback 54000）；總經事件讀本地 `db/macro_events.json`，
-**不打被擋的 FRED**。
-
-- **⚠️ Farside ETF 佔位 0.0**：Farside 對「最新未定案日」回 `0.0`，當真實值存入會讓 streak
-  邏輯把「連續 8 天機構流出」顯示成「🟢 淨流入」（完全反向、遮蔽逃頂訊號）。
-  **交易日淨流量恰為 0.0 極罕見，一律視為當日無資料。**（`tests/test_etf_flow.py`）
-
-### 改動守則（違反即 bug）
-
+- **單一真實來源，勿各自重算**：最低價＝`core/bottom_floors.py::compute_all_bottom_estimates()`；
+  逃頂／抄底／趨勢＝`core/relative_high.py`／`relative_low.py`／`trend_direction.py`，dashboard、`BTC_WATCH.py`、LINE 推播共用。
+- **三軸要合看**：可同時「強多頭＋逃頂高」或「空頭＋抄底高」——**勿純憑估值接刀**。
 - **⚠️ OI×Funding 假頂折減仍 NOT VERIFIED**（樣本不足非網路問題）：只准折減不准灌分、
   OI 無資料不折減。**不得移除、也不得轉正**。
 - **反指標整段移除、不留參考顯示**（Hash Ribbons、TDCC major_pct 前例）。勿加回。
-- **改 WEIGHTS 必做三件事**：①重算 `BTC_WATCH.TOP_CAP`/`LOW_CAP`（**現為 99，勿用
-  「100−7」捷徑**——clamp(100) 會蓋掉超編）；②**grep 所有 `_panel(...)` 呼叫端**確認
-  `dims` tuple 與 `compute_relative_*` 回傳的 signals key **完全一致**（曾漏 `vol_price`/
-  `structure`，分數算進總分卻不顯示，使用者無從判讀）；③三個消費端都要餵參數
-  （`BTC_WATCH.py`、`tab_macro_compass::_gather_radar_externals`、
-  `daily_line_notify::_compute_radars`）。
-
-### 台股/美股版（watcher 股票分支）
-
-加密雷達的 funding/OI/鏈上維度股票無對應 → 台股改用**籌碼/估值**，美股用**純 OHLCV 通用軸**。
-端點、欄序、TPEx fallback、TDCC 爬法 → **`docs\tw-us-data-sources.md`**。
-
-**只有下列會害人犯錯的行為守則留在這裡：**
-
-1. **`.TW`→`.TWO` 上櫃備援：日線與即時報價要各自套用，勿漏放一邊。**
-   `fetch_live_quote` 曾漏掉，導致所有上櫃股現價/成交量永遠 404。2026-07-03 已抽出共用
-   `_tw_candidates()`；**日後新增台股 fetch 函式務必套用同一份候選清單，不要各自複製判斷**。
-2. **TWSE 日檔是 EOD 公布 → 必須 walk-back**：呼叫端常傳「今日」，但今日檔尚未出、連假整週
-   無檔 → 三日檔會整片 None。用**單一探針**（BWIBBU 非空）往前找最近已公布交易日
-   （lookback≤7），三源對齊同一 `as_of`。**用單一探針而非多源×多日盲掃**，避免撞限流。
-3. **台股盤中報價法定延遲 ~20 分鐘，勿用 timestamp 新舊判斷盤中/收盤**：改用是否為交易時段
-   （`_is_tw_trading_hours()`）。用 age<15 分鐘猜對美股成立、對台股永遠誤判成「已收盤」。
+- 最低價／雷達／台美股 watcher 的實作陷阱、改 `WEIGHTS` 必做三件事 → 下方〈已知陷阱〉索引對應的 rules 檔。
 
 ---
 
@@ -144,126 +77,43 @@ dashboard（tab D2.5）**共用同一函式**，杜絕兩邊算法漂移。
 
 > **序號會隨增刪漂移——本檔外部一律引「標題」不引序號。** 2026-08-10 清過一輪：治理文件 8 處
 > 序號引用已全改標題（歷史 plan／AUDIT 刻意留原樣）。刪條目時**留占位不重編**。
+> **2026-09-15 起多數條目逐字搬到 `.claude/rules/`**（Read 到對應檔自動載入）；下表是標題索引，編號不變。
 
-### 1. `@st.fragment` 靜默失效（現價停止自動更新）
-
-`@st.fragment(run_every=60)` 傳入 DataFrame/Series 時序列化失敗，**fragment 停止重跑但不報錯**。
-→ 只傳 float scalar：`render(prev_close=float(...), rsi14=float(...))`。
-
-### 2. `@st.cache_data(ttl=60)` + `run_every=60` 衝突
-
-fragment 60 秒重跑、TTL 也 60 秒 → 永遠命中快取 → 數據不刷新。
-`fetch_realtime_data()` 不掛 `@st.cache_data`。
-
-### 3. 分辨「fragment 沒跑」還是「連線問題」（公司網路是 SSL 攔截，非封鎖）
-
-看 fragment 內「數據更新時間」有無每分鐘更新：沒更新＝fragment 停跑（見〈`@st.fragment` 靜默
-失效〉／〈`@st.cache_data(ttl=60)` + `run_every=60` 衝突〉）；有更新但值不動才是連線問題。
-SSL 攔截通則與 curl 解法見全域 `~\.claude\CLAUDE.md` §6，備援鏈見〈service 層 fallback chain〉。
-
-### 4. service 層來源追蹤慣例
-
-→ 已併入〈service 層 fallback chain〉。**編號保留占位，勿重編。**
-
-### 5. `reindex(method='nearest')` 早於資料起點填充定值
-
-`fund_hist` 從 2021 起、`chart_df` 從 2015 起 → 2021 年前會填成第一筆值（常數線）。
-手動清除：`fund_sub.loc[fund_sub.index < fund_hist.index[0]] = np.nan`
-
-### 6. 資金費率即時備援鏈
-
-Binance `fapi/v1/premiumIndex`（`lastFundingRate`）→ Bybit `v5/market/tickers`
-（`result.list[0].fundingRate`）→ OKX `api/v5/public/funding-rate`（`data[0].fundingRate`），皆 ×100。
-
-### 7. 圖表欄位名與顯示標籤混淆
-
-`EMA_20` 直接當圖例易被誤讀為 `SMA 20` → `_ma_label(col)` 轉 `EMA 20`。
-`exit_ma_key == 'EMA_20'` 時進場線與防守線同一條，合併標籤 `"EMA 20 (進場 ＆ 防守線)"`。
-
-### 8. AHR999 冪律公式（舊版膨脹至 $177 萬）
-
-```python
-# ✅ Giovanni Santostasi 冪律
-estimated_price = 10 ** (-17.01467 + 5.84 * np.log10(days_since_genesis))
-# ❌ 舊線性指數模型（勿用）
-estimated_price = 10 ** (2.68 + 0.00057 * days_since_genesis)
-```
-
-### 9. Walk-Forward 雙重移位
-
-條件裡用了 `close_shifted` 再整體 `shift(1)` → 實際用到 2 天前資料。
-**所有條件統一用當日值，最後一次性 `shift(1)`。**
-
-### 10. Walk-Forward 進場乖離硬編碼 1.5% 上限
-
-造成極少進場（ROI −22% vs swing +1654%）。已改可選參數 `entry_dist_max_pct`（預設 `None` 無上限）。
+| No. | 標題 | 正本（`.claude/` 底下） |
+|---|---|---|
+| — | service 層 fallback chain（讀 code 看不出順序，改動前必看） | rules/service-data.md |
+| — | 最低價綜合評估（四季論底部） | rules/radar-core.md |
+| — | 相對高/低點雷達（逃頂＋抄底） | rules/radar-core.md |
+| — | 改動守則（違反即 bug） | 本檔〈三大核心系統〉＋ rules/radar-core.md |
+| — | 台股/美股版（watcher 股票分支） | rules/tw-us-watcher.md |
+| 1 | `@st.fragment` 靜默失效（現價停止自動更新） | rules/streamlit-ui.md |
+| 2 | `@st.cache_data(ttl=60)` + `run_every=60` 衝突 | rules/streamlit-ui.md |
+| 3 | 分辨「fragment 沒跑」還是「連線問題」（公司網路是 SSL 攔截，非封鎖） | rules/streamlit-ui.md |
+| 4 | service 層來源追蹤慣例 | rules/service-data.md（占位） |
+| 5 | `reindex(method='nearest')` 早於資料起點填充定值 | rules/streamlit-ui.md |
+| 6 | 資金費率即時備援鏈 | rules/service-data.md |
+| 7 | 圖表欄位名與顯示標籤混淆 | rules/streamlit-ui.md |
+| 8 | AHR999 冪律公式（舊版膨脹至 $177 萬） | rules/radar-core.md |
+| 9 | Walk-Forward 雙重移位 | rules/radar-core.md |
+| 10 | Walk-Forward 進場乖離硬編碼 1.5% 上限 | rules/radar-core.md |
+| 11 | 派網 Bot API 不支援幣本位網格與馬丁格爾 | 本檔下方 |
+| 12 | 新聞來源限制 | rules/news-gemini.md |
+| 13 | 新聞中文化省 token 三層（`service/news_i18n.py`） | rules/news-gemini.md |
+| 14 | Gemini 兩坑 | rules/news-gemini.md |
+| 15 | requirements 勿替 numpy/pandas 加上限 | rules/requirements.md |
+| 16 | 檔案頂層 import 會拖進重依賴 | rules/service-data.md |
+| 17 | `_df_from_sqlite` 曾強制欄名全轉小寫 | rules/service-data.md |
+| 18 | 分位型維度的「母體長度」是口徑的一部分 | rules/tw-us-watcher.md |
+| 19 | Yahoo 台股「有價無量」幽靈列 | rules/tw-us-watcher.md |
+| 20 | 「分位」與「量比」使用者一定會互相驗算 | rules/tw-us-watcher.md |
+| 21 | 公開檔的「範例數字」曾是真數字（S-1 私有化做一半） | 本檔下方 |
+| 22 | P4 重啟偵測曾掛在錯的觸發點上 | rules/radar-core.md |
+| 23 | 測試自己會騙人的兩種形狀（2026-09-11 同日各踩一次） | rules/testing.md |
 
 ### 11. 派網 Bot API 不支援幣本位網格與馬丁格爾
 
 `buOrderTypes` 只有 `futures_grid`／`spot_grid`／`smart_copy`；App 手動建的機器人不會出現在
 API 回傳，帳戶餘額 API 也不含機器人內資產。→ **派網 API Key 對本專案無用，勿再嘗試。**
-
-### 12. 新聞來源限制
-
-Reddit `hot.json` 對公司 IP 與雲端共享 IP 均回 403（IP 層級，換 UA 無效）→ 改用
-CoinGecko `/search/trending`。X 免費 API 已關閉，不納入。
-媒體源：CryptoCompare News ＋ Cointelegraph/CoinDesk/Decrypt RSS（`service/news.py`）。
-
-### 13. 新聞中文化省 token 三層（`service/news_i18n.py`）
-
-批次一次 prompt 處理最多 8 則回 JSON ＋ 持久化快取 `db/news_i18n.json`（翻過的**永不重翻**，
-記憶體快取 cold start 會清空故需落地）＋ 總開關 `NEWS_I18N_ENABLED=false`。
-
-### 14. Gemini 兩坑
-
-- 2.5 系列是 reasoning 模型，**預設 thinking 會吃光 `maxOutputTokens`** → 症狀是耗時久且回傳空。
-  翻譯/摘要用 `generationConfig.thinkingConfig.thinkingBudget = 0`（`core/gemini_client.py`）。
-- `ListModels` 會列出已下架模型（`gemini-2.0-flash` 實打回 404）。**不要以列出就當可用。**
-
-### 15. requirements 勿替 numpy/pandas 加上限
-
-pandas-ta 只有 pre-release（0.4.x）且依賴 `pandas>=2.3.2`。曾誤鎖 `numpy<2`+`pandas<2.3`
-→ 雲端 uv 報 `No solution`、pip fallback source-build pandas 卡死、**app 起不來**
-（原本「全無 pin」反而正常）。
-**正解**：`pandas-ta==0.4.71b0`（pin 確切 pre-release，uv 才願解析）、`pandas>=2.3.2`、
-`numpy>=1.26`，**一律不加上限**。鎖版本前先看雲端 build log，不可憑記憶臆測。
-
-### 16. 檔案頂層 import 會拖進重依賴
-
-`service/macro_data.py` 頂層 `import streamlit`+`yfinance`，但 `get_next_macro_event()` 只讀本地
-JSON。**只要 import 那個檔案就會連帶 import streamlit**，公司網路下這個 import 動作本身會卡住
-逾時（實測 >10 秒，**try/except 攔不到「卡住」**）。已抽出零依賴的 `service/macro_events.py`。
-**教訓**：新增純邏輯函式前，先看它要放的檔案頂層 import 了什麼。
-
-### 17. `_df_from_sqlite` 曾強制欄名全轉小寫
-
-只為相容 yfinance `'Date'`/`'date'`，卻把 `fundingRate` 這種**資料欄**也轉小寫 → 消費端讀不到、
-增量 concat 產生大小寫分裂雙欄、`to_sql` 因 SQLite 欄名大小寫不敏感 `duplicate column name` 崩潰。
-修法：**只在 `index_col` 找不到時**才嘗試不分大小寫改名。
-詳 `_governance\歷程\20260705audit_data-internals-batch4.md` C-17~C-19。
-
-### 18. 分位型維度的「母體長度」是口徑的一部分
-
-`vol_pctile` 拿最新值對 `fetch_ohlc` 抓回的**整段**歷史排名 → **抓多長＝母體多大＝分位定義**。
-校準腳本用 expanding、面板自 2016-01-01 起，live 若只抓 2 年就是拿短記憶母體套長記憶門檻。
-6782 實例：同一筆近5日均量，2 年母體 93.5 分位、10 年 83.5 分位，量能維 12/18 vs 6/18。
-→ **`fetch_ohlc` 預設 `rng="10y"`，改短即改維度定義。**
-**且不可用 `rng="max"`**：Yahoo 靜默降頻成週/月線（2330 max 只回 320 根、間隔 31 天），
-欄名不變、無錯誤，分位會變成拿週量比日量。
-
-### 19. Yahoo 台股「有價無量」幽靈列
-
-volume=0 但 OHLC 正常、當天實際有成交（近 10 年 6782 1／2454 4／1101 7／6509 9 筆，
-美股與幣對 0 筆）。混進量能母體、也把含它的 N 日均量整段拉低。
-`fetch_ohlc` 已轉 NaN（**不刪列**——價格那根是真的，MA/RSI/ATR 不該少一天）。
-
-### 20. 「分位」與「量比」使用者一定會互相驗算
-
-分位母體＝歷史每天的 N 日均量；量比分母＝近 N 日均量。**兩者不可互推**（今日縮量與 5 日
-均量仍在歷史高檔可同時成立）。2026-08-11 使用者以 219,571÷648,800=0.34 推「應該 33 分位」，
-而 v3.35 已改過一次標籤文字仍再被誤讀 → **兩個數字並列顯示**，不要只給一個再靠文字解釋。
-
----
 
 ### 21. 公開檔的「範例數字」曾是真數字（S-1 私有化做一半）
 
@@ -276,56 +126,7 @@ S-1 私有化時**直接抄了真實防守數字**（觸發價／釋出量／加
 （99999/88888/77777）。結構可以真，數字不准真。測試要真值就 `from config_private import`
 ＋缺檔 skip（見 `tests/test_defense_ladder.py`）。改任何公開檔前先問「這個數字是不是部位」。
 
-### 22. P4 重啟偵測曾掛在錯的觸發點上
-
-`detect_mart_restart()` 原本只被 `notify_defense_line()` 呼叫，而後者只在價格跌破
-`ALERT_PRICE_LOW` 才執行——**「要用防守階梯的那一刻，才發現階梯早就壞了」**。
-2026-07-13 的對帳基線在 8/19–8/21 上漲後失效（兩台馬丁各重啟 6~9 輪），
-價格從沒跌破警報價，偵測邏輯就從沒跑過，一個多月無人知曉，最後靠人工對帳發現。
-
-2026-08-21 改由 `scripts/daily_line_notify.py::maybe_send_mart_restart_alert()` 每日驅動，
-重啟後 24h 內告警（去重 key＝基線日＋已重啟名單，更新基線後可再告警）。
-**通則：偵測器的觸發條件不可與「它要保護的那件事」同時成立**，否則等於沒有偵測。
-
-> [!note] **2026-09-07：本偵測器已整組移除**（使用者拍板，見 README v3.51）。
-> 條目與編號保留不重排（引用要引標題不引序號）。移除理由是它換一種方式重演了同一件事：
-> 改成每日驅動之後**照樣沒出聲**——Actions 美國 IP 取不到行情，`detect_mart_restart`
-> 恆回 `None`，呼叫端只 `print` 一行「略過」就結束，六場抽查全是這樣；
-> 而兩台馬丁 08-24／08-25 就已重啟。
-> **通則要再補一句：偵測器「取不到資料」時不可靜默**——
-> 那和「偵測到沒事」是兩件事，處置也不同（同一系統的套保對拍守門就做對了：
-> 分歧或對拍源不可得 → 不下單但**推警示**）。
->
-> ✅ **2026-09-07 已落地為機制，不再靠自律**：
-> `daily_line_notify._maybe_send_data_gap_alert` ＋ `_clear_data_gap_flag`，
-> 套用在**會影響下單決策的四個哨兵**（升槓桿窗口／熊底 D3／D3 網格緩衝／套保建倉）。
-> 推一次、恢復時清旗標（同 D3 死結告警的模式），一天三場不洗版。
-> **逃頂雷達與合成行動刻意不納入**——SOP 附錄 F-4 已定為「不作賣出依據」，
-> 替不會據以下單的分數推缺值警報只會淹掉真正該看的那幾則。
-> 紅線測試在 `tests/test_alert_logic.py`（缺值必推／不洗版／恢復清旗標）
-> 與 `tests/test_hedge_batch_alert.py`（舊斷言「缺值只能沉默」已被推翻並改寫）。
-
-### 23. 測試自己會騙人的兩種形狀（2026-09-11 同日各踩一次）
-
-**① 語意是「今天／昨天／前一日」的日期不可寫死。**
-當天新增兩道時間守門（`SCORE_DELTA_MAX_GAP_DAYS`、`HEDGE_MAX_CLOSED_BAR_LAG_DAYS`），
-一口氣打紅三個測試檔——`test_alert_logic.py` 的基準日寫 `2020-01-01`、
-`test_hedge_batch_alert.py` 與 `tests/core/test_hedge_crosscheck.py` 的
-`rsi_closed_date` 寫 `2026-09-02`。三處**名義上都叫「前一日」，實際是幾年前或幾天前**，
-守門一上線全被判成過期。寫法：`str(date.today() - timedelta(days=1))`；
-兩個日期之間的落差用「差幾天」當參數表達（見 `test_hedge_crosscheck.py` 的 `x_lag_days`），
-不要各自寫死一個日期再靠減法碰運氣。
-
-**② 斷言「某訊息有送出」要用該分支專屬的字串，不可用共用前綴。**
-當天寫的 `assert "[套保建倉]" in text` 綠燈了，但理由是錯的——
-**分歧警示訊息也以同一個前綴開頭**，那條斷言其實分不出正式建倉與「先不要建倉」。
-同一個檔案早就有這個註解（「不用『建倉』二字判別，告警標題本來就叫套保建倉哨兵，
-拿那兩個字判會自己咬自己」），沒沿用就又踩一次。
-判正式建倉用 `全倉套保`／`批觸發`，判警示用 `先不要建倉`。
-
-> 兩者的共通點：**測試綠燈不等於測試有效**。
-> 收尾一律再跑一次負向驗證（把守門停用，確認該紅的真的紅）——
-> 本檔 No.22 的資料缺值告警、套保對拍守門都是這樣驗的。
+---
 
 ## 受保護決策（改動需使用者裁定）
 
