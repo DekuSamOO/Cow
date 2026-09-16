@@ -118,7 +118,12 @@ def main():
                   data.get("days_since_ath")))
     out.append("")
 
+    stale = _main_source_stale(btc_df, cdate)
+
     out.append("[套保 G3]")
+    if stale:
+        out.append("  ⚠️ %s" % stale)
+        out.append("  ⚠️ **本區塊的門檻判定不可信**——等 collector 跑完（台北 09:00）再查一次。")
     out.append("  主源 RSI14 : %s" % (round(rsi, 2) if rsi is not None else None))
     out.append("  對拍 RSI14 : %s（%s）" % (round(x_rsi, 2) if x_rsi is not None else None, x_date))
     out.append("  近 %d 日峰值: 主源 %s / 對拍 %s"
@@ -135,7 +140,8 @@ def main():
         # 哨兵不知道你實際幾點下單。2026-09-11 由「已建（…）」改名——舊字面害人把
         # 推播日讀成建倉日，兩批實際都是使用者跑在哨兵前面幾小時建的。
         mark = "已推播（%s）" % state.get("hedge_batch_%d_date" % n) if done else (
-            "兩源皆過" if both else ("兩源分歧→不可建" if one else "未達門檻"))
+            "判定不可信（主源殘缺）" if stale else
+            ("兩源皆過" if both else ("兩源分歧→不可建" if one else "未達門檻")))
         out.append("  第 %d 批 <%d（%.4f BTC）: %s" % (n, thr, qty, mark))
     out.append("")
 
@@ -166,6 +172,66 @@ def main():
         out.append("  %s = %s" % (k, state[k]))
 
     print("\n".join(out))
+
+
+# ── 主源殘缺守門（2026-09-16 立，實帳事故後）───────────────────────────────
+# 事故：使用者 09-16 08:57 依 app 建了套保第 3 批，而 08:19／08:53 兩次查詢都回「未達門檻」。
+# 真值 09-15 收完日線 RSI 48.26（Cow 15m DB）／48.15（Binance fapi）皆 <50、確實觸發；
+# 主源讀到的卻是 53.75——`db/cache/BTC_HISTORY.csv` 的 09-15 那列是**盤中殘值**
+# （收 77,216、量 397，截在台北 15:00），而 collector 台北 09:00 才更新 15m DB，
+# 在那之前 `read_btc_daily()` 又會丟掉不完整的最後一根，於是殘值沒被覆蓋。
+#
+# 為什麼不能只看日期：那列的日期是 09-15，落後天數看起來完全正常（lag=1），
+# 壞的是**內容**。所以改成拿 15m DB 同一天的收盤來對帳。
+#
+# 門檻 0.3%：989 個可比對日實測，中位／90 分位／99 分位差異皆為 0.000%，
+# 只有事故當天 2.077% 超標 → 歷史誤報 0 天。
+MAIN_SOURCE_MAX_CLOSE_GAP_PCT = 0.3
+
+
+def _main_source_stale(btc_df, closed_date):
+    """主源那根收完日線是否可疑；可信回 None，可疑回一句說明（呼叫端據此標不可信）。"""
+    try:
+        import glob
+        import sqlite3
+
+        import pandas as pd
+    except Exception:
+        return None
+    if btc_df is None or closed_date is None:
+        return None
+    try:
+        main_close = float(btc_df.loc[btc_df.index.astype(str).str[:10] == str(closed_date)[:10], "close"].iloc[-1])
+    except Exception:
+        return None
+    try:
+        rows = []
+        for p in sorted(glob.glob(os.path.join(_REPO, "db", "btcusdt_15m_*.db")))[-2:]:
+            con = sqlite3.connect("file:" + p.replace(os.sep, "/") + "?mode=ro", uri=True)
+            try:
+                rows += list(con.execute("SELECT open_time, close FROM klines ORDER BY open_time"))
+            finally:
+                con.close()
+        if not rows:
+            return None
+        df = pd.DataFrame(rows, columns=["t", "close"])
+        df["ts"] = pd.to_datetime(df["t"], unit="ms", utc=True).dt.tz_localize(None)
+        day = df[df["ts"].dt.date.astype(str) == str(closed_date)[:10]]
+        if day.empty:
+            return ("15m DB 還沒有 %s 這天的資料（collector 台北 09:00 才更新），"
+                    "主源那根無從對帳" % str(closed_date)[:10])
+        if len(day) < 90:
+            return ("15m DB 的 %s 只有 %d 根 15m（完整應為 96 根），該日尚未收齊"
+                    % (str(closed_date)[:10], len(day)))
+        db_close = float(day["close"].iloc[-1])
+        gap = abs(main_close - db_close) / db_close * 100
+        if gap > MAIN_SOURCE_MAX_CLOSE_GAP_PCT:
+            return ("主源 %s 收盤 %.2f 與 15m DB 同日收盤 %.2f 差 %.2f%%（上限 %.1f%%）——"
+                    "主源那根疑似盤中殘值"
+                    % (str(closed_date)[:10], main_close, db_close, gap, MAIN_SOURCE_MAX_CLOSE_GAP_PCT))
+    except Exception:
+        return None
+    return None
 
 
 def _span_days(d1, d2) -> int:

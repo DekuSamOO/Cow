@@ -1,4 +1,4 @@
-# Cow — 比特幣投資戰情室 v3.56
+# Cow — 比特幣投資戰情室 v3.57
 
 > 比特幣多週期量化分析工具，整合技術指標、鏈上數據、期權與波段策略。
 
@@ -15,7 +15,7 @@
 | 3 | 💰 雙幣理財 | Black-Scholes APY 試算、行權價梯形視覺化、Delta 風險估算、動態無風險利率 |
 | 4 | ⏳ 時光機回測 | 自訂區間波段 PnL（可調參數滑桿 + 🔬 最佳參數搜尋，並行加速）、雙幣滾倉回測、牛市雷達準確度驗證（含 MA50 視覺化）、**📈 多週期回測（日線宏觀過濾 + 15m 精確進場，防先視偏誤）**、**🚀 Walk-Forward 無先視回測（逐日推進，可選簡化或六層進階出場機制）** |
 | 📰 | 加密新聞輿情 | Dashboard 速覽下方：CryptoCompare/Cointelegraph/CoinDesk/Decrypt 多來源聚合去重、**Gemini 中文化標題＋小結**、AI 情緒燈號、分類 filter、CoinGecko 24h 熱搜 |
-| 🤖 | 決策速報推播 | 透過 GitHub Actions 每日三時段 (台灣 **08:23 / 13:39 / 18:27**) 自動抓取大盤與指標數據，發送高質感 Flex Message 決策面板至 LINE（含**新聞輿情區塊**）|
+| 🤖 | 決策速報推播 | 透過 GitHub Actions 每日三時段 (台灣 **09:23 / 13:39 / 18:27**) 自動抓取大盤與指標數據，發送高質感 Flex Message 決策面板至 LINE（含**新聞輿情區塊**）|
 
 ---
 
@@ -94,7 +94,7 @@ strategy/
   notifier.py           LINE Bot 主動推播通知模組
 
 scripts/
-  daily_line_notify.py     GitHub Actions 雲端自動推播腳本（Kraken 備援，台灣 08:23 / 13:39 / 18:27 三時段，含新聞輿情、逃頂警報分級/分數Δ/遲滯狀態機、OI 快照過期警告、週日傍晚場次加推文字週報，時段閘門 hour<17 早退使本地/手動執行也僅傍晚才發；另含 maybe_send_leverage_window_alert 每日升槓桿窗口哨兵，AHR999 與距 ATH 兩道閘門同時成立才開窗、**分批以「訊號日」累計、關窗只暫停不歸零；開窗與關窗兩條計數皆同日去重（計日曆天不計場次）**；另含 maybe_send_bear_bottom_confirm_alert 熊底確認 D3 哨兵，成立即只推一次、語意為「本輪熊市視為結束→升槓桿窗口可能不再開」，推播直接附 `d3_grid_plan` 算好的 L=2 網格下限/上限/格數/強平粗估，**馬丁不換現貨、續跑當網格的強平緩衝**（2026-08-26 拍板取代舊版「馬丁全額換現貨」，vault `1a BTC部位SOP` 情境二 F-2）；c1 與 c3 互斥時另推一次 D3 死結告警（`_maybe_send_d3_deadlock_alert`，解除即清旗標）；另含 maybe_send_d3_grid_buffer_alert，現價跌破 `config_private.D3_GRID_LIQ_PRICE × 1.10` 推一次「兩台馬丁全平注資」（`D3_GRID_LIQ_PRICE` 為 None 時整段略過）。升槓桿與 D3 的判定邏輯與門檻皆委由 `core/leverage_window`，本檔只負責取數與組推播文案；另含 maybe_send_hedge_batch_alert 套保分批建倉哨兵 G3，門檻與視窗取自 `core/sentinel_board`，RSI 一律用**收完的日線收盤**、每批只推一次、**兩源對拍通過才推建倉**（主源 `fetch_market_data` 日線 vs 對拍源 15m DB 重採樣成 1D＝回測口徑；分歧或對拍源不可得改推「先不要建倉」每批一次；對拍源只落後 1 天視為 DB 尚未 push、本場不推），收完日線落後超過 `HEDGE_MAX_CLOSED_BAR_LAG_DAYS`=1 天不推建倉。**共用守門兩道**：`_maybe_send_data_gap_alert`（升槓桿窗口／D3／D3 網格緩衝／套保建倉四個會影響下單的哨兵取不到資料就推「[哨兵失明]」，恢復清旗標；逃頂與合成行動刻意不納入）、`_state_chain_broken`（還原到的 state artifact 超過 `STATE_STALE_HOURS`=30 小時就不送「只推一次」的建倉類指示、改推「[狀態鏈斷裂]」，套用於套保建倉與 D3））
+  daily_line_notify.py     GitHub Actions 雲端自動推播腳本（Kraken 備援，台灣 09:23 / 13:39 / 18:27 三時段，含新聞輿情、逃頂警報分級/分數Δ/遲滯狀態機、OI 快照過期警告、週日傍晚場次加推文字週報，時段閘門 hour<17 早退使本地/手動執行也僅傍晚才發；另含 maybe_send_leverage_window_alert 每日升槓桿窗口哨兵，AHR999 與距 ATH 兩道閘門同時成立才開窗、**分批以「訊號日」累計、關窗只暫停不歸零；開窗與關窗兩條計數皆同日去重（計日曆天不計場次）**；另含 maybe_send_bear_bottom_confirm_alert 熊底確認 D3 哨兵，成立即只推一次、語意為「本輪熊市視為結束→升槓桿窗口可能不再開」，推播直接附 `d3_grid_plan` 算好的 L=2 網格下限/上限/格數/強平粗估，**馬丁不換現貨、續跑當網格的強平緩衝**（2026-08-26 拍板取代舊版「馬丁全額換現貨」，vault `1a BTC部位SOP` 情境二 F-2）；c1 與 c3 互斥時另推一次 D3 死結告警（`_maybe_send_d3_deadlock_alert`，解除即清旗標）；另含 maybe_send_d3_grid_buffer_alert，現價跌破 `config_private.D3_GRID_LIQ_PRICE × 1.10` 推一次「兩台馬丁全平注資」（`D3_GRID_LIQ_PRICE` 為 None 時整段略過）。升槓桿與 D3 的判定邏輯與門檻皆委由 `core/leverage_window`，本檔只負責取數與組推播文案；另含 maybe_send_hedge_batch_alert 套保分批建倉哨兵 G3，門檻與視窗取自 `core/sentinel_board`，RSI 一律用**收完的日線收盤**、每批只推一次、**兩源對拍通過才推建倉**（主源 `fetch_market_data` 日線 vs 對拍源 15m DB 重採樣成 1D＝回測口徑；分歧或對拍源不可得改推「先不要建倉」每批一次；對拍源只落後 1 天視為 DB 尚未 push、本場不推），收完日線落後超過 `HEDGE_MAX_CLOSED_BAR_LAG_DAYS`=1 天不推建倉。**共用守門兩道**：`_maybe_send_data_gap_alert`（升槓桿窗口／D3／D3 網格緩衝／套保建倉四個會影響下單的哨兵取不到資料就推「[哨兵失明]」，恢復清旗標；逃頂與合成行動刻意不納入）、`_state_chain_broken`（還原到的 state artifact 超過 `STATE_STALE_HOURS`=30 小時就不送「只推一次」的建倉類指示、改推「[狀態鏈斷裂]」，套用於套保建倉與 D3））
   price_alert.py           GitHub Actions 每小時價格警報（防守線＝config.ALERT_PRICE_LOW；文案由 config.DEFENSE_LADDER 三階推移表動態組裝，含同日去重 + armed 遲滯：跌破推一次、回升門檻+$500 才重新武裝。觸發價/釋出量等真實數字自 2026-07-06 起改由私有來源載入，見 config_private.py.example。**2026-08-21 起 ALERT_PRICE_LOW 與第 1 階觸發價解耦**——馬丁止盈重啟會讓階梯觸發價上飄並改變執行順序，警報價則刻意不跟漲，定位為「高於全部三階、留足台股 T+2 的獨立預警價」，守門判準為 >= 而非 ==）
   test_flex_message.py     本地端測試 LINE Flex Message 排版的除錯腳本
   test_compare_backtest.py 驗證腳本：對相同參數同時執行 swing.py 與 Walk-Forward，確認結果量級一致
@@ -318,7 +318,7 @@ tests/
 # 2. 本地測試 Flex Message 排版
 python scripts/test_flex_message.py
 
-# 3. 推送後 GitHub Actions 將在每日 08:23 / 13:39 / 18:27（台灣時間）三時段自動發送
+# 3. 推送後 GitHub Actions 將在每日 09:23 / 13:39 / 18:27（台灣時間）三時段自動發送
 ```
 
 ---
@@ -360,7 +360,7 @@ streamlit run app.py
 本功能將每日市場快照升級為「決策輔助面板」，透過 GitHub Actions 定時觸發，無需本機常駐即可自動發送高質感 LINE Flex Message。
 
 **三時段排程：** 已在 `.github/workflows/daily_line_notify.yml` 中設定每日自動執行（沿用畸零分鐘避開免費版 Actions 整點壅塞、調早避免延遲拖到深夜）：
-- UTC 00:23（台灣時間 **08:23**）— 早盤決策參考
+- UTC 01:23（台灣時間 **09:23**）— 早盤決策參考（2026-09-16 由 08:23 改；本機 collector 09:00 才 push 當日 15m DB，08:23 那場讀不到剛收完的日線）
 - UTC 05:39（台灣時間 **13:39**）— 午後盤勢確認
 - UTC 10:27（台灣時間 **18:27**）— 傍晚收盤總結
 
@@ -410,6 +410,27 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 ---
 
 ## 版本紀錄
+
+### v3.57 (2026-09-16)
+**早場哨兵判不到當日收盤 + 主源殘值沒人擋**——套保第 3 批該推沒推，使用者自己看盤才發現。
+
+事故：09-15 收完日線 RSI 48.26（Cow 15m DB）／48.15（Binance fapi）皆 <50，第 3 批確實觸發
+（09-15 正是 G3 視窗第 20 根、最後一天）。但 `sop_status.py` 兩次查詢都回「未達門檻」（主源 53.75），
+08:23 那場雲端哨兵也沒跑出來；使用者 08:57 依派網 app 自行建倉 0.0428 BTC @ 75,722.9。
+
+- **fix(schedule)**: 早場 cron `23 0 * * *`（台北 08:23）→ `23 1 * * *`（台北 09:23）。
+  本機 collector 台北 09:00 才 push 當日 15m DB，08:23 那場 `actions/checkout` 到的是前一天那份，
+  **結構上讀不到剛在台北 08:00 收完的那根日線**。只調小時、保留畸零分鐘 23（憲法第 6 條）。
+- **feat(sop_status)**: 新增主源殘值守門 `_main_source_stale()`——拿 15m DB 同日收盤與主源對帳，
+  差 >`MAIN_SOURCE_MAX_CLOSE_GAP_PCT`=0.3% 就標「判定不可信」，三批判定一律改標，不再印「未達門檻」。
+  為什麼不是看日期：殘值那列日期是 09-15、落後天數完全正常（lag=1），**壞的是內容**
+  （收 77,216、量 397，截在台北 15:00）；既有的 `HEDGE_MAX_CLOSED_BAR_LAG_DAYS` 與兩源對拍都擋不到
+  （對拍只在「主源認為該批到期」時才啟動，主源偏高就整批不算到期）。
+  門檻 0.3% 來自 989 個可比對日實測：差異中位／90 分位／99 分位皆 0.000%，只有事故日 2.077% 超標。
+- **test**: 新增 `tests/test_sop_status_freshness.py` 5 案（殘值要標／正常放行／門檻內放行／
+  15m DB 當日未收齊要標／門檻釘死）。負向驗證：門檻放寬到 999 後，殘值案例與門檻案例確實轉紅。
+  全套 **620 passed**。
+- **docs**: README／`core/leverage_window.py` 註解的時段字樣同步為 09:23。
 
 ### v3.56 (2026-09-16)
 **CLAUDE.md 瘦身 336→137 行**——專題陷阱搬進 `.claude/rules/`，Read 到對應檔才載入。
@@ -1591,4 +1612,4 @@ watcher 面板誠實化：移除已回測無效的 Hash Ribbons 參考訊號、�
 
 ---
 
-**最後更新：2026-09-16（v3.56）**
+**最後更新：2026-09-16（v3.57）**
