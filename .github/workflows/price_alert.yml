@@ -77,7 +77,7 @@ jobs:
         run: |
           python scripts/defense_config_check.py --push
 
-      # 無論是否觸發警報，都上傳最新狀態（保留 2 天）
+      # 無論是否觸發警報，都上傳最新狀態（保留 90 天，見下方 retention-days）
       - name: Upload alert state
         uses: actions/upload-artifact@v5
         with:

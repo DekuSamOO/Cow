@@ -88,7 +88,7 @@ jobs:
       run: |
         python scripts/daily_line_notify.py
 
-    # 上傳最新逃頂警報狀態（保留 2 天）
+    # 上傳最新逃頂警報狀態（保留 90 天，見下方 retention-days）
     - name: Upload escape alert state
       uses: actions/upload-artifact@v5
       with:

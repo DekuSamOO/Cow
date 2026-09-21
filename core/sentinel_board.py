@@ -30,7 +30,7 @@ _COW = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATE_FILE = os.path.join(_COW, "escape_alert_state.json")
 
 # ⚠️ 狀態檔**不在本機**：LINE 哨兵跑在 GitHub Actions，狀態靠 artifact 在 run 之間傳遞
-# （workflow 從上一個成功 run `gh run download`，跑完再 upload，保留 2 天）。
+# （workflow 每次 run 從 artifacts API 取最新未過期的那份下載，跑完再 upload，retention 90 天）。
 # 2026-08-25 實測：本機 escape_alert_state.json 根本不存在 → 面板把「有紀錄」的哨兵
 # 也印成「尚無紀錄」（實際 last_action_label=順勢持有、last_weekly_date=2026-08-23）。
 # → 這裡用 gh CLI 把 artifact 抓成本機快取，並**區分「讀不到狀態」與「該鍵沒紀錄」**。
