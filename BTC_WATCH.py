@@ -416,14 +416,13 @@ class BitcoinMonitor:
         if not _COW_OK or not self.is_btc:
             return []
         try:
-            from core.sentinel_board import sentinel_compact, closed_daily_rsi
+            from core.sentinel_board import sentinel_compact
             gate = d3 = None
             if self._sentinel_cache:
                 gate, d3 = self._sentinel_cache
-            # 這一列顯示的是「LINE 哨兵會怎麼判」，所以口徑必須跟 daily_line_notify 完全
-            # 一致 —— 兩邊都呼叫 core.sentinel_board.closed_daily_rsi，不各自實作。
+            # 2026-09-21：原本這裡還會算 closed_daily_rsi 餵「套保」欄，該欄已移除
+            # （理由見 core/sentinel_board.sentinel_compact 的 docstring），故一併拿掉。
             # 面板其他 RSI 讀值（逃頂/抄底計分）維持即時值 —— 用途不同，不要一起改。
-            rsi, rsi_max, _ = closed_daily_rsi(self._daily_cache)
             # allow_remote=True：推播狀態只存在於 GH Actions artifact，本機沒有這個檔。
             # ⚠️ 本方法是在 render() 裡被呼叫的，也就是**每 60 秒一次**；不會變成每分鐘一發
             # gh 請求的原因在 load_state 內的 TTL 閘門（快取未逾 6 小時就只讀檔、不開子行程）。
@@ -431,7 +430,7 @@ class BitcoinMonitor:
             # 完整版 10 列會把表頭與即時行情推出畫面（實測 51→61 列）。
             # 完整 7 列版留在 watcher 進場畫面（那頁沒有東西跟它搶垂直空間）。
             return sentinel_compact(top_score=top_score, gate=gate, d3=d3,
-                                    rsi14=rsi, rsi_peak=rsi_max, allow_remote=True)
+                                    allow_remote=True)
         except Exception as e:
             return ["", f"  哨兵總覽取得失敗：{e}"]
 

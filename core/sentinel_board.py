@@ -48,7 +48,9 @@ HEDGE_G3_PEAK = 75          # G3 前提門檻值，完整定義見下方「RSI �
 # 20 日窗算出來的）。改這個常數等於改策略觸發頻率，動它要先回頭重跑 V1/E3。
 HEDGE_G3_WINDOW = 20
 
-# RSI 判斷依據（三支呼叫端共用，勿各自實作 —— 實作就是下面的 closed_daily_rsi）：
+# RSI 判斷依據（呼叫端共用，勿各自實作 —— 實作就是下面的 closed_daily_rsi）：
+# 呼叫端：`scripts/daily_line_notify.py`、`scripts/sop_status.py`、本檔 crosscheck_daily_rsi。
+# 2026-09-21：`BTC_WATCH.py` 隨「套保」顯示欄一併移除，不再是呼叫端。
 #   指標 = 日線 RSI-14（Wilder，pandas_ta.rsi(close, 14)，core/indicators.py:40）
 #   口徑 = **收完的日線收盤**，排除當日未收 K 棒（回測 U2_expectation.py 是 15m
 #          重採樣成 1D、close 取當日最後一筆，從沒測過盤中進場）
@@ -329,10 +331,14 @@ def sentinel_rows(top_score: Optional[int] = None,
 
 
 def sentinel_compact(top_score=None, gate=None, d3=None,
-                     rsi14=None, rsi_peak=None,
                      state: Optional[dict] = None, allow_remote: bool = False) -> list:
     """
     兩行橫向摘要版（給垂直空間吃緊的 BTC 儀表板用）。
+
+    2026-09-21：「套保」欄整組移除（使用者指示）。本輪三批已建滿 3/3、G3 前提已過期，
+    而 `hedge_batch_*` 旗標全 repo 沒有重設路徑，這一欄永遠停在 `套保 3/3G3✕`。
+    **只移除顯示，LINE 哨兵本體不動**——`maybe_send_hedge_batch_alert` 仍每日照跑，
+    完整版 `sentinel_rows()` 的「5 套保建倉」列也保留。要復原就把這欄照舊寫回來。
 
     為什麼要有：完整版 6 列 + 標題 + 來源 = 9 列，而儀表板**改動前就已經 51 列**、
     本來就超過一般終端機高度；再加 10 列等於把表頭與即時行情推出畫面
@@ -349,7 +355,7 @@ def sentinel_compact(top_score=None, gate=None, d3=None,
     def tick(ok):
         return "✅" if ok else "✕"
 
-    # 第一行：四個「會觸發動作」的哨兵當下條件
+    # 第一行：三個「會觸發動作」的哨兵當下條件（原有第四個「套保」2026-09-21 移除）
     try:
         from config import ESCAPE_ALERT_TIERS
         floor = min(f for f, _ in ESCAPE_ALERT_TIERS)
@@ -362,14 +368,6 @@ def sentinel_compact(top_score=None, gate=None, d3=None,
         d3s = f"D3 {tick(d3.get('ok'))}({d3.get('rebound', 0) * 100:+.0f}%/{d3.get('days', 0)}天){bear}"
     else:
         d3s = "D3 —"
-    done = sum(1 for n, _, _ in HEDGE_BATCHES if st.get(f"hedge_batch_{n}"))
-    if rsi14 is not None and rsi_peak is not None:
-        nxt = next((thr for n, thr, _ in HEDGE_BATCHES
-                    if not st.get(f"hedge_batch_{n}") and rsi14 >= thr), None)
-        armed = "" if rsi_peak > HEDGE_G3_PEAK else "G3✕"
-        hedge = f"套保 {'?' if unavailable else done}/3{armed}" + (f"(下批RSI<{nxt})" if nxt else "")
-    else:
-        hedge = f"套保 {'?' if unavailable else done}/3"
 
     # 第二行：純狀態類（不會有即時條件）+ 狀態來源
     if unavailable:
@@ -393,5 +391,5 @@ def sentinel_compact(top_score=None, gate=None, d3=None,
     #    （現價／升槓桿哨兵／熊底確認 D3／哨兵狀態…全部是 16）。
     #    "LINE 哨兵" 含半形字母，字面看起來跟四個中文字一樣長、實際只有 15，
     #    原本補 6 格 → 17，整行右移一格。**改字串時用 core.term_ui._dw 量，不要目測。**
-    return [f"  LINE 哨兵     {esc}  {win}  {d3s}  {hedge}",
+    return [f"  LINE 哨兵     {esc}  {win}  {d3s}",
             f"  哨兵狀態      {line2}"]
