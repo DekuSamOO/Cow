@@ -28,6 +28,20 @@ _CACHE_MAX = 300   # 持久化快取最多保留筆數（超過刪最舊）
 
 _VALID_SENTIMENT = {"bull", "bear", "neutral"}
 
+_RESPONSE_SCHEMA = {
+    "type": "ARRAY",
+    "items": {
+        "type": "OBJECT",
+        "properties": {
+            "id": {"type": "INTEGER"},
+            "title_zh": {"type": "STRING"},
+            "summary_zh": {"type": "STRING"},
+            "sentiment": {"type": "STRING", "enum": ["bull", "bear", "neutral"]},
+        },
+        "required": ["id", "title_zh", "summary_zh", "sentiment"],
+    },
+}
+
 
 # ──────────────────────────────────────────────────────────────────────────
 # 持久化快取
@@ -70,21 +84,15 @@ def _build_prompt(batch: List[Any]) -> str:
         "請為每一筆輸出：\n"
         "  title_zh：繁體中文標題翻譯（精簡、通順、保留幣種與專有名詞）\n"
         "  summary_zh：1-2 句繁體中文重點摘要（若 summary 為空則依 title 推測重點）\n"
-        "  sentiment：對比特幣/加密市場的情緒傾向，只能是 bull、bear、neutral 三者之一\n"
-        "嚴格只輸出 JSON 陣列，每個元素為 {id, title_zh, summary_zh, sentiment}，"
-        "不要任何說明文字或 markdown 標記。\n\n"
+        "  sentiment：對比特幣/加密市場的情緒傾向\n\n"
         f"輸入：\n{json.dumps(payload, ensure_ascii=False)}"
     )
 
 
 def _parse_json_array(text: str) -> List[dict]:
-    """從 Gemini 輸出抽出 JSON 陣列（容忍 ```json 包裹或前後雜訊）。"""
-    start = text.find("[")
-    end = text.rfind("]")
-    if start == -1 or end == -1 or end <= start:
-        return []
+    """解析 Gemini 結構化輸出（responseSchema 保證為 JSON 陣列）；壞掉就回空。"""
     try:
-        data = json.loads(text[start:end + 1])
+        data = json.loads(text)
         return data if isinstance(data, list) else []
     except Exception:
         return []
@@ -92,7 +100,10 @@ def _parse_json_array(text: str) -> List[dict]:
 
 def _translate_batch(batch: List[Any]) -> None:
     """呼叫 Gemini 翻譯一批，原地填入 title_zh/summary_zh/sentiment。失敗則保持 None。"""
-    out = gemini_client.generate(_build_prompt(batch), max_output_tokens=2048)
+    out = gemini_client.generate(
+        _build_prompt(batch), max_output_tokens=2048,
+        response_schema=_RESPONSE_SCHEMA,
+    )
     if not out:
         return
     for rec in _parse_json_array(out):

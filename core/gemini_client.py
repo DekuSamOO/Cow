@@ -59,6 +59,7 @@ def generate(
     max_output_tokens: int = 2048,
     thinking_budget: int = 0,
     timeout: int = 30,
+    response_schema: Optional[dict] = None,
 ) -> Optional[str]:
     """送出單一 prompt，回傳模型純文字輸出；任何失敗回 None。
 
@@ -82,6 +83,9 @@ def generate(
             "thinkingConfig": {"thinkingBudget": thinking_budget},
         },
     }
+    if response_schema is not None:
+        body["generationConfig"]["responseMimeType"] = "application/json"
+        body["generationConfig"]["responseSchema"] = response_schema
 
     try:
         r = safe_post(

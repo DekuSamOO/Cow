@@ -10,7 +10,7 @@ paths:
 
 # Cow：service 層與資料讀取陷阱
 
-> 自 `CLAUDE.md` 逐字搬出（2026-09-15，L1 瘦身）。編號沿用原編號，外部一律引標題；標題索引在 CLAUDE.md〈已知陷阱〉。
+> 編號是穩定 ID（外部一律引標題）；標題索引在 CLAUDE.md〈已知陷阱〉。
 
 ## service 層 fallback chain（讀 code 看不出順序，改動前必看）
 

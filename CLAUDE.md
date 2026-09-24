@@ -9,8 +9,7 @@
 > **回測數據正本** → `_governance\FINDINGS-cow-radar-backtests.md`
 > **台股/美股資料源細節** → `docs\tw-us-data-sources.md`
 > 版本與部署狀態以 README 為準，本檔不複述。
-> **專題陷阱 → `.claude/rules/`**（2026-09-15 起；官方 path-scoped rules，**Read 到對應檔才自動載入**，
-> 不佔每次對話的 context）。本檔〈已知陷阱〉留標題索引，外部引用照舊引標題即可找到。
+> **專題陷阱 → `.claude/rules/`**（path-scoped，Read 到對應檔才自動載入）。本檔〈已知陷阱〉是標題索引。
 
 ---
 
@@ -40,14 +39,9 @@ D:\Users\63191\AppData\Local\anaconda3\python.exe collector/btc_price_collector.
 > （2026-08-06 評估過「push 前檢查是否有非資料 commit，有就只警告不推」的方案，
 > **否決**——會讓「價格資料每天上雲」這個核心功能變得不可靠，為罕見情況犧牲天天要用的東西。）
 
-> [!danger] 本機跑推播腳本**曾經**會真的發到使用者手機——已加閘門，但要知道為什麼
-> 2026-09-02：一個 subagent 在本機直接跑 `python scripts/daily_line_notify.py`，
-> **真的把當日完整 Flex 卡片推到使用者手機**，它以為那只是演練。
-> 成因：`__main__` 沒有 dry_run 參數，且憑證由 `.env` 的 `load_dotenv()` 自動載入
-> ——「在本機試一下」在這支腳本裡等於真的送出去。
->
-> ✅ **已修（2026-09-04）**：`service/notification/core.py::_outbound_allowed()` 是
-> **所有**對外推播的單一閘門（日常 LINE／防守 LINE／Telegram 三條路都走它）：
+> [!danger] 所有對外推播都經過單一閘門，不要為了方便拿掉
+> 憑證由 `.env` 的 `load_dotenv()` 自動載入，所以沒有閘門時「在本機試跑推播腳本」＝真的推到使用者手機。
+> 閘門：`service/notification/core.py::_outbound_allowed()`（日常 LINE／防守 LINE／Telegram 三條路共用）：
 >
 > | 環境 | 行為 |
 > |---|---|
@@ -57,7 +51,7 @@ D:\Users\63191\AppData\Local\anaconda3\python.exe collector/btc_price_collector.
 > | `DRY_RUN` 任何其他非空值 | 擋下（CI 上也能演練）|
 >
 > 測試 `tests/test_outbound_gate.py` 18 項，負向驗證：停用閘門後 8 項失敗。
-> **不要為了方便把閘門拿掉**——全域規則 §0.4 是建議性的，這道閘門才是確定性的。
+> 全域 CLAUDE.md〈最高優先〉「對外發送預設 dry-run」是建議性規則，這道閘門才是確定性的。
 
 ---
 
@@ -75,9 +69,8 @@ D:\Users\63191\AppData\Local\anaconda3\python.exe collector/btc_price_collector.
 
 ## 已知陷阱（跨功能通用）
 
-> **序號會隨增刪漂移——本檔外部一律引「標題」不引序號。** 2026-08-10 清過一輪：治理文件 8 處
-> 序號引用已全改標題（歷史 plan／AUDIT 刻意留原樣）。刪條目時**留占位不重編**。
-> **2026-09-15 起多數條目逐字搬到 `.claude/rules/`**（Read 到對應檔自動載入）；下表是標題索引，編號不變。
+> **外部一律引「標題」不引序號**（序號會隨增刪漂移）；刪條目時**留占位不重編**。
+> 下表是標題索引，右欄是正本所在檔。
 
 | No. | 標題 | 正本（`.claude/` 底下） |
 |---|---|---|
@@ -107,8 +100,8 @@ D:\Users\63191\AppData\Local\anaconda3\python.exe collector/btc_price_collector.
 | 19 | Yahoo 台股「有價無量」幽靈列 | rules/tw-us-watcher.md |
 | 20 | 「分位」與「量比」使用者一定會互相驗算 | rules/tw-us-watcher.md |
 | 21 | 公開檔的「範例數字」曾是真數字（S-1 私有化做一半） | 本檔下方 |
-| 22 | P4 重啟偵測曾掛在錯的觸發點上 | rules/radar-core.md |
-| 23 | 測試自己會騙人的兩種形狀（2026-09-11 同日各踩一次） | rules/testing.md |
+| 22 | 偵測器的觸發點與缺值處理 | rules/radar-core.md |
+| 23 | 測試自己會騙人的兩種形狀 | rules/testing.md |
 
 ### 11. 派網 Bot API 不支援幣本位網格與馬丁格爾
 
@@ -132,6 +125,6 @@ S-1 私有化時**直接抄了真實防守數字**（觸發價／釋出量／加
 
 | 項目 | 規則 | 正本 |
 |---|---|---|
-| 防守通知數字 | 真實數字在 `config_private.py`（gitignored）或 Actions Secret `DEFENSE_CONFIG_JSON`，公開 `config.py` 只留載入邏輯（fail-loud）。**馬丁止盈重啟即整表作廢**（新最後加倉價＝新起始價×0.659，整表重算）——2026-09-07 起**無自動偵測**，防守推播固定帶一行「執行前必對帳重算」靜態警語。防守為**條件式**：每階執行前看 `final_low`/`ensemble_low`。**`ALERT_PRICE_LOW` 自 2026-08-21 起與第 1 階解耦**（獨立預警價，判準 `>=` 不再是 `==`）| vault「1a 1 BTC ROAD.md」「二、防守機制」；驗算見「1b 馬丁格爾數學稽核」；`_governance\歷程\20260706stress_btc三軌壓測.md` |
+| 防守通知數字 | 真實數字在 `config_private.py`（gitignored）或 Actions Secret `DEFENSE_CONFIG_JSON`，公開 `config.py` 只留載入邏輯（fail-loud）。**馬丁止盈重啟即整表作廢**（新最後加倉價＝新起始價×0.659，整表重算）——2026-09-07 起**無自動偵測**，防守推播固定帶一行「執行前必對帳重算」靜態警語。防守為**條件式**：每階執行前看 `final_low`/`ensemble_low`。**`ALERT_PRICE_LOW` 是獨立預警價，與第 1 階無關**（判準 `>=`）| vault「1a 1 BTC ROAD.md」「二、防守機制」；驗算見「1b 馬丁格爾數學稽核」；`_governance\歷程\20260706stress_btc三軌壓測.md` |
 | 雙幣回測 | **舊曲線與據其做的結論全部作廢**（權利金曾在結算日才定價，全史 +1733%→−90%）。**雙幣加碼決策不可依據此回測模組** —— 實際用法是梯形建議＋偏保守權重。殘留已知偏差：σ 用 ATR/close proxy 高估 ~1.6×（方向已知、接受） | `calculate_ladder_strategy` docstring（2026-06-17 拍板） |
 | 四季論引擎 | `SEASON_ENGINE` **現為 `"v2"`**（2026-09-03 使用者拍板由 `"v1"` 切換；十六象限＝市場軸補 `deep_bear` 一級＋防抖逃生門，見 README v3.50）。**切回 v1、改象限表或防抖參數都需使用者裁定**；回滾＝改回 `"v1"` 一個字（已實測）。回滾／重驗條件：某次熊底**下跌段**出現 v1/v2 分歧即回滾；新一輪熊底走完以準則 2a/2b 重驗。**不可回頭調參數讓驗收準則「看起來過」** | vault `Github\Cow\歷程\20260902findings_四季論v2象限擴充與回放.md`（切換依據）；`Github\Cow\歷程\20260706findings_四季論v2回放對照.md`（初版回放）；設計正本 `Github\Cow\season_v2_design.md`；觸發條件 `_governance\LEDGER-constants-liveness.md` |

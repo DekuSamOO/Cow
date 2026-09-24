@@ -6,7 +6,7 @@ tests/test_news.py
   - humanize_age 相對時間邊界
   - _norm_title / _clean_html 純函式
   - _aggregate 跨來源去重 + 時間排序
-  - _parse_json_array 容忍 markdown 包裹與壞輸入
+  - _parse_json_array 解析結構化輸出、壞輸入回空；_translate_batch 必傳 response_schema
   - fetch_crypto_news 全來源失敗 → 靜態 fallback
   - enrich_news_zh 停用/快取命中時不打 API
 """
@@ -68,10 +68,52 @@ def test_aggregate_respects_limit():
 def test_parse_json_array():
     from service.news_i18n import _parse_json_array
     assert _parse_json_array('[{"id":0}]') == [{"id": 0}]
-    assert _parse_json_array('```json\n[{"id":1}]\n```') == [{"id": 1}]
-    assert _parse_json_array("前言... [{\"id\":2}] 後綴") == [{"id": 2}]
+    assert _parse_json_array('{"id":1}') == []          # 非陣列
     assert _parse_json_array("not json") == []
     assert _parse_json_array("") == []
+
+
+def test_translate_batch_passes_response_schema(monkeypatch):
+    """防退化：schema 被拿掉就會退回「求模型只輸出 JSON＋字串硬抽」的舊路。"""
+    from service import news_i18n
+    from core import gemini_client
+    seen = {}
+
+    def _fake_generate(prompt, **kw):
+        seen.update(kw)
+        return '[{"id":0,"title_zh":"中文","summary_zh":"小結","sentiment":"bear"}]'
+
+    monkeypatch.setattr(gemini_client, "generate", _fake_generate)
+    it = _Item("u")
+    news_i18n._translate_batch([it])
+    assert seen.get("response_schema") is news_i18n._RESPONSE_SCHEMA
+    enum = news_i18n._RESPONSE_SCHEMA["items"]["properties"]["sentiment"]["enum"]
+    assert set(enum) == news_i18n._VALID_SENTIMENT
+    assert (it.title_zh, it.summary_zh, it.sentiment) == ("中文", "小結", "bear")
+
+
+def test_gemini_generate_body_carries_schema(monkeypatch):
+    """response_schema 有給 → generationConfig 帶 responseMimeType＋responseSchema；沒給 → 不帶。"""
+    from core import gemini_client
+    bodies = []
+
+    class _Resp:
+        def json(self):
+            return {"candidates": [{"content": {"parts": [{"text": "[]"}]}}]}
+
+    def _fake_post(url, **kw):
+        bodies.append(kw["json"])
+        return _Resp()
+
+    monkeypatch.setattr(gemini_client, "_get_api_key", lambda: "FAKE")
+    monkeypatch.setattr(gemini_client, "safe_post", _fake_post)
+    schema = {"type": "ARRAY", "items": {"type": "STRING"}}
+    assert gemini_client.generate("p", response_schema=schema) == "[]"
+    assert gemini_client.generate("p") == "[]"
+    cfg_with, cfg_without = bodies[0]["generationConfig"], bodies[1]["generationConfig"]
+    assert cfg_with["responseMimeType"] == "application/json"
+    assert cfg_with["responseSchema"] is schema
+    assert "responseMimeType" not in cfg_without and "responseSchema" not in cfg_without
 
 
 # ── fetch_crypto_news fallback ───────────────────────────────────────────

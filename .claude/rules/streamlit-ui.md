@@ -9,7 +9,7 @@ paths:
 
 # Cow：Streamlit／UI 陷阱
 
-> 自 `CLAUDE.md` 逐字搬出（2026-09-15，L1 瘦身）。編號沿用原編號，外部一律引標題；標題索引在 CLAUDE.md〈已知陷阱〉。
+> 編號是穩定 ID（外部一律引標題）；標題索引在 CLAUDE.md〈已知陷阱〉。
 
 ### 1. `@st.fragment` 靜默失效（現價停止自動更新）
 
