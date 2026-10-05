@@ -337,7 +337,8 @@ def sentinel_compact(top_score=None, gate=None, d3=None,
 
     2026-09-21：「套保」欄整組移除（使用者指示）。本輪三批已建滿 3/3、G3 前提已過期，
     而 `hedge_batch_*` 旗標全 repo 沒有重設路徑，這一欄永遠停在 `套保 3/3G3✕`。
-    **只移除顯示，LINE 哨兵本體不動**——`maybe_send_hedge_batch_alert` 仍每日照跑，
+    **只移除顯示，LINE 哨兵本體不動**——`maybe_send_hedge_batch_alert` 仍每日照跑
+    （2026-10-05 起已在 `daily_line_notify.py` 主流程停用，見該處註解），
     完整版 `sentinel_rows()` 的「5 套保建倉」列也保留。要復原就把這欄照舊寫回來。
 
     為什麼要有：完整版 6 列 + 標題 + 來源 = 9 列，而儀表板**改動前就已經 51 列**、

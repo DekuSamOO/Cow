@@ -1414,6 +1414,9 @@ if __name__ == "__main__":
     maybe_send_bear_bottom_confirm_alert(data)
     # D3 網格開單後的強平緩衝監控（2026-08-26；無活躍網格時整段略過）
     maybe_send_d3_grid_buffer_alert(data)
-    maybe_send_hedge_batch_alert(data)
+    # 套保建倉哨兵：2026-10-05 停用（使用者指示「短期不會再開套保機器人，關閉相關通知跟哨兵」）。
+    # 本輪三批已建滿 3/3，10-03／10-04 週末只剩「資料缺值告警」在推。函式與測試保留，
+    # 要復原就把下一行取消註解。平倉提醒仍由升槓桿窗口／D3 哨兵負責，不受影響。
+    # maybe_send_hedge_batch_alert(data)
     # 週報：週日傍晚場次加推一則（每週一次）
     maybe_send_weekly_summary(data)
