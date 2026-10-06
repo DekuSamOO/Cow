@@ -80,6 +80,14 @@ def test_liquidity_tier_thresholds_by_market():
     assert us["liquidity_tier"] == "中等" and us["turnover_unit"] == "USD"
 
 
+def test_liquidity_tier_none_for_non_usd_currency():
+    """海外掛牌（LSE 的 GBp 便士計價）套美元門檻會差 100 倍 → 不分級、單位照 meta 幣別。"""
+    gbp = short_term_traits(_df(close=100, vol=200_000), is_tw=False, currency="GBp")
+    assert gbp["liquidity_tier"] is None and gbp["turnover_unit"] == "GBp"
+    usd = short_term_traits(_df(close=100, vol=200_000), is_tw=False, currency="USD")
+    assert usd["liquidity_tier"] == "中等"
+
+
 def test_limit_move_days_is_tw_only():
     """±10% 漲跌停是台股制度，美股沒有 → 該欄必須是 None 而不是 0
     （0 會被讀成「美股沒出現過極端日」，那是假資訊）。"""

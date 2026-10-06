@@ -22,15 +22,31 @@ _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
 # 顯示用的市場類別中文標籤
-KIND_LABEL = {"crypto": "加密貨幣", "tw_stock": "台股", "us_stock": "美股"}
+KIND_LABEL = {"crypto": "加密貨幣", "tw_stock": "台股", "us_stock": "美股", "intl_stock": "海外股"}
+
+# Yahoo 海外交易所後綴（.L 倫敦、.HK 香港、.T 東京…），原樣送 Yahoo、不做 . → - 轉換。
+# 2026-10-06 XNAS.L（LSE 掛牌的 Nasdaq 100 ETF）被下方 class share 規則轉成 XNAS-L，Yahoo 404。
+# 只能用白名單、不能用「後綴長度」判斷：.L／.T／.V／.F 跟 BRK.B 的 class share 一樣是單字元。
+_INTL_SUFFIXES = frozenset({
+    "L", "IL",                                    # 英國 LSE
+    "HK", "T", "SS", "SZ", "KS", "KQ", "SI",      # 港／日／陸／韓／星
+    "AX", "NZ", "TO", "V", "NE", "CN",            # 澳／紐／加
+    "DE", "F", "BE", "DU", "HM", "MU", "SG",      # 德
+    "PA", "AS", "BR", "LS", "MC", "MI", "SW", "VI",  # 歐陸
+    "ST", "OL", "CO", "HE", "IR", "IC",           # 北歐／愛爾蘭／冰島
+    "WA", "PR", "BD", "AT", "IS", "TA",           # 中東歐／以色列
+    "JK", "BK", "KL", "BO", "NS",                 # 東南亞／印度
+    "SA", "MX", "BA", "SN", "JO",                 # 拉美／南非
+})
 
 
 def classify_symbol(raw: str) -> dict:
     """
     自動判定輸入代號的市場類別並映射到各資料源 symbol。
 
-    規則：純數字 4–6 碼 / 帶 .TW → 台股（補 .TW）；含 USDT/USD/-USD → 加密幣對；
-    其餘英文字母 → 美股。BTC 各種寫法統一標記 is_btc=True（路由到完整 BitcoinMonitor）。
+    規則：純數字 4–6 碼 / 帶 .TW / .TWO → 台股（補 .TW）；帶海外交易所後綴（`_INTL_SUFFIXES`）
+    → 海外股；含 USDT/USD/-USD → 加密幣對；其餘英文字母 → 美股。
+    BTC 各種寫法統一標記 is_btc=True（路由到完整 BitcoinMonitor）。
 
     回傳 {kind, display, yahoo, is_btc}；加密另含 {base, binance, coin}（幣安 U本位/幣本位 symbol）。
     """
@@ -41,8 +57,14 @@ def classify_symbol(raw: str) -> dict:
     # 台股
     if s.endswith(".TW"):
         return {"kind": "tw_stock", "display": s[:-3], "yahoo": s, "is_btc": False}
+    if s.endswith(".TWO"):
+        return {"kind": "tw_stock", "display": s[:-4], "yahoo": s, "is_btc": False}
     if re.fullmatch(r"\d{4,6}", s):
         return {"kind": "tw_stock", "display": s, "yahoo": f"{s}.TW", "is_btc": False}
+
+    # 海外交易所（須在 class share 的 . → - 轉換之前）
+    if "." in s and s.rpartition(".")[2] in _INTL_SUFFIXES:
+        return {"kind": "intl_stock", "display": s, "yahoo": s, "is_btc": False}
 
     # 加密（BTC 各寫法 → 完整 BitcoinMonitor）
     if s in ("BTCUSDT", "BTC", "BTCUSD", "XBTUSD", "BTC-USD"):
@@ -55,7 +77,7 @@ def classify_symbol(raw: str) -> dict:
         return _crypto_info(s[:-3], is_btc=False)
 
     # 其餘視為美股（W-10：class share 代號如 BRK.B / BF.B，Yahoo 需 BRK-B / BF-B；
-    # 已在上方排除 .TW 情境，此處剩下的 . 只會是這類美股寫法，可安全轉換）
+    # 已在上方排除 .TW／.TWO 與海外交易所後綴，此處剩下的 . 只會是這類美股寫法，可安全轉換）
     return {"kind": "us_stock", "display": s, "yahoo": s.replace(".", "-"), "is_btc": False}
 
 

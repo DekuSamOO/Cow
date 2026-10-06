@@ -276,6 +276,10 @@ def test_fetch_live_quote_non_tw_symbol_no_fallback_attempted(monkeypatch):
     ("QQQ",       "us_stock", "QQQ",     "QQQ",      False),   # 美股 ETF
     ("BRK.B",     "us_stock", "BRK.B",   "BRK-B",    False),   # W-10：class share，Yahoo 需 - 不是 .
     ("BF.B",      "us_stock", "BF.B",    "BF-B",     False),
+    ("XNAS.L",    "intl_stock", "XNAS.L", "XNAS.L",  False),   # 2026-10-06：LSE 後綴不可轉成 XNAS-L
+    ("0700.HK",   "intl_stock", "0700.HK", "0700.HK", False),  # 數字開頭的海外代號不可被當台股
+    ("7203.T",    "intl_stock", "7203.T", "7203.T",  False),   # 單字元後綴 .T 與 class share 同形，靠白名單分
+    ("6509.TWO",  "tw_stock", "6509",    "6509.TWO", False),   # 已帶上櫃後綴，原本會被轉成 6509-TWO
     ("btcusdt",   "crypto",   "BTCUSDT", "BTC-USD",  True),    # 小寫輸入須正規化
     ("BTC",       "crypto",   "BTCUSDT", "BTC-USD",  True),
     ("BTC-USD",   "crypto",   "BTCUSDT", "BTC-USD",  True),

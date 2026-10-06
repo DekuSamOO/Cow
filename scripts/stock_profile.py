@@ -55,7 +55,7 @@ from core.relative_low_tw import (compute_relative_low_tw,          # noqa: E402
 from core.relative_universal import midrank_pctile                  # noqa: E402
 from core.trend_direction import compute_trend_score, trend_meta    # noqa: E402
 from service.ohlc_universal import (classify_symbol, fetch_ohlc,    # noqa: E402
-                                    fetch_live_quote, fetch_quote_meta)
+                                    fetch_live_quote, fetch_quote_meta, KIND_LABEL)
 
 # 流動性分級門檻（**市場慣例，非回測值**）：日均成交金額，台股新台幣／美股美元。
 # 用途只是「這檔進得去出得來嗎」的量級感，不是選股訊號。
@@ -150,7 +150,7 @@ def _midrank(s):
     return round(midrank_pctile(s.to_numpy(dtype=float)), 4)
 
 
-def short_term_traits(df: pd.DataFrame, is_tw: bool, shares_out=None) -> dict:
+def short_term_traits(df: pd.DataFrame, is_tw: bool, shares_out=None, currency=None) -> dict:
     """短線交易特性（**全部是描述性事實，非預測、未回測**）。
 
     收錄的每一項都必須能回答「這檔股票適不適合短進短出」這個機械問題：
@@ -165,10 +165,13 @@ def short_term_traits(df: pd.DataFrame, is_tw: bool, shares_out=None) -> dict:
     turnover = (close * vol).dropna()
     for w in (20, 60):
         out[f"turnover_{w}d"] = float(turnover.tail(w).mean()) if len(turnover) >= w else None
-    tiers = _LIQ_TIERS_TW if is_tw else _LIQ_TIERS_US
+    # 非台股的成交額單位跟著 Yahoo meta 的幣別走：海外掛牌（如 LSE 的 GBp 便士計價）
+    # 套美元門檻會差 100 倍 → 只有 TWD／USD 有分級，其餘明確給 None（未分級，不是「偏薄」）。
+    unit = "TWD" if is_tw else (currency or "USD")
+    tiers = {"TWD": _LIQ_TIERS_TW, "USD": _LIQ_TIERS_US}.get(unit)
     out["liquidity_tier"] = (_tier(out["turnover_20d"], tiers)
-                             if out["turnover_20d"] is not None else None)
-    out["turnover_unit"] = "TWD" if is_tw else "USD"
+                             if out["turnover_20d"] is not None and tiers else None)
+    out["turnover_unit"] = unit
 
     # ATR 直接讀 `calculate_technical_indicators` 已算好的欄，**不自己再算一份**。
     # 原本這裡自算 `tr.rolling(14).mean()`（SMA），但 core/indicators 產出的 `ATR` 是
@@ -300,7 +303,7 @@ def profile(raw_symbol: str) -> dict:
     out = {
         "symbol": info["display"],
         "yahoo_symbol": info["yahoo"],
-        "market": "台股" if is_tw else "美股",
+        "market": KIND_LABEL.get(info["kind"], info["kind"]),
         "name": meta.get("longName") or meta.get("shortName"),
         "exchange": meta.get("fullExchangeName"),
         "currency": meta.get("currency"),
@@ -336,7 +339,7 @@ def profile(raw_symbol: str) -> dict:
         "tech_source": src_note,
         # 傳 `ind` 不是 `tech_df`：ATR 要讀 calculate_technical_indicators 算好的欄
         # （單一真實來源，見 short_term_traits 內註解）。其餘欄位 ind 都繼承自 tech_df。
-        "short_term": short_term_traits(ind, is_tw, shares_out),
+        "short_term": short_term_traits(ind, is_tw, shares_out, meta.get("currency")),
         "patterns": climber_patterns(tech_df, info["display"]),
         # 顯示用（含對齊空白）與機器用分開：`momentum_rows` 是預排版字串，消費端要拿
         # 3M/6M/12M 三個數字得剖字串（2026-08-12 驗收）→ 機器用的走 `_momentum_block`
@@ -408,8 +411,8 @@ def profile(raw_symbol: str) -> dict:
         # 月營收是 MOPS 台股專有源；美股要等值資料得走付費財報 API → 明確給 None 而非省略欄位，
         # 讓 --json 消費端兩個市場拿到同一組 key（省略欄位會逼消費端寫 `if "revenue" in p`）。
         out["revenue"] = None
-        out["radar_note"] = ("美股無免費籌碼/估值源；純 OHLCV 三維雷達 2026-07-02 回測 "
-                             "50 檔 AUC~0.5 近雜訊，Cow 已撤下該面板 → 本報告不提供美股雷達分數")
+        out["radar_note"] = ("非台股無免費籌碼/估值源；純 OHLCV 三維雷達 2026-07-02 以美股 "
+                             "50 檔回測 AUC~0.5 近雜訊，Cow 已撤下該面板 → 本報告不提供雷達分數")
     if con is not None:
         con.close()
     return out
@@ -571,6 +574,8 @@ def _fmt_money(v, unit):
         if v >= 1e12:
             return f"{v/1e12:.2f} 兆元"
         return f"{v/1e8:.2f} 億元" if v >= 1e8 else f"{v/1e4:,.0f} 萬元"
+    if unit not in (None, "USD"):         # 海外掛牌（GBp／EUR／HKD…）：不冒用 $ 符號
+        return f"{v/1e6:,.1f}M {unit}"
     if v >= 1e9:
         return f"${v/1e9:,.2f}B"
     return f"${v/1e6:,.1f}M"
@@ -604,7 +609,9 @@ def render(p: dict) -> str:
     L.append("## 短線交易特性〔描述性事實，非預測；門檻為市場慣例分級，未回測〕")
     L.append(f"- 流動性　20日均成交額 {_fmt_money(st['turnover_20d'], st['turnover_unit'])}"
              f"｜60日 {_fmt_money(st['turnover_60d'], st['turnover_unit'])}"
-             f"　→ **{st['liquidity_tier']}**")
+             + (f"　→ **{st['liquidity_tier']}**" if st["liquidity_tier"]
+                else f"　→ 未分級（分級門檻只有 TWD／USD，本檔為 {st['turnover_unit']}）"
+                if st["turnover_unit"] not in ("TWD", "USD") else "　→ —"))
     if st["turnover_rate_pct"] is not None:
         L.append(f"- 週轉率　20日均量 ÷ 已發行股數 = {st['turnover_rate_pct']:.2f}%/日")
     L.append(f"- 波動度　ATR(14) {st['atr14_pct']:.2f}%/日"
