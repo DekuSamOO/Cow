@@ -1,6 +1,6 @@
 {
-  "_note": "影響 BTC 的美國重大總經事件發布日（與 Notion『BTC 總經事件』DB 同源）。app 無 Notion 權限，故落地此鏡像供 core/relative_high『總經逆風』維度計算 event_within_days。FOMC/CPI 為官方確認日；PCE/非農 部分為標準週期推估（以 BEA/BLS 官方為準），日期偏差 ±1 天不影響事件臨近判斷。更新：每年底補下一年度。",
-  "_updated": "2026-06-08",
+  "_note": "影響 BTC 的美國重大總經事件發布日（與 Notion『BTC 總經事件』DB 同源）。app 無 Notion 權限，故落地此鏡像供 core/relative_high『總經逆風』維度計算 event_within_days。FOMC/CPI 為官方確認日；PCE/非農 部分為標準週期推估（以 BEA/BLS 官方為準），日期偏差 ±1 天不影響事件臨近判斷。2026-10-16 已用 BLS/BEA 官方發布表核對 2026-10～12 月全部日期（僅 9 月 PCE 由 10-30 改為 10-29）。更新：每年底補下一年度。",
+  "_updated": "2026-10-16",
   "events": [
     {"date": "2026-06-17", "type": "FOMC", "importance": "高"},
     {"date": "2026-07-29", "type": "FOMC", "importance": "高"},
@@ -18,7 +18,7 @@
     {"date": "2026-07-31", "type": "PCE", "importance": "高"},
     {"date": "2026-08-28", "type": "PCE", "importance": "高"},
     {"date": "2026-09-25", "type": "PCE", "importance": "高"},
-    {"date": "2026-10-30", "type": "PCE", "importance": "高"},
+    {"date": "2026-10-29", "type": "PCE", "importance": "高"},
     {"date": "2026-11-25", "type": "PCE", "importance": "高"},
     {"date": "2026-12-23", "type": "PCE", "importance": "高"},
     {"date": "2026-07-02", "type": "非農/失業率", "importance": "高"},
