@@ -12,7 +12,7 @@ import pytest
 from service.ohlc_universal import (
     live_quote_freshness, _is_tw_trading_hours, _is_us_trading_hours,
     is_daily_bar_forming, resolve_live_volume, _tw_candidates, fetch_live_quote,
-    classify_symbol, fetch_ohlc,
+    classify_symbol, fetch_ohlc, trading_session, _in_session,
 )
 
 
@@ -132,6 +132,60 @@ def test_daily_bar_forming_crypto_247_ignores_us_session():
     不特判會套美股時段，每天有 17.5 小時把未結算的今日棒當成已結算。"""
     now = datetime.datetime(2026, 7, 4, 22, 0)    # 週六深夜 UTC，美股沒開
     assert is_daily_bar_forming(datetime.date(2026, 7, 4), False, now=now, is_crypto=True) is True
+
+
+# ---------------------------------------------------------------------------
+# 海外股交易時段（trading_session / session 參數，2026-10-07）
+# ---------------------------------------------------------------------------
+
+# XNAS.L 2026-10-06 實抓的 Yahoo meta 片段（regular 07:00–15:30 UTC＝倫敦夏令 08:00–16:30）
+_LSE_META = {"exchangeTimezoneName": "Europe/London",
+             "currentTradingPeriod": {"regular": {"start": 1791270000, "end": 1791300600}}}
+_LSE = trading_session(_LSE_META)
+
+
+def test_trading_session_from_yahoo_meta_lse():
+    assert _LSE == {"tz": "Europe/London",
+                    "open": datetime.time(8, 0), "close": datetime.time(16, 30)}
+
+
+@pytest.mark.parametrize("meta", [{}, {"exchangeTimezoneName": "Europe/London"},
+                                  {"exchangeTimezoneName": "Not/AZone",
+                                   "currentTradingPeriod": _LSE_META["currentTradingPeriod"]}])
+def test_trading_session_missing_fields_returns_none(meta):
+    """取不到就回 None，呼叫端退回美股時段（＝修正前行為），不可拋錯中斷 watcher。"""
+    assert trading_session(meta) is None
+
+
+def test_daily_bar_forming_lse_morning_is_forming():
+    """倫敦 10:00（美東 05:00，美股未開）：舊版套美股時段會判「已收盤」，現在要判進行式。"""
+    now = datetime.datetime(2026, 10, 6, 10, 0)
+    assert _in_session(_LSE, now) is True
+    assert is_daily_bar_forming(datetime.date(2026, 10, 6), False, now=now, session=_LSE) is True
+
+
+def test_daily_bar_forming_lse_after_close_is_settled():
+    """倫敦 17:00（美股盤中）：LSE 已收盤 → 今日棒已結算，舊版會誤判成進行式。"""
+    now = datetime.datetime(2026, 10, 6, 17, 0)
+    assert is_daily_bar_forming(datetime.date(2026, 10, 6), False, now=now, session=_LSE) is False
+
+
+def test_daily_bar_forming_session_weekend_false():
+    now = datetime.datetime(2026, 10, 10, 10, 0)  # 週六
+    assert is_daily_bar_forming(datetime.date(2026, 10, 10), False, now=now, session=_LSE) is False
+
+
+def test_freshness_session_in_hours_delayed_not_closed(monkeypatch):
+    """海外股盤中但報價 age 20 分：標「盤中（延遲）」，不可落到「已收盤」。"""
+    monkeypatch.setattr("service.ohlc_universal._in_session", lambda s: True)
+    assert live_quote_freshness(_q(20 * 60), session=_LSE)["label"].startswith("🟡 盤中")
+    assert live_quote_freshness(_q(60), session=_LSE)["label"] == "🟢 盤中即時"
+
+
+def test_freshness_session_out_of_hours_closed_even_if_fresh(monkeypatch):
+    """海外股非交易時段：age 很新也標已收盤（舊版 age<900s 一律判即時）。"""
+    monkeypatch.setattr("service.ohlc_universal._in_session", lambda s: False)
+    assert live_quote_freshness(_q(60), session=_LSE)["label"].startswith("⚪ 已收盤")
 
 
 def test_daily_bar_forming_crypto_yesterday_bar_settled():

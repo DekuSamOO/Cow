@@ -35,7 +35,8 @@ from core.relative_high_tw import (compute_relative_high_tw, relative_high_tw_me
 from core.relative_low_tw import compute_relative_low_tw, relative_low_tw_meta     # noqa: E402
 from service.ohlc_universal import (classify_symbol, fetch_ohlc,            # noqa: E402
                                     fetch_live_quote, live_quote_freshness, KIND_LABEL,
-                                    is_daily_bar_forming, resolve_live_volume)
+                                    is_daily_bar_forming, resolve_live_volume,
+                                    fetch_quote_meta, trading_session)
 # W-7（2026-07-06）：畫框/面板/等待 helper 改吃 core/term_ui（單一真實來源），
 # 不再綁死 BTC_WATCH 內部私名——BTC_WATCH 整形不會再靜默破 watcher。
 from core.momentum import momentum_ref_rows                             # noqa: E402
@@ -91,6 +92,10 @@ class UniversalMonitor:
         self.kind_label = KIND_LABEL.get(info["kind"], info["kind"])
         self.is_tw = info["kind"] == "tw_stock"   # 台股有逃頂/抄底籌碼面板；美股僅通用軸
         self.is_crypto = info["kind"] == "crypto"  # 幣對 24/7：今日日棒判定不能套美股收盤時段
+        # 海外股（XNAS.L 等）：交易所時段從 Yahoo meta 取一次（時段不會盤中變）；
+        # 取不到為 None → 兩個判斷函式退回美股時段，與修正前行為相同
+        self.session = (trading_session(fetch_quote_meta(self.yahoo))
+                        if info["kind"] == "intl_stock" else None)
         self._daily_cache = None
         self._daily_ts = 0.0
         self._chip = None           # 台股籌碼/估值（每小時隨日線刷新一次）
@@ -194,7 +199,7 @@ class UniversalMonitor:
         # 現價：每 60s 抓 Yahoo 即時報價（盤中即時、盤後為收盤）；與每小時的日線+指標分離
         live = fetch_live_quote(self.yahoo)
         if live.get("price"):
-            fr = live_quote_freshness(live, is_tw=self.is_tw)
+            fr = live_quote_freshness(live, is_tw=self.is_tw, session=self.session)
             chg_txt = "" if fr["chg_pct"] is None else f"  {fr['chg_pct']:+.2f}%"
             price_line = f"  現價          {_fmt_price(live['price'])}{chg_txt}   {fr['label']}"
         else:
@@ -204,7 +209,8 @@ class UniversalMonitor:
         # 最後一根是否為「今日進行式」：一處判定，日線行／量能分位／逃頂雷達共用
         # （量能側若不排除這根，會拿只累積到當下的當日量去比歷史整日量，見 vol_pctile）
         forming = len(df) >= 2 and is_daily_bar_forming(df.index[-1].date(), self.is_tw,
-                                                        is_crypto=self.is_crypto)
+                                                        is_crypto=self.is_crypto,
+                                                        session=self.session)
         if forming:
             daily_date, daily_close = df.index[-2].date(), float(df.iloc[-2]["close"])
             daily_line = f"  前一交易日    {daily_date} 收 {_fmt_price(daily_close)}（{len(df)} 根）"

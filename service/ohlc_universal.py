@@ -262,7 +262,41 @@ def _is_us_trading_hours(now=None) -> bool:
     return datetime.time(9, 30) <= now.time() <= datetime.time(16, 0)
 
 
-def is_daily_bar_forming(last_bar_date, is_tw: bool, now=None, *, is_crypto: bool = False) -> bool:
+def trading_session(meta: dict):
+    """Yahoo meta → 交易所當地的正規交易時段 `{"tz", "open", "close"}`；欄位缺漏回 None。
+
+    海外股（`intl_stock`）不寫死各交易所時間表：meta 本來就帶 `exchangeTimezoneName` 與
+    `currentTradingPeriod.regular` 的起訖 epoch，轉成當地鐘點即可（LSE 實測 08:00–16:30
+    Europe/London）。2026-10-07 前 watcher 對 XNAS.L 一律套美股 09:30–16:00 美東時段，
+    倫敦 08:00–14:30 開盤中被判成「已收盤」，16:30 收盤後到美股收盤反而判成盤中。
+    午休（港股、東證）不拆段，與 `_is_tw_trading_hours` 同屬顯示分流的粗略判斷。"""
+    import datetime
+    from zoneinfo import ZoneInfo
+    try:
+        tz_name = meta["exchangeTimezoneName"]
+        tz = ZoneInfo(tz_name)
+        reg = meta["currentTradingPeriod"]["regular"]
+        open_t = datetime.datetime.fromtimestamp(reg["start"], tz).time()
+        close_t = datetime.datetime.fromtimestamp(reg["end"], tz).time()
+    except Exception:      # noqa: BLE001 — 取不到就讓呼叫端退回既有的美股時段
+        return None
+    return {"tz": tz_name, "open": open_t, "close": close_t}
+
+
+def _in_session(session: dict, now=None) -> bool:
+    """此刻是否在 `trading_session` 給的時段內（週一~五；不含假日，語意同 `_is_us_trading_hours`）。
+    now 供測試注入，代表該交易所當地的 wall-clock datetime。"""
+    import datetime
+    if now is None:
+        from zoneinfo import ZoneInfo
+        now = datetime.datetime.now(ZoneInfo(session["tz"]))
+    if now.weekday() >= 5:
+        return False
+    return session["open"] <= now.time() <= session["close"]
+
+
+def is_daily_bar_forming(last_bar_date, is_tw: bool, now=None, *, is_crypto: bool = False,
+                         session=None) -> bool:
     """
     判斷日線最後一根 K 棒是否為「今日進行式」（尚未結算收盤）。
 
@@ -285,6 +319,9 @@ def is_daily_bar_forming(last_bar_date, is_tw: bool, now=None, *, is_crypto: boo
     呼叫端一律由 `classify_symbol` 的 `kind` 衍生（`kind=="tw_stock"` / `kind=="crypto"`），
     勿手工湊出 (True, True) 這種不存在的組合。同檔 `live_quote_freshness` 亦為 bool 慣例。
 
+    session（海外股，`trading_session` 的回傳）：給了就改用該交易所當地時區與時段判 (a)(b)，
+    取代美股時段；None 時行為與舊版完全相同。
+
     now 供測試注入（語意同 `_is_tw_trading_hours`/`_is_us_trading_hours`：代表該市場當地
     此刻的 wall-clock datetime，幣對則為 UTC，呼叫端負責建構正確時區的值）。
     """
@@ -294,13 +331,19 @@ def is_daily_bar_forming(last_bar_date, is_tw: bool, now=None, *, is_crypto: boo
             now = datetime.datetime.now(datetime.timezone.utc)
         else:
             from zoneinfo import ZoneInfo
-            now = datetime.datetime.now(ZoneInfo("Asia/Taipei" if is_tw else "America/New_York"))
+            tz = session["tz"] if session else ("Asia/Taipei" if is_tw else "America/New_York")
+            now = datetime.datetime.now(ZoneInfo(tz))
     # 幣對 24/7 → 條件 (a) 恆真，只剩「最後一根＝今天（UTC）」要判
-    trading_now = is_crypto or (_is_tw_trading_hours(now) if is_tw else _is_us_trading_hours(now))
+    if is_crypto:
+        trading_now = True
+    elif session:
+        trading_now = _in_session(session, now)
+    else:
+        trading_now = _is_tw_trading_hours(now) if is_tw else _is_us_trading_hours(now)
     return trading_now and last_bar_date == now.date()
 
 
-def live_quote_freshness(q: dict, is_tw: bool = False) -> dict:
+def live_quote_freshness(q: dict, is_tw: bool = False, session=None) -> dict:
     """
     解讀 fetch_live_quote 回傳的時效與漲跌（ts/prev_close 語義只有本模組知道，
     與 fetcher 同源避免 watcher / universal_watch_poc 兩邊重算）。
@@ -311,12 +354,22 @@ def live_quote_freshness(q: dict, is_tw: bool = False) -> dict:
     （age 15–60 分鐘時顯示「已收盤（0h前）」，看起來像顛倒，其實是判斷依據錯——用 timestamp
     新舊猜是否收盤，對有法定延遲的市場不成立）。is_tw=True 時改用**當下是否為交易時段**
     （`_is_tw_trading_hours`）判斷，如實標「盤中（資料延遲）」而非「已收盤」。
+
+    session（海外股）同理改看該交易所時段：各交易所在 Yahoo 的延遲不一，只看 age 會重演
+    台股那個「盤中被標已收盤」；在時段內 age<900s 才標即時，否則如實標延遲分鐘數。
     """
     import time as _time
     age = _time.time() - q["ts"] if q.get("ts") else float("inf")
     if is_tw:
         if _is_tw_trading_hours():
             label = f"🟡 盤中（資料延遲 {int(age // 60)}分，TWSE免費源限制）"
+        elif age < 6 * 3600:
+            label = f"⚪ 已收盤（{int(age // 3600)}h 前）"
+        else:
+            label = "⚪ 已收盤"
+    elif session:
+        if _in_session(session):
+            label = "🟢 盤中即時" if age < 900 else f"🟡 盤中（資料延遲 {int(age // 60)}分）"
         elif age < 6 * 3600:
             label = f"⚪ 已收盤（{int(age // 3600)}h 前）"
         else:
