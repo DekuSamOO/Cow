@@ -60,6 +60,18 @@ def _fmt_price(v: float) -> str:
     return f"{v:.6f}"
 
 
+def _mmr_line(m) -> str:
+    """台股面板的大盤融資維持率一列（service.tw_chip.get_market_margin_ratio 的回傳；None＝抓不到）。
+    只顯示不計分：tw_stock_climber in-sample 沒有足夠證據（vault 20261106findings_融資維持率對冠軍選股）。"""
+    if not m:
+        return "  大盤融資維持率 —（本輪抓不到官方檔）"
+    # 標「前值＋日期」不寫「前日」：本機追加檔漏記幾天時，前一筆可能是好幾天前（2026-11-06 複審提出）
+    prev = (f"前值 {m['prev']:.1f}%（{m['prev_date'][5:]}）"
+            if m.get("prev") is not None and m.get("prev_date") else "前值 —")
+    pct = f"近一年百分位 {m['pctile']:.0f}" if m.get("pctile") is not None else "近一年百分位 —（歷史不足）"
+    return f"  大盤融資維持率 {m['ratio']:.1f}%（{prev}｜{pct}）〔上市含 ETF，{m['as_of']}；僅顯示不計分〕"
+
+
 def _composite_panel(trend0: int, high0: int, low0: int):
     """三軸 composite 操作面板（趨勢方向＋逃頂＋抄底）→ (ct_comp, comp_rows, act)。
     台股／美股分支邏輯完全相同（皆不傳 cycle_score，見呼叫端註解），抽共用避免複製貼上。
@@ -100,6 +112,7 @@ class UniversalMonitor:
         self._daily_ts = 0.0
         self._chip = None           # 台股籌碼/估值（每小時隨日線刷新一次）
         self._chip_err = None       # 最近一次籌碼刷新的失敗原因（成功即清；見 _refresh_chip）
+        self._mmr = None            # 大盤融資維持率（僅顯示不計分；抓不到沿用上一輪）
         self._bg_ts = 0.0           # 背景標的觸價巡檢的上次執行時刻（見 BG_QUOTE_SEC）
         self._shares_out = None     # 台股已發行股數（週轉率用；tw_chip 內部已日快取，這裡存最近一次結果）
         self._last_live_vol = None       # 即時成交量快取（Yahoo 該欄位偶爾單次缺漏，見 render 說明）
@@ -140,13 +153,19 @@ class UniversalMonitor:
         2026-08-11 以模擬 TWSE 逾時實測確認此路徑。
         改為：保留上一輪 `_chip`（TWSE 是 EOD 檔，舊一天仍是真資料，畫面的
         `籌碼資料截至 as_of` 會如實顯示是哪天），只記錯誤讓說明欄標註；下次日線刷新自動再試。"""
-        from service.tw_chip import get_chip_bundle, get_shares_outstanding
+        from service.tw_chip import get_chip_bundle, get_market_margin_ratio, get_shares_outstanding
         try:
             self._chip = get_chip_bundle(self.display, df.index[-1].strftime("%Y%m%d"))
             self._shares_out = get_shares_outstanding(self.display)
             self._chip_err = None
         except Exception as e:      # noqa: BLE001 — 籌碼源故障不得中斷監控（見 docstring）
             self._chip_err = str(e)[:70]
+        # 大盤維持率與個股籌碼分開吸收例外：它多打兩個官方檔，失敗不該連累籌碼面板
+        if self._chip:
+            try:
+                self._mmr = get_market_margin_ratio(self._chip["as_of"]) or self._mmr
+            except Exception:       # noqa: BLE001 — 僅顯示用，失敗沿用上一輪
+                pass
 
     def _background_events(self, sym_key, plans_all):
         """watch_plan 其餘標的的觸價巡檢（盯一檔不漏他檔）→ 事件列表。
@@ -293,6 +312,7 @@ class UniversalMonitor:
                     "     AUC~0.63)+量能見頂(0.648)+量價背離(0.566 已轉正式)；抄底靠融資清洗(0.564)。",
                     "     已移除：抄底大戶(AUC 0.422 方向反)、抄底量價/結構(0.50/0.52 雜訊)、逃頂結構(0.483)。",
                     "     法人為弱維(AUC<0.55) 僅參考。"]
+            note.insert(1, _mmr_line(self._mmr))
             if self._chip_err:
                 # 籌碼源本輪失敗但手上有舊 EOD 檔 → 續用並如實標註（上方 as_of 就是它的日期）
                 note.insert(1, f"  ⚠ 本輪籌碼刷新失敗（{self._chip_err}），沿用上表日期資料；下次日線刷新自動再試")

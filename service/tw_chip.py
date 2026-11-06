@@ -18,6 +18,7 @@ service/tw_chip.py
   - 融資融券單一回應即含「前日餘額＋今日餘額」→ 變化免多日累積；三大法人為單日買賣超。
 """
 import io
+import os
 import re
 import time
 import datetime
@@ -529,3 +530,156 @@ def get_chip_bundle(symbol: str, date_yyyymmdd: str, lookback: int = 7) -> dict:
             "institutional": get_institutional(symbol, as_of),
             "valuation": get_valuation(symbol, as_of),
             "tdcc": get_tdcc(symbol), "as_of": as_of}
+
+
+# ── 大盤（上市）融資維持率：watcher 台股面板「僅顯示、不計分」 ─────────────────────
+# 定義：Σ(上市全部證券融資今日餘額張 × 1000 × 當日收盤) ÷ 上市融資金額（元）× 100，**含 ETF**。
+# 分子分母必須同範圍：融資金額（MI_MARGN「融資金額(仟元)」）本身含 ETF 的融資，分子若只算普通股
+# 會低估，且 ETF 融資占比逐年升高（張數占比 2016 約 15% → 2026 約 34%），偏差隨時間變大
+# ——2026-11-06 finance-calc-reviewer 抓到，初版就犯了這個錯（11-04：只算股票 155.45%、全部 164.66%）。
+# 財經M平方停更前用「不含 ETF 的融資股票市值 ÷ 融資餘額」，正是這個範圍不一致的口徑，數字不可互比；
+# 證交所 2026-07-28 澄清的「整戶擔保維持率」（融資＋融券、上市＋上櫃）又是另一個口徑。
+# 不計分的理由：tw_stock_climber in-sample 測試（vault Github\tw_stock_climber\歷程\
+# 20261106findings_融資維持率對冠軍選股.md）沒有足夠證據，CONSTITUTION 第 11 條不得拿來加權。
+#
+# 百分位要一年歷史：即時去抓要打上百次 TWSE（撞限流），故用「種子檔＋本機追加檔」：
+#   - 種子 db/tw_margin_ratio_seed.csv：2016-01-04~2026-11-05，與本函式**同一口徑**，由 TWSE 官方
+#     逐日 MI_MARGN ALL × MI_INDEX ALLBUT0999 算出（tw_stock_climber lab/margin_mr/fetch_twse_full.py，
+#     2,632 天 0 失敗；11-04 164.66% 與本函式即時算的相同），**之後不再改**。
+#     不用 climber DB：DB 沒有 ETF，且只 join 現存 stock_list，與官方「只算股票」相比差到 ±29pp。
+# 已知偏差（往低偏）：停牌／無收盤價的證券，融資金額仍在分母、擔保品卻不進分子。全期無價張數占比
+#   中位數 0.017%，但約 67 天 >1%，最大 2024-08-22 新光金＋群創停牌 −2.7pp（2026-11-06 複審量化）。
+#   券商端停牌股是否以最後收盤價計維持率未查證，故不補值，只記錄。
+#     放 db/ 但內容固定，09:00 自動 commit 不會帶到它。
+#   - 本機 data/tw_margin_ratio_live.csv（data/ 在 .gitignore）：watcher 每算出新的一天就追加。
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MMR_SEED_PATH = os.path.join(_ROOT, "db", "tw_margin_ratio_seed.csv")
+MMR_LIVE_PATH = os.path.join(_ROOT, "data", "tw_margin_ratio_live.csv")
+_MMR_PCTILE_WINDOW = 252   # 近一年交易日
+_MMR_PCTILE_MIN = 120      # 歷史不足半年不給百分位（避免短母體分位，同 rules No.18 精神）
+_mmr_cache: dict = {}      # {(as_of, seed, live): 結果}；同一交易日只算一次（見 get_market_margin_ratio）
+
+
+def _fetch_twse_tables(endpoint: str, params: dict) -> list:
+    """TWSE rwd 回應的 tables[]（失敗回 []），與 `_fetch_market_file` 共用快取 TTL。
+    MI_INDEX、MI_MARGN(MS) 的目標表不是第一張，不能用 `_fetch_market_file` 的「找第一張表」。"""
+    ck = (_TWSE, endpoint, "tables", tuple(sorted(params.items())))
+    hit = _cache.get(ck)
+    if hit and time.time() - hit[0] < _CACHE_TTL:
+        return hit[1]
+    try:
+        r = _session().get(f"{_TWSE}/{endpoint}", params=params, timeout=30)
+        r.raise_for_status()
+        tables = r.json().get("tables") or []
+    except Exception as e:  # noqa: BLE001
+        print(f"[tw_chip] {endpoint} 抓取失敗：{e}")
+        return []
+    _cache[ck] = (time.time(), tables)
+    return tables
+
+
+def _twse_close_map(date_yyyymmdd: str) -> dict:
+    """上市個股當日收盤價（MI_INDEX ALLBUT0999 的個股行情表）→ {代號: close}。"""
+    tables = _fetch_twse_tables("afterTrading/MI_INDEX",
+                                {"date": date_yyyymmdd, "type": "ALLBUT0999", "response": "json"})
+    for t in tables:
+        f = t.get("fields") or []
+        if "證券代號" in f and "收盤價" in f:
+            ci, pi = f.index("證券代號"), f.index("收盤價")
+            return {str(r[ci]).strip(): _num(r[pi]) for r in t.get("data") or [] if len(r) > pi}
+    return {}
+
+
+def _twse_margin_all(date_yyyymmdd: str):
+    """MI_MARGN ALL 一次取兩樣：({代號: 融資今日餘額張}, 融資金額仟元)。抓不到回 ({}, None)。
+    ALL 回應同時含「信用交易統計」彙總表（融資金額）與逐檔表，不必另打 selectType=MS。"""
+    tables = _fetch_twse_tables("marginTrading/MI_MARGN",
+                                {"date": date_yyyymmdd, "selectType": "ALL", "response": "json"})
+    lots, loan_k = {}, None
+    for t in tables:
+        f = t.get("fields") or []
+        if "今日餘額" not in f:
+            continue
+        ti = f.index("今日餘額")
+        for r in t.get("data") or []:
+            if not r or len(r) <= ti:
+                continue
+            key = str(r[0]).strip()
+            if key.startswith("融資金額"):
+                loan_k = _num(r[ti])
+            elif len(t.get("data") or []) > 100:      # 逐檔表（彙總表只有 3 列）
+                lots[key] = _num(r[ti])
+    return lots, loan_k
+
+
+def compute_market_margin_ratio(date_yyyymmdd: str):
+    """當日大盤（上市、含 ETF）融資維持率 %，官方檔任一抓不到回 None。回傳 (ratio, 計入檔數)。"""
+    lots, loan_k = _twse_margin_all(date_yyyymmdd)
+    closes = _twse_close_map(date_yyyymmdd)
+    if not lots or not closes or not loan_k:
+        return None
+    collat, n = 0.0, 0
+    for sym, q in lots.items():
+        px = closes.get(sym)
+        if q and px:
+            collat += q * 1000 * px
+            n += 1
+    return (collat / (loan_k * 1000) * 100, n) if n else None
+
+
+def _read_mmr_csv(path: str) -> dict:
+    out = {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            next(f, None)
+            for line in f:
+                parts = line.strip().split(",")
+                if len(parts) >= 2 and _num(parts[1]) is not None:
+                    out[parts[0]] = float(parts[1])
+    except OSError:
+        pass
+    return out
+
+
+def _append_mmr_live(path: str, date_iso: str, ratio: float) -> None:
+    new = not os.path.exists(path)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a", encoding="utf-8", newline="") as f:
+        if new:
+            f.write("date,ratio" + chr(10))
+        f.write(f"{date_iso},{ratio:.2f}" + chr(10))
+
+
+def get_market_margin_ratio(as_of_yyyymmdd: str, seed_path: str = None, live_path: str = None):
+    """watcher 顯示用：{as_of, ratio, prev, prev_date, pctile, n_hist, n_stock}；當日算不出回 None。
+
+    as_of 傳 `get_chip_bundle` 的 as_of（已 walk-back 到 MI_MARGN 有公布的交易日）。
+    prev＝歷史中嚴格早於 as_of 的最後一筆；pctile＝as_of（含）往前 252 筆中 ≤ 當日值的比例。"""
+    seed_path = seed_path or MMR_SEED_PATH
+    live_path = live_path or MMR_LIVE_PATH
+    # 同一交易日只算一次：as_of 已是盤後公布的日子，官方檔不會再變；watcher 每小時刷新籌碼時
+    # 不必重抓 MI_MARGN ALL＋MI_INDEX 兩個大檔。失敗（None）不快取，下次刷新再試。
+    ck = (as_of_yyyymmdd, seed_path, live_path)
+    if ck in _mmr_cache:
+        return _mmr_cache[ck]
+    res = compute_market_margin_ratio(as_of_yyyymmdd)
+    if res is None:
+        return None
+    ratio, n_stock = res
+    d_iso = f"{as_of_yyyymmdd[:4]}-{as_of_yyyymmdd[4:6]}-{as_of_yyyymmdd[6:]}"
+    seed = _read_mmr_csv(seed_path)
+    live = _read_mmr_csv(live_path)
+    if d_iso not in seed and d_iso not in live:
+        try:
+            _append_mmr_live(live_path, d_iso, ratio)
+        except OSError as e:
+            print(f"[tw_chip] 維持率本機歷史寫入失敗：{e}")
+    hist = {**seed, **live, d_iso: ratio}   # 同日以本次官方原始資料為準
+    dates = sorted(k for k in hist if k <= d_iso)
+    prev_date = dates[-2] if len(dates) >= 2 else None
+    win = [hist[k] for k in dates[-_MMR_PCTILE_WINDOW:]]
+    pctile = (sum(1 for v in win if v <= ratio) / len(win) * 100) if len(win) >= _MMR_PCTILE_MIN else None
+    out = {"as_of": d_iso, "ratio": ratio, "prev": hist[prev_date] if prev_date else None,
+           "prev_date": prev_date, "pctile": pctile, "n_hist": len(win), "n_stock": n_stock}
+    _mmr_cache[ck] = out
+    return out
