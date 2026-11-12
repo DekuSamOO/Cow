@@ -1073,6 +1073,10 @@ def maybe_send_bear_bottom_confirm_alert(data: dict, dry_run: bool = False) -> N
         "   （開網格後記得把 App 實際強平價填進 config_private.D3_GRID_LIQ_PRICE）",
         "4. 每月定投維持 10,000 TWD，不因 D3 加碼；分批止盈不設",
         "",
+        "※ 本輪若情境一已開過窗、B 沒投完（2026-11-12 拍板）：",
+        "   保證金改為「剩餘未投的 B」（屯幣寶已在開窗時關閉、已投批次照跑）；",
+        "   馬丁已在開窗當天平倉 -> 沒有緩衝，第 3 點不適用、不用回填 D3_GRID_LIQ_PRICE",
+        "",
         "完整規則：vault Literature Note/1a BTC部位SOP.md 情境二",
         "註：範圍與強平價估算是自動算的，實際開單/注資仍是人工執行；"
         "PREREG 亦要求同步評判四季論存活與否。",

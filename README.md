@@ -95,7 +95,7 @@ strategy/
 
 scripts/
   move_attribution.py      BTC 異常波動歸因（2026-10-30）：視窗內 15 分 K 收盤價最大峰谷當事件區間，六幣（BTC/ETH/SOL/XRP/BNB/DOGE）比同步（起動時間差 ≤30 分）、照比例（對 BTC 的 beta，取前 30 天 1h 報酬、時間戳對齊）、殘差 z（|z|≥2 標「個別幣多跌一截」），疊加幣安−Coinbase 價差、BTC 永續 OI、資金費率、`db/macro_events.json` 與美股開收盤時點、標普期貨／美元指數／美債（Yahoo）、RSS 新聞標題，判定「全市場／BTC 個別／混合」。只讀公開 API 與本地 JSON、不寫檔不推播；門檻為描述性、未經回測，**不改任何 SOP 動作**；待庵 agent〈波動歸因模式〉呼叫。`--hours`、`--end`（台北時間）、`--json`；測試 `tests/test_move_attribution.py`
-  daily_line_notify.py     GitHub Actions 雲端自動推播腳本（Kraken 備援，台灣 09:23 / 13:39 / 18:27 三時段，含新聞輿情、逃頂警報分級/分數Δ/遲滯狀態機、OI 快照過期警告、週日傍晚場次加推文字週報，時段閘門 hour<17 早退使本地/手動執行也僅傍晚才發；另含 maybe_send_leverage_window_alert 每日升槓桿窗口哨兵，AHR999 與距 ATH 兩道閘門同時成立才開窗、**分批以「訊號日」累計、關窗只暫停不歸零；開窗與關窗兩條計數皆同日去重（計日曆天不計場次）**；另含 maybe_send_bear_bottom_confirm_alert 熊底確認 D3 哨兵，成立即只推一次、語意為「本輪熊市視為結束→升槓桿窗口可能不再開」，推播直接附 `d3_grid_plan` 算好的 L=2 網格下限/上限/格數/強平粗估，**馬丁不換現貨、續跑當網格的強平緩衝**（2026-08-26 拍板取代舊版「馬丁全額換現貨」，vault `1a BTC部位SOP` 情境二 F-2）；c1 與 c3 互斥時另推一次 D3 死結告警（`_maybe_send_d3_deadlock_alert`，解除即清旗標）；另含 maybe_send_d3_grid_buffer_alert，現價跌破 `config_private.D3_GRID_LIQ_PRICE × 1.10` 推一次「兩台馬丁全平注資」（`D3_GRID_LIQ_PRICE` 為 None 時整段略過）。升槓桿與 D3 的判定邏輯與門檻皆委由 `core/leverage_window`，本檔只負責取數與組推播文案；另含 maybe_send_hedge_batch_alert 套保分批建倉哨兵 G3，門檻與視窗取自 `core/sentinel_board`，RSI 一律用**收完的日線收盤**、每批只推一次、**兩源對拍通過才推建倉**（主源 `fetch_market_data` 日線 vs 對拍源 15m DB 重採樣成 1D＝回測口徑；分歧或對拍源不可得改推「先不要建倉」每批一次；對拍源只落後 1 天視為 DB 尚未 push、本場不推），收完日線落後超過 `HEDGE_MAX_CLOSED_BAR_LAG_DAYS`=1 天不推建倉。**共用守門兩道**：`_maybe_send_data_gap_alert`（升槓桿窗口／D3／D3 網格緩衝／套保建倉四個會影響下單的哨兵取不到資料就推「[哨兵失明]」，恢復清旗標；逃頂與合成行動刻意不納入）、`_state_chain_broken`（還原到的 state artifact 超過 `STATE_STALE_HOURS`=30 小時就不送「只推一次」的建倉類指示、改推「[狀態鏈斷裂]」，套用於套保建倉與 D3））
+  daily_line_notify.py     GitHub Actions 雲端自動推播腳本（Kraken 備援，台灣 09:23 / 13:39 / 18:27 三時段，含新聞輿情、逃頂警報分級/分數Δ/遲滯狀態機、OI 快照過期警告、週日傍晚場次加推文字週報，時段閘門 hour<17 早退使本地/手動執行也僅傍晚才發；另含 maybe_send_leverage_window_alert 每日升槓桿窗口哨兵，AHR999 與距 ATH 兩道閘門同時成立才開窗、**分批以「訊號日」累計、關窗只暫停不歸零；開窗與關窗兩條計數皆同日去重（計日曆天不計場次）**；另含 maybe_send_bear_bottom_confirm_alert 熊底確認 D3 哨兵，成立即只推一次、語意為「本輪熊市視為結束→升槓桿窗口可能不再開」，推播直接附 `d3_grid_plan` 算好的 L=2 網格下限/上限/格數/強平粗估，**馬丁不換現貨、續跑當網格的強平緩衝**（2026-08-26 拍板取代舊版「馬丁全額換現貨」，vault `1a BTC部位SOP` 情境二 F-2）；推播另附例外註記：本輪情境一已開過窗、B 沒投完時，保證金改為剩餘 B、馬丁已平倉無緩衝、不回填 `D3_GRID_LIQ_PRICE`（2026-11-12 拍板）；c1 與 c3 互斥時另推一次 D3 死結告警（`_maybe_send_d3_deadlock_alert`，解除即清旗標）；另含 maybe_send_d3_grid_buffer_alert，現價跌破 `config_private.D3_GRID_LIQ_PRICE × 1.10` 推一次「兩台馬丁全平注資」（`D3_GRID_LIQ_PRICE` 為 None 時整段略過）。升槓桿與 D3 的判定邏輯與門檻皆委由 `core/leverage_window`，本檔只負責取數與組推播文案；另含 maybe_send_hedge_batch_alert 套保分批建倉哨兵 G3，門檻與視窗取自 `core/sentinel_board`，RSI 一律用**收完的日線收盤**、每批只推一次、**兩源對拍通過才推建倉**（主源 `fetch_market_data` 日線 vs 對拍源 15m DB 重採樣成 1D＝回測口徑；分歧或對拍源不可得改推「先不要建倉」每批一次；對拍源只落後 1 天視為 DB 尚未 push、本場不推），收完日線落後超過 `HEDGE_MAX_CLOSED_BAR_LAG_DAYS`=1 天不推建倉。**共用守門兩道**：`_maybe_send_data_gap_alert`（升槓桿窗口／D3／D3 網格緩衝／套保建倉四個會影響下單的哨兵取不到資料就推「[哨兵失明]」，恢復清旗標；逃頂與合成行動刻意不納入）、`_state_chain_broken`（還原到的 state artifact 超過 `STATE_STALE_HOURS`=30 小時就不送「只推一次」的建倉類指示、改推「[狀態鏈斷裂]」，套用於套保建倉與 D3））
   price_alert.py           GitHub Actions 每小時價格警報（防守線＝config.ALERT_PRICE_LOW；文案由 config.DEFENSE_LADDER 三階推移表動態組裝，含同日去重 + armed 遲滯：跌破推一次、回升門檻+$500 才重新武裝。觸發價/釋出量等真實數字自 2026-07-06 起改由私有來源載入，見 config_private.py.example。**2026-08-21 起 ALERT_PRICE_LOW 與第 1 階觸發價解耦**——馬丁止盈重啟會讓階梯觸發價上飄並改變執行順序，警報價則刻意不跟漲，定位為「高於全部三階、留足台股 T+2 的獨立預警價」，守門判準為 >= 而非 ==）
   test_flex_message.py     本地端測試 LINE Flex Message 排版的除錯腳本
   test_compare_backtest.py 驗證腳本：對相同參數同時執行 swing.py 與 Walk-Forward，確認結果量級一致
@@ -411,6 +411,14 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 ---
 
 ## 版本紀錄
+
+### v3.62 (2026-11-12)
+**D3 熊底確認推播加一段例外註記：情境一開過窗、B 沒投完之後才遇到 D3。**
+
+- **docs(notify)**: `maybe_send_bear_bottom_confirm_alert` 推播文末加註：此時保證金改為「剩餘未投的 B」（屯幣寶已在開窗時關閉、已投批次照跑）；
+  馬丁已在開窗當天平倉 → 沒有緩衝，推播第 3 點不適用、不用回填 `D3_GRID_LIQ_PRICE`。
+- **依據**：vault `1a BTC部位SOP`（2026-11-12 拍板）；回測 `Work\BTC幣本位網格去留評估\scripts\Z1_leftover_after_close.py`——剩餘後才遇 D3 的 2 個獨立樣本，併入一年後幣數 +25%／+34%、續等 +1%／+7%，0 強平（樣本極少，C 級）。
+- **只改文案、不改判定**：D3 判定、旗標、只推一次的邏輯都沒動。全套 **660 passed**（文案本身無測試覆蓋）。
 
 ### v3.61 (2026-11-06)
 **watcher 台股面板加一列「大盤融資維持率」**（僅顯示、不計分）。
@@ -1685,4 +1693,4 @@ watcher 面板誠實化：移除已回測無效的 Hash Ribbons 參考訊號、�
 
 ---
 
-**最後更新：2026-11-06（v3.61）**
+**最後更新：2026-11-12（v3.62）**
