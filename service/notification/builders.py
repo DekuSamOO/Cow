@@ -960,3 +960,85 @@ def build_flex_message(s):
     else:
         logger.info(f"[flex] payload size = {size} bytes")
     return msg
+
+
+_DEFENSE_RED = "#C0392B"
+
+
+def _defense_stage_box(i, trig, action, add_btc, liq_after, note, hit):
+    """防守階梯單階卡片：已觸發（現價 <= 觸發價）淡紅底＋🔴，未觸發灰底＋⚪。"""
+    contents = [
+        {"type": "box", "layout": "horizontal", "contents": [
+            {"type": "text", "text": f"{'🔴' if hit else '⚪'} 第{i}階", "weight": "bold",
+             "size": "sm", "color": _DEFENSE_RED if hit else "#555555", "flex": 0},
+            {"type": "text", "text": f"${trig:,.0f}", "weight": "bold", "size": "sm",
+             "align": "end", "color": _DEFENSE_RED if hit else "#555555"},
+        ]},
+        {"type": "text", "text": action, "size": "sm", "wrap": True, "color": "#2C3E50",
+         "margin": "xs"},
+        {"type": "text", "text": f"+{add_btc} BTC → 強平 ~${liq_after:,.0f}", "size": "sm",
+         "weight": "bold", "color": "#2C3E50", "margin": "xs", "wrap": True},
+    ]
+    if note:
+        contents.append({"type": "text", "text": f"⚠ {note}", "size": "xxs", "wrap": True,
+                         "color": "#888888", "margin": "xs"})
+    return {"type": "box", "layout": "vertical", "margin": "sm", "paddingAll": "md",
+            "cornerRadius": "8px", "backgroundColor": "#FDEDEC" if hit else "#F8F9FA",
+            "contents": contents}
+
+
+def build_defense_flex(price, now_str=None):
+    """防守警報 LINE Flex（2026-11-13；取代純文字首響，文字版 build_defense_message 仍供 Telegram／測試）。
+
+    數字一律由 config.DEFENSE_LADDER／ALERT_PRICE_LOW／DEFENSE_DECISION_CARD 動態組裝，
+    本函式不寫死任何部位數字（公開 repo；真值在 config_private／DEFENSE_CONFIG_JSON secret）。
+    防守設定改為函式內延遲載入：本模組被日常推播 import 時，不會因缺 secret 而 fail-loud。
+    """
+    from config import ALERT_PRICE_LOW, DEFENSE_LADDER, DEFENSE_DECISION_CARD
+    now_str = now_str or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    n_hit = sum(1 for row in DEFENSE_LADDER if price <= row[0])
+
+    body = [
+        {"type": "box", "layout": "horizontal", "contents": [
+            {"type": "text", "text": "現價", "size": "sm", "color": "#888888",
+             "gravity": "bottom", "flex": 0},
+            {"type": "text", "text": f"${price:,.0f}", "size": "xxl", "weight": "bold",
+             "color": _DEFENSE_RED, "align": "end"},
+        ]},
+        {"type": "text", "text": f"已觸及 {n_hit}／{len(DEFENSE_LADDER)} 階", "size": "xs",
+         "color": "#888888", "align": "end"},
+        {"type": "separator", "margin": "md"},
+        {"type": "text", "text": "📋 防守階梯（依序累加，強平為注資後估算）", "weight": "bold",
+         "size": "sm", "color": "#2C3E50", "margin": "md", "wrap": True},
+    ]
+    for i, (trig, action, add_btc, liq_after, note) in enumerate(DEFENSE_LADDER, 1):
+        body.append(_defense_stage_box(i, trig, action, add_btc, liq_after, note,
+                                       price <= trig))
+    body += [
+        {"type": "separator", "margin": "lg"},
+        {"type": "text", "text": "🃏 決策卡（對照戰情室 final_low 與 ensemble_low）",
+         "weight": "bold", "size": "sm", "color": "#2C3E50", "margin": "md", "wrap": True},
+    ]
+    for line in DEFENSE_DECISION_CARD:
+        body.append({"type": "text", "text": f"• {line}", "size": "xs", "wrap": True,
+                     "color": "#555555", "margin": "sm"})
+
+    bubble = {
+        "type": "bubble", "size": "giga",
+        "header": {"type": "box", "layout": "vertical", "backgroundColor": _DEFENSE_RED,
+                   "contents": [
+                       {"type": "text", "text": f"🛡️ BTC 跌破 ${ALERT_PRICE_LOW:,.0f}",
+                        "color": "#ffffff", "weight": "bold", "size": "lg", "wrap": True},
+                       {"type": "text", "text": "1 BTC ROAD 防守事件", "color": "#ffffff",
+                        "size": "xs"},
+                   ]},
+        "body": {"type": "box", "layout": "vertical", "spacing": "none", "contents": body},
+        "footer": {"type": "box", "layout": "vertical", "contents": [
+            {"type": "text", "text": "🔁 馬丁若已止盈重啟，本表觸發價/釋出量作廢——執行前必對帳重算",
+             "size": "xxs", "wrap": True, "color": _DEFENSE_RED},
+            {"type": "text", "text": f"🕐 {now_str}", "size": "xxs", "color": "#999999",
+             "margin": "xs"},
+        ]},
+    }
+    alt = f"🛡️ 防守警報：BTC ${price:,.0f} 跌破 ${ALERT_PRICE_LOW:,.0f}（已觸及 {n_hit} 階）"
+    return {"type": "flex", "altText": alt[:400], "contents": bubble}

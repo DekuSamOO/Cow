@@ -247,12 +247,26 @@ def notify_defense_line(price: float) -> dict:
     U5-①（2026-07-14）：走防守專用發送（core._send_defense_line_message，未設專用
     憑證時 fallback 日常通道）＋三連響 burst——主訊息後再獨立 push 兩則短訊息，
     手機連響 N 次與日常單響區隔（重複策略）。
+
+    2026-11-13：LINE 首響改送 Flex（build_defense_flex）。Flex 建構或推送失敗
+    （例如 LINE 回 400 版面錯誤）時退回純文字再送一次——防守警報寧可醜也不可丟失。
+    Telegram 與三連響短訊息維持純文字。
     """
-    result = {'line': False, 'telegram': False, 'burst': 0}
+    result = {'line': False, 'telegram': False, 'burst': 0, 'format': None}
     import config as _config
     text = build_defense_message(price)
 
-    result['line'] = _send_defense_text(text)
+    try:
+        from service.notification.builders import build_defense_flex
+        flex = build_defense_flex(price)
+        result['line'] = _core._send_defense_line_message([flex])
+        result['format'] = 'flex' if result['line'] else None
+    except Exception as e:  # noqa: BLE001 — 任何建構錯誤都退回文字，不讓警報斷掉
+        import logging as _logging
+        _logging.getLogger(__name__).warning(f"[defense] Flex 建構失敗，退回文字：{e}")
+    if not result['line']:
+        result['line'] = _send_defense_text(text)
+        result['format'] = 'text' if result['line'] else None
     if result['line']:
         import time as _time
         n_burst = getattr(_config, "DEFENSE_BURST_COUNT", 3)
