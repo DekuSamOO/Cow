@@ -110,9 +110,16 @@ def main():
     out.append("")
 
     out.append("[行情]")
-    out.append("  現價: %s" % data.get("current_price"))
+    src = data.get("price_source")
+    src_label = {"coinbase": "Coinbase", "binance": "幣安（Coinbase 失敗）",
+                 "stale_close": "⚠️ K 棒收盤（兩個即時來源都失敗，可能是舊價，勿據此判定）"}.get(src, src)
+    out.append("  現價: %s（來源：%s）" % (data.get("current_price"), src_label))
     out.append("  收完日線: %s" % cdate)
-    out.append("  AHR999: %s" % data.get("ahr999"))
+    out.append("  AHR999: %s（以 K 棒收盤 %s 計）" % (data.get("ahr999"), data.get("df_close")))
+    _live, _dfc, _px = data.get("ahr999_at_price"), data.get("df_close"), data.get("current_price")
+    if _live is not None and _dfc and _px and abs(_px / _dfc - 1) > 0.005:
+        out.append("  ⚠️ K 棒收盤與現價差 %+.2f%%，以現價換算 AHR999 ≈ %.4f（複核以這個為準）"
+                   % ((_dfc / _px - 1) * 100, _live))
     out.append("  cycle ATH: %s @ %s（距今 %s 天）"
                % (data.get("cycle_ath"), data.get("cycle_ath_date"),
                   data.get("days_since_ath")))

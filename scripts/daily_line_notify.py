@@ -114,6 +114,22 @@ def get_decision_data():
     except Exception as e:
         print(f"❌ 抓取 Coinbase 即時價格失敗，錯誤原因: {e}")
 
+    # 2026-11-13：Coinbase 失敗先試幣安現價，兩者都失敗才退回 K 棒收盤（並標記來源）。
+    # 起因：本機 Coinbase 失敗時直接用了 fetch_market_data() 殘留的日線收盤 73,582，
+    # 實際現價約 71,700，AHR999 被讀成 0.4055（實際約 0.385），開窗複核差點誤判。
+    # Actions（美國 IP）幣安會 451，但雲端 Coinbase 正常，這一段主要服務本機查詢。
+    price_source = "coinbase" if current_price is not None else None
+    if current_price is None:
+        try:
+            r = safe_get("https://api.binance.com/api/v3/ticker/price",
+                         params={"symbol": "BTCUSDT"}, verify=SSL_VERIFY, timeout=10)
+            r.raise_for_status()
+            current_price = float(r.json()["price"])
+            price_source = "binance"
+            print(f"✅ Coinbase 失敗，改用幣安現價: {current_price}")
+        except Exception as e:
+            print(f"❌ 幣安現價也失敗，錯誤原因: {e}")
+
     try:
         btc_df, _ = fetch_market_data()
         funding_df = _fetch_funding_rate_history()
@@ -140,9 +156,20 @@ def get_decision_data():
             _a = curr.get("AHR999")
             summary["ahr999"] = float(_a) if _a is not None and _a == _a else None
 
-            # 若上方 Coinbase API 抓取失敗，則使用歷史 K 棒的最後一筆收盤價作為備用
+            # Coinbase 與幣安都失敗 → 才用歷史 K 棒最後一筆收盤當備用，並標記為「舊價」。
+            # 這個值可能是殘留的未收完日線，不是現價；顯示端要看 price_source 加警示。
             if current_price is None:
                 current_price = float(curr['close'])
+                price_source = "stale_close"
+                print(f"⚠️ 現價兩個來源都失敗，退回 K 棒收盤 {current_price:,.1f}（可能是舊價）")
+            summary["price_source"] = price_source
+            # 只供顯示／本機複核（不改哨兵判定）：summary["ahr999"] 是用 K 棒收盤算的，
+            # K 棒若是殘留舊價，讀值會偏。這裡另給「以現價換算」的 AHR999：
+            # AHR999 ∝ 價格²（SMA200 與冪律模型在同一天內視為不變），故 × (現價/K 棒收盤)²。
+            _close_df = float(curr['close'])
+            summary["df_close"] = _close_df
+            if summary.get("ahr999") is not None and _close_df > 0:
+                summary["ahr999_at_price"] = summary["ahr999"] * (current_price / _close_df) ** 2
 
             curr['close'] = current_price
             summary["price"] = f"${current_price:,.0f}"
@@ -1075,7 +1102,8 @@ def maybe_send_bear_bottom_confirm_alert(data: dict, dry_run: bool = False) -> N
         "",
         "※ 本輪若情境一已開過窗、B 沒投完（2026-11-12 拍板）：",
         "   保證金改為「剩餘未投的 B」（屯幣寶已在開窗時關閉、已投批次照跑）；",
-        "   馬丁已在開窗當天平倉 -> 沒有緩衝，第 3 點不適用、不用回填 D3_GRID_LIQ_PRICE",
+        "   馬丁若已平倉 -> 沒有緩衝，第 3 點不適用、不用回填 D3_GRID_LIQ_PRICE；",
+        "   馬丁若依 SOP 延後、此時還沒平（2026-11-13 拍板）-> 不併入網格，照第 3 點留著當緩衝、照常回填",
         "",
         "完整規則：vault Literature Note/1a BTC部位SOP.md 情境二",
         "註：範圍與強平價估算是自動算的，實際開單/注資仍是人工執行；"
