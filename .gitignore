@@ -53,3 +53,7 @@ tests/f2_*
 # 四季論 v2 回放/抽查的產出（可由 tests/season_v2_*.py 重跑產生；
 # 每天資料長大就過期，入版控只會變成新的失真來源）
 tests/season_v2_*_result.txt
+
+# SQLite WAL 暫存檔（連線開著時自動產生，collector 的 git add db/ 會誤收，2026-11-18）
+*.db-shm
+*.db-wal
