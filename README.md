@@ -412,6 +412,14 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 
 ## 版本紀錄
 
+### v3.66 (2026-11-19)
+**升槓桿分批計數一次性人工校正：使用者自主提前投入一批後，哨兵批號與實際對齊。**
+
+- **feat(sentinel)**: `core/leverage_window.py` 新增 `apply_manual_adjustments()`，`config.LEVERAGE_MANUAL_ADJUSTMENTS` 定義校正（已投批數 +1、訊號日 +1 個批次間隔）。只加批數不加訊號日，下一批會延後整整一個間隔；兩個一起加，下一批留在原本的到期日、批號 +1。
+- **守門**：窗口開啟日與已投批數都等於預期才套用，否則略過並印出 `X ... 略過`；套過的 id 記在 state 的 `lev_manual_adjust_applied`，不會重複。`maybe_send_leverage_window_alert` 在讀 `prev_sent` 之前套用，本場文案即為校正後數字。
+- **test**: `tests/test_leverage_window.py` 新增 4 項（到期日不變且批號 +1／只套一次／狀態不符略過／正式設定欄位齊全）。全套 **669 passed**；負向驗證：只加批數不加訊號日 2 項失敗、停用校正 3 項失敗。
+- **docs**: CLAUDE.md、README、程式註解與推播文字中的 vault 路徑改為分類號子資料夾（`Literature Note/01 Crypto/…`、`04 程式技術/…`）。
+
 ### v3.65 (2026-11-18)
 **升槓桿開窗推播文字對齊 vault SOP（規則以 SOP 為準）。**
 
@@ -737,7 +745,7 @@ D3 的 c1（自低點彈 ≥50%）與 c3（距 cycle ATH ≥30%）在熊市夠�
 - **feat(notify)**: 新增 `_maybe_send_d3_deadlock_alert`——死結時狀態行加註並推播一次，解除時清旗標。
 - **為什麼是 20%**：以 BTC 幣數計價、H=730 天重放四個週期，c3 ≥2.5% 之後 E[幣數] 完全平坦（1.832x），
   **不能用期望值選**；改用結構理由——20% 是死結曲線膝點（594 → 141 天），且保有 8 倍誤報安全邊際
-  （擋掉 2021-10-18 只需 2.5%）。完整證據 → vault `Literature Note/1b D3 死結與 c3 門檻研究.md`。
+  （擋掉 2021-10-18 只需 2.5%）。完整證據 → vault `Literature Note/01 Crypto/1b D3 死結與 c3 門檻研究.md`。
 - **test**: `tests/test_leverage_window.py` 新增 8 項，含紅線「20% 仍須擋掉 2021-10-18 誤報」。
   全套 **567 passed**；負向驗證：停用偵測 2 項失敗、門檻改回 30% 2 項失敗。
 
@@ -1717,4 +1725,4 @@ watcher 面板誠實化：移除已回測無效的 Hash Ribbons 參考訊號、�
 
 ---
 
-**最後更新：2026-11-18（v3.65）**
+**最後更新：2026-11-19（v3.66）**

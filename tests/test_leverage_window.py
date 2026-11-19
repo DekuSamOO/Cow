@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.leverage_window import (  # noqa: E402
     gate_status, trigger_price, advance_batches, d3_status, compact_rows,
     find_bear_low, WINDOW_RESET_DAYS, d3_grid_plan,
-    BEAR_DRAWDOWN, D3_TRIGGER_DRAWDOWN,
+    BEAR_DRAWDOWN, D3_TRIGGER_DRAWDOWN, apply_manual_adjustments,
 )
 
 AHR_MAX, MIN_DAYS = 0.40, 300
@@ -378,3 +378,70 @@ def test_new_format_state_is_not_migrated():
     st, _b, _ev = advance_batches(st, False, _iso(1), BATCH_DAYS, BATCH_N)
     assert st["lev_closed_days"] == 51
     assert "lev_closed_days_migrated" not in st
+
+
+# ── 一次性人工校正（2026-11-19 立）：使用者自主提前投一批，哨兵批號要對齊 ──
+# 顯假值：窗口開啟日用 2099 年，不寫真實日期。
+_ADJ = ({"id": "t_early", "window_start": "2099-01-01",
+         "expect_sent": 1, "add_batches": 1, "add_signal_days": BATCH_DAYS},)
+
+
+def _open_state(sig, sent=1):
+    return {"lev_window_open": True, "lev_signal_days": sig, "lev_batches_sent": sent,
+            "lev_window_start": "2099-01-01", "lev_last_open_date": _iso(0),
+            "lev_last_batch_date": "2099-01-01"}
+
+
+def test_manual_adjust_keeps_next_batch_on_original_due_day():
+    """核心：校正後下一批要落在「原本第 2 批」的到期日，批號是 3。
+    只加批數不加訊號日，下一批會延後整整 BATCH_DAYS 天——這就是要擋的錯。"""
+    sig0 = 8
+    # 對照組：不校正，哪一天會推下一批
+    ref = _open_state(sig0)
+    ref_day = None
+    for i in range(1, 40):
+        ref, b, _ev = advance_batches(ref, True, _iso(i), BATCH_DAYS, BATCH_N)
+        if b:
+            ref_day, ref_batch = i, b
+            break
+    assert ref_batch == 2
+
+    st, done, skipped = apply_manual_adjustments(_open_state(sig0), _ADJ)
+    assert done == ["t_early"] and skipped == []
+    assert st["lev_batches_sent"] == 2 and st["lev_signal_days"] == sig0 + BATCH_DAYS
+    for i in range(1, 40):
+        st, b, _ev = advance_batches(st, True, _iso(i), BATCH_DAYS, BATCH_N)
+        if b:
+            assert (i, b) == (ref_day, 3), "校正後下一批應同一天到期、批號 +1"
+            break
+    else:
+        raise AssertionError("校正後 40 個訊號日內都沒推下一批")
+
+
+def test_manual_adjust_applies_only_once():
+    st, done, _s = apply_manual_adjustments(_open_state(8), _ADJ)
+    st2, done2, skipped2 = apply_manual_adjustments(st, _ADJ)
+    assert done == ["t_early"] and done2 == [] and skipped2 == []
+    assert st2["lev_batches_sent"] == 2 and st2["lev_signal_days"] == 8 + BATCH_DAYS
+
+
+def test_manual_adjust_skips_when_state_does_not_match():
+    """窗口開啟日或已投批數不符（狀態被重置、拿到舊 artifact）一律不動。"""
+    for st0 in (_open_state(8, sent=2),
+                dict(_open_state(8), lev_window_start="2099-02-01"),
+                {}):
+        st, done, skipped = apply_manual_adjustments(st0, _ADJ)
+        assert done == [] and skipped == ["t_early"]
+        assert st.get("lev_batches_sent") == st0.get("lev_batches_sent")
+        assert st.get("lev_signal_days") == st0.get("lev_signal_days")
+        assert "lev_manual_adjust_applied" not in st
+
+
+def test_production_adjustment_is_well_formed():
+    """config 裡的正式校正：欄位齊全、訊號日增量等於一個批次間隔。"""
+    from config import LEVERAGE_MANUAL_ADJUSTMENTS, LEVERAGE_BATCH_DAYS
+    ids = [a["id"] for a in LEVERAGE_MANUAL_ADJUSTMENTS]
+    assert len(ids) == len(set(ids))
+    for a in LEVERAGE_MANUAL_ADJUSTMENTS:
+        assert set(a) == {"id", "window_start", "expect_sent", "add_batches", "add_signal_days"}
+        assert a["add_signal_days"] == a["add_batches"] * LEVERAGE_BATCH_DAYS

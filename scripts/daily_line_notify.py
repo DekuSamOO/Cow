@@ -845,9 +845,11 @@ def maybe_send_leverage_window_alert(data: dict, dry_run: bool = False) -> None:
     去重與狀態沿用 escape_alert_state.json（同一 artifact 持久化）。
     """
     from config import (LEVERAGE_AHR999_MAX, LEVERAGE_MIN_DAYS_FROM_ATH,
-                        LEVERAGE_BATCH_DAYS, LEVERAGE_BATCH_COUNT)
+                        LEVERAGE_BATCH_DAYS, LEVERAGE_BATCH_COUNT,
+                        LEVERAGE_MANUAL_ADJUSTMENTS)
 
-    from core.leverage_window import gate_status, advance_batches, trigger_price
+    from core.leverage_window import (gate_status, advance_batches, trigger_price,
+                                      apply_manual_adjustments)
 
     gate = gate_status(data.get("ahr999"), data.get("days_since_ath"),
                        LEVERAGE_AHR999_MAX, LEVERAGE_MIN_DAYS_FROM_ATH)
@@ -862,6 +864,13 @@ def maybe_send_leverage_window_alert(data: dict, dry_run: bool = False) -> None:
     _clear_data_gap_flag("leverage", dry_run=dry_run)
 
     state = _load_escape_state()
+    # 一次性人工校正要在讀 prev_sent 之前套，否則本場的「已投 N 批」文案會是校正前的數字
+    state, adj_done, adj_skipped = apply_manual_adjustments(state, LEVERAGE_MANUAL_ADJUSTMENTS)
+    for aid in adj_done:
+        print(f"! 升槓桿人工校正 {aid} 已套用：已投 {state.get('lev_batches_sent')} 批、"
+              f"訊號日 {state.get('lev_signal_days')}。")
+    for aid in adj_skipped:
+        print(f"X 升槓桿人工校正 {aid} 略過：窗口開啟日或已投批數與預期不符，未改狀態。")
     ahr, dath = gate["ahr"], gate["dath"]
     today = date.today()
     price = data.get("current_price") or 0
@@ -1104,7 +1113,7 @@ def maybe_send_bear_bottom_confirm_alert(data: dict, dry_run: bool = False) -> N
         "   馬丁若已平倉 -> 沒有緩衝，第 3 點不適用、不用回填 D3_GRID_LIQ_PRICE；",
         "   馬丁若依 SOP 延後、此時還沒平（2026-11-13 拍板）-> 不併入網格，照第 3 點留著當緩衝、照常回填",
         "",
-        "完整規則：vault Literature Note/1a BTC部位SOP.md 情境二",
+        "完整規則：vault Literature Note/01 Crypto/1a BTC部位SOP.md 情境二",
         "註：範圍與強平價估算是自動算的，實際開單/注資仍是人工執行；"
         "PREREG 亦要求同步評判四季論存活與否。",
     ]
@@ -1178,7 +1187,7 @@ def maybe_send_d3_grid_buffer_alert(data: dict, dry_run: bool = False) -> None:
         "3. 注資完成後，把新強平價回填 config_private.D3_GRID_LIQ_PRICE",
         "   （或若不想再監控下一輪緩衝，設回 None）",
         "",
-        "完整規則：vault Literature Note/1a BTC部位SOP.md 情境二 F-2",
+        "完整規則：vault Literature Note/01 Crypto/1a BTC部位SOP.md 情境二 F-2",
         "註：這是提醒不是自動執行，注資與回填仍是人工動作。",
     ]
     if dry_run:
@@ -1199,7 +1208,7 @@ def maybe_send_hedge_batch_alert(data: dict, dry_run: bool = False) -> None:
     """
     套保分批建倉哨兵（2026-08-25 立）— G3 觸發，分三批。
 
-    規則正本：vault `Literature Note/1a BTC部位SOP.md`（2026-08-26 更名並移入 Literature Note，
+    規則正本：vault `Literature Note/01 Crypto/1a BTC部位SOP.md`（2026-08-26 更名並移入 Literature Note，
     原放 `Work/BTC幣本位網格去留評估/`、原名「升槓桿窗口執行清單」）情境一的「套保機器人」小節。
       規模 0.1285 BTC（現貨的一半）｜產品＝**全倉套保**（非分段/網格套保）
       G3 前提：日線 RSI **曾 >HEDGE_G3_PEAK**（近 HEDGE_G3_WINDOW 日）後回落

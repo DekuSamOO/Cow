@@ -4,7 +4,7 @@ core/leverage_window.py — 升槓桿窗口與熊底確認的單一真實來源�
 
 三處共用：scripts/daily_line_notify.py（LINE 哨兵）、BTC_WATCH.py（終端機視覺化）、
 未來的 dashboard。數字正本：vault
-`Literature Note\\1a BTC部位SOP.md`（2026-08-26 更名並移入 Literature Note，
+`Literature Note\\01 Crypto\\1a BTC部位SOP.md`（2026-08-26 更名並移入 Literature Note，
 原放 `Work\\BTC幣本位網格去留評估\\`、原名「升槓桿窗口執行清單」；附錄 B／D-1）。
 
 本模組只做純計算，不做 IO、不推播，方便測試對拍。
@@ -45,7 +45,7 @@ BEAR_DRAWDOWN = 0.30     # 「自 ATH 已跌逾 30%」之後才開始評判熊�
 #   * 歷史觸發集合：20% 下為 2019-04-02／2020-04-02／2023-02-19／2024-02-20，
 #     多出的 2024-02-20 是 2023-02-19 確認後 456 天的重複觸發，生產端 `d3_confirmed`
 #     只推一次，擋不擋都無害。
-# 完整證據 → vault `Literature Note\\1b D3 死結與 c3 門檻研究.md`。
+# 完整證據 → vault `Literature Note\\01 Crypto\\1b D3 死結與 c3 門檻研究.md`。
 D3_TRIGGER_DRAWDOWN = 0.20
 
 
@@ -191,6 +191,38 @@ def advance_batches(state, is_open, today_iso, batch_days, batch_count):
     return s, None, None
 
 
+def apply_manual_adjustments(state, adjustments):
+    """一次性人工校正分批計數（2026-11-19 立）。回傳 (新 state, 已套用 id 清單, 略過 id 清單)。
+
+    為什麼需要：使用者自主提前投了一批（哨兵不知道），批號會從此少一號。
+    只把 lev_batches_sent +1 不夠——下一批到期是 sent × batch_days，會往後延一整個間隔；
+    所以訊號日要同步加上 add_signal_days，下一批才會留在原本的到期日。
+
+    每筆 adjustment：id／window_start／expect_sent／add_batches／add_signal_days。
+    **守門**：窗口開啟日與已投批數都要等於預期才套用——狀態被重置、artifact 拿到舊檔、
+    或已經被別的方式改過時一律略過，不猜。
+    **只套一次**：套過的 id 記在 lev_manual_adjust_applied，同日重跑或之後每天都不會再加。
+    """
+    s = dict(state or {})
+    applied = list(s.get("lev_manual_adjust_applied") or [])
+    done, skipped = [], []
+    for adj in adjustments or ():
+        aid = adj["id"]
+        if aid in applied:
+            continue
+        sent = int(s.get("lev_batches_sent") or 0)
+        if s.get("lev_window_start") != adj["window_start"] or sent != adj["expect_sent"]:
+            skipped.append(aid)
+            continue
+        s["lev_batches_sent"] = sent + int(adj["add_batches"])
+        s["lev_signal_days"] = int(s.get("lev_signal_days") or 0) + int(adj["add_signal_days"])
+        applied.append(aid)
+        done.append(aid)
+    if done:
+        s["lev_manual_adjust_applied"] = applied
+    return s, done, skipped
+
+
 def d3_status(current_price, low_since, low_date_iso, days_since_low,
               rebound_req=0.50, days_req=90, cycle_ath=None,
               trigger_drawdown=D3_TRIGGER_DRAWDOWN):
@@ -230,7 +262,7 @@ def d3_status(current_price, low_since, low_date_iso, days_since_low,
     而生產端只推一次 —— **門檻改了，實際動作的那一次沒變**。
     且整條曲線的台階由**單一事件**（2021-10-18 誤報）決定、n=4 週期，
     這個樣本數不足以分辨 20%/25%/30%。故改用結構理由（死結頻率 vs 誤報邊際）選 20%。
-    完整掃描 → vault `Literature Note\\1b D3 死結與 c3 門檻研究.md`。
+    完整掃描 → vault `Literature Note\\01 Crypto\\1b D3 死結與 c3 門檻研究.md`。
 
     cycle_ath=None → 不套用 c3（向後相容；但生產端一律要傳，否則等於沒有這道閘門）。
     """

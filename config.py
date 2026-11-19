@@ -194,6 +194,14 @@ LEVERAGE_MIN_DAYS_FROM_ATH: int = 300
 # 一次全押為 +16.6%）。窗口關閉即停止投入，剩餘留到下一個窗口。
 LEVERAGE_BATCH_DAYS: int = 14
 LEVERAGE_BATCH_COUNT: int = 6
+# 一次性人工校正（2026-11-19 使用者裁定）：第 2 批在訊號日 8 自主提前投入，哨兵不知道。
+# 已投批數 +1 讓批號對齊；訊號日 +14 讓下一批（實際第 3 批）留在原第 2 批的到期日推播。
+# 套過的 id 記在 state 的 lev_manual_adjust_applied，不會重複；守門與理由見
+# core/leverage_window.py::apply_manual_adjustments。正本 vault「1a 1 BTC ROAD」情境一批次紀錄。
+LEVERAGE_MANUAL_ADJUSTMENTS: tuple = (
+    {"id": "20261119_batch2_early", "window_start": "2026-11-12",
+     "expect_sent": 1, "add_batches": 1, "add_signal_days": 14},
+)
 
 # ── D3 熊底確認後的 2X 網格參數（2026-08-26；1a BTC部位SOP 情境二 F-2）──
 D3_GRID_STEP: float = 1.0074        # 每格漲幅 0.74%

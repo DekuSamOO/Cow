@@ -12,7 +12,7 @@ scripts/sop_status.py · BTC 部位 SOP 現況一次查完（2026-09-11 立）
   · 對拍源 RSI（15m 重採樣 1D，回測那一套）→ `core.sentinel_board.crosscheck_daily_rsi()`
   · 批次已推播狀態 → GitHub Actions 的 escape-alert-state artifact
 
-規則正本 → vault `Literature Note/1a BTC部位SOP.md`。本檔只報數字，不下操作結論。
+規則正本 → vault `Literature Note/01 Crypto/1a BTC部位SOP.md`。本檔只報數字，不下操作結論。
 
 用法：python scripts/sop_status.py
 """
