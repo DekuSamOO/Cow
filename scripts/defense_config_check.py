@@ -100,9 +100,16 @@ def main() -> None:
 
     if args.push:
         from service.notification.core import _send_line_message
-        ok = _send_line_message([{'type': 'text', 'text':
-            f'🔐 防守 config 同步驗證\n來源: {source}\n指紋: {fp}\n'
-            f'（與本地 defense_config_check.py 輸出比對，一致＝三處同步）'}])
+        from service.notification.builders import build_text_card_flex
+        text = (f'🔐 防守 config 同步驗證\n來源: {source}\n指紋: {fp}\n'
+                f'（與本地 defense_config_check.py 輸出比對，一致＝三處同步）')
+        ok = False
+        try:   # 2026-11-20 改 Flex；失敗退回純文字
+            ok = _send_line_message([build_text_card_flex(text, 'system')])
+        except Exception as e:  # noqa: BLE001
+            print(f'Flex 建構失敗，改送純文字：{e}')
+        if not ok:
+            ok = _send_line_message([{'type': 'text', 'text': text}])
         print(f'指紋已推 LINE: {ok}（log 不落指紋）')
         sys.exit(0 if ok else 1)
 

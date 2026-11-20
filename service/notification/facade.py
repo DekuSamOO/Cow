@@ -269,7 +269,8 @@ def build_prereg_fuse_alert(price: float, floor: float) -> str:
 def notify_prereg_fuse(price: float) -> bool:
     """PREREG 事前保險絲推播（price_alert.py 驅動；走防守通道）。"""
     import config as _config
-    return _send_defense_text(build_prereg_fuse_alert(price, _config.PREREG_PESSIMISTIC_FLOOR))
+    return _send_defense_text(build_prereg_fuse_alert(price, _config.PREREG_PESSIMISTIC_FLOOR),
+                              kind="fuse")
 
 
 def _u5_window_h() -> int:
@@ -277,8 +278,18 @@ def _u5_window_h() -> int:
     return getattr(_config, "DEFENSE_DECISION_WINDOW_H", 24)
 
 
-def _send_defense_text(text: str) -> bool:
-    """U5-①：防守文字訊息統一出口（core 端專用憑證優先、未設 fallback 日常通道）。"""
+def _send_defense_text(text: str, kind: str = "defense") -> bool:
+    """U5-①：防守文字訊息統一出口（core 端專用憑證優先、未設 fallback 日常通道）。
+
+    2026-11-20：先轉 Flex 卡片送；建構或推送失敗退回純文字（防守訊息寧可醜也不可丟失）。
+    """
+    try:
+        from service.notification.builders import build_text_card_flex
+        if _core._send_defense_line_message([build_text_card_flex(text, kind)]):
+            return True
+    except Exception as e:  # noqa: BLE001
+        import logging as _logging
+        _logging.getLogger(__name__).warning(f"[defense] 文字轉 Flex 失敗，退回文字：{e}")
     return _core._send_defense_line_message([{"type": "text", "text": text}])
 
 

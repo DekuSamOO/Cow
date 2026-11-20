@@ -412,6 +412,13 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 
 ## 版本紀錄
 
+### v3.69 (2026-11-20)
+**哨兵純文字推播全面改 LINE Flex 卡片（失敗自動退回純文字）。**
+
+- **feat(notify)**: `builders.build_text_card_flex()`——行陣列文案轉 Flex：第一行當表頭（依標題前綴判種類上色：防守紅／保險絲深褐／升槓桿藍／D3 紫／網格琥珀／套保綠／系統灰），空行與 `━` 轉分隔線，縮排行＝次要說明，`※`／`（` 開頭＝附註，`**粗體**` 轉 span；單行訊息改由種類名當表頭；body／footer 明確白底；altText＝原標題。
+- **接線**：`daily_line_notify.send_line_message` 遇純文字 payload 先送卡片，建構或推送失敗再送原文字；`facade._send_defense_text`（三連響第 2、3 響、決策窗提醒／關閉、階梯到價、PREREG 保險絲）同樣處理；`defense_config_check.py --push` 指紋也改卡片。Telegram 維持純文字；workflow 的「執行失敗」curl 告警刻意維持純文字（Python 掛掉時的最後一道，手組 Flex JSON 被拒會連告警都丟）。
+- **test**: 新增 `tests/test_text_card_flex.py`（22 項：16 種標題判色、內容不遺失、粗體、單行、空字串、Flex 失敗退回文字）；`test_alert_logic.py`／`test_defense_flex.py` 改讀卡片文字。全套 **700 passed**；`flex-preview` 6 種代表卡結構驗證全過。
+
 ### v3.68 (2026-11-20)
 **哨兵落差補齊：網格下限下移、PREREG 事前保險絲、D3 下限對齊規則一、G3 殘留顯示移除。**
 
@@ -1742,4 +1749,4 @@ watcher 面板誠實化：移除已回測無效的 Hash Ribbons 參考訊號、�
 
 ---
 
-**最後更新：2026-11-20（v3.68）**
+**最後更新：2026-11-20（v3.69）**

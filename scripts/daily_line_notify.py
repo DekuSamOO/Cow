@@ -491,7 +491,20 @@ def _compute_radars(btc_df, curr, latest_funding, price) -> dict:
 
 
 def send_line_message(flex_payload):
+    """LINE 推播出口。純文字 payload 一律先轉 Flex 卡片送（2026-11-20 全面改 Flex），
+    卡片建構或推送失敗才退回原純文字——寧可醜也不可丟失（比照防守首響）。"""
     from service.notification.core import _send_line_message
+    if flex_payload.get("type") == "text":
+        from service.notification.builders import build_text_card_flex
+        try:
+            card = build_text_card_flex(flex_payload["text"])
+        except Exception as e:  # noqa: BLE001 — 轉卡片失敗不能讓推播斷掉
+            print(f"! 文字轉 Flex 失敗，改送純文字：{e}")
+            card = None
+        if card is not None:
+            if _send_line_message([card]):
+                return
+            print("! Flex 推送失敗，退回純文字再送一次")
     _send_line_message([flex_payload])
 
 

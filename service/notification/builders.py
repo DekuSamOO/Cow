@@ -1042,3 +1042,127 @@ def build_defense_flex(price, now_str=None):
     }
     alt = f"🛡️ 防守警報：BTC ${price:,.0f} 跌破 ${ALERT_PRICE_LOW:,.0f}（已觸及 {n_hit} 階）"
     return {"type": "flex", "altText": alt[:400], "contents": bubble}
+
+
+# ── 通用「文字行 → Flex 卡片」（2026-11-20：哨兵純文字推播全面改 Flex）────────────
+# 各哨兵仍以「行陣列」組文案（既有慣例、測試與 Telegram 共用），送 LINE 前才轉卡片；
+# 轉換或推送失敗由呼叫端退回純文字（比照防守首響：寧可醜也不可丟失）。
+
+_CARD_KINDS = {
+    # kind: (表頭底色, 表頭副標)
+    "defense":  ("#C0392B", "1 BTC ROAD 防守"),
+    "fuse":     ("#6E2C00", "PREREG 事前保險絲"),
+    "leverage": ("#1F6FB2", "情境一：升槓桿窗口"),
+    "d3":       ("#7D3C98", "情境二：D3 熊底確認"),
+    "grid":     ("#B9770E", "網格參數"),
+    "hedge":    ("#117A65", "套保"),
+    "system":   ("#566573", "哨兵系統狀態"),
+}
+
+# 依標題行開頭推斷種類（呼叫端沒給 kind 時用；順序＝優先序）
+_CARD_KIND_PREFIXES = (
+    ("[哨兵失明]", "system"), ("[狀態鏈斷裂]", "system"), ("🔐", "system"),
+    ("[網格下限", "grid"), ("[D3 網格]", "defense"),
+    ("[D3", "d3"), ("[熊底確認]", "d3"),
+    ("[開啟] 升槓桿", "leverage"), ("[暫停] 升槓桿", "leverage"),
+    ("[套保", "hedge"), ("🧯", "fuse"),
+)
+
+
+def _card_kind_of(title: str) -> str:
+    for prefix, kind in _CARD_KIND_PREFIXES:
+        if title.startswith(prefix):
+            return kind
+    if title.startswith("[第 ") and "升槓桿" in title:
+        return "leverage"
+    if title[:1] in ("🛡", "🚨", "⏰", "🔒", "🪜"):
+        return "defense"
+    return "system"
+
+
+def _md_bold_spans(line: str):
+    """把 **粗體** 轉成 span（LINE 文字不吃 markdown，舊純文字推播的 ** 會原樣顯示）。
+    沒有 ** 回 None（呼叫端直接用 text）；** 不成對時整行當純文字、去掉星號。"""
+    if "**" not in line:
+        return None
+    parts = line.split("**")
+    if len(parts) % 2 == 0:
+        return None
+    spans = []
+    for i, p in enumerate(parts):
+        if p:
+            span = {"type": "span", "text": p}
+            if i % 2 == 1:
+                span["weight"] = "bold"
+            spans.append(span)
+    return spans or None
+
+
+def _card_line(line: str) -> dict:
+    """單行 → Flex 元件。縮排行（半形兩格／全形空白開頭）＝次要說明，※／註／（ 開頭＝附註。"""
+    raw = line.rstrip()
+    indent = raw[:1] in (" ", "　")
+    s = raw.strip()
+    note = s[:1] in ("※", "（", "(") or s.startswith("註") or s.startswith("完整規則")
+    size, color = ("xs", "#555555") if indent else (("xxs", "#888888") if note else ("sm", "#2C3E50"))
+    node = {"type": "text", "wrap": True, "size": size, "color": color, "margin": "xs"}
+    spans = _md_bold_spans(s)
+    if spans:
+        node["text"] = s.replace("**", "")
+        node["contents"] = spans
+    else:
+        node["text"] = s.replace("**", "") or " "
+    if indent:
+        return {"type": "box", "layout": "vertical", "paddingStart": "lg", "contents": [node]}
+    return node
+
+
+def build_text_card_flex(text, kind: str = None, now_str: str = None) -> dict:
+    """純文字推播 → LINE Flex 卡片（純函數供測試；2026-11-20 立）。
+
+    text：整段文字（第一行＝標題）或行陣列。空行／「━」分隔線 → separator。
+    kind：見 _CARD_KINDS；None 依標題推斷。altText＝標題（通知列預覽看得到重點）。
+    """
+    lines = text.split("\n") if isinstance(text, str) else list(text)
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    if not lines:
+        raise ValueError("空訊息不能轉卡片")
+    title = lines[0].strip().replace("**", "")
+    kind = kind if kind in _CARD_KINDS else _card_kind_of(title)
+    color, subtitle = _CARD_KINDS[kind]
+
+    body, pending_sep = [], False
+    for ln in lines[1:]:
+        if not ln.strip() or set(ln.strip()) <= {"━", "─", "-"}:
+            pending_sep = bool(body)
+            continue
+        if pending_sep:
+            body.append({"type": "separator", "margin": "md"})
+            pending_sep = False
+        body.append(_card_line(ln))
+    alt = title
+    if not body:
+        # 單行訊息（如三連響第 2、3 響）：表頭放種類名，那一行進 body——LINE 拒收空字串 text，
+        # 也不留只有空白的元件
+        body = [_card_line(title)]
+        title = subtitle
+
+    now_str = now_str or datetime.now().strftime("%Y-%m-%d %H:%M")
+    bubble = {
+        "type": "bubble", "size": "giga",
+        "header": {"type": "box", "layout": "vertical", "backgroundColor": color,
+                   "contents": [
+                       {"type": "text", "text": title, "color": "#ffffff", "weight": "bold",
+                        "size": "md", "wrap": True},
+                   ] + ([] if title == subtitle else [
+                       {"type": "text", "text": subtitle, "color": "#ffffff", "size": "xxs"},
+                   ])},
+        # 明確白底：深色文字配色以白底設計，不吃手機深色模式的預設底色
+        "body": {"type": "box", "layout": "vertical", "spacing": "none",
+                 "backgroundColor": "#FFFFFF", "contents": body},
+        "footer": {"type": "box", "layout": "vertical", "backgroundColor": "#FFFFFF", "contents": [
+            {"type": "text", "text": f"🕐 {now_str}", "size": "xxs", "color": "#999999"},
+        ]},
+    }
+    return {"type": "flex", "altText": alt[:400], "contents": bubble}

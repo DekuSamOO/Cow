@@ -50,7 +50,7 @@ def patched_state(notify, tmp_path, monkeypatch):
     monkeypatch.setattr(notify, "_ESCAPE_STATE_FILE", str(state_file))
     sent = []
     import service.notification.core as core
-    monkeypatch.setattr(core, "_send_line_message", lambda msgs: sent.append(msgs))
+    monkeypatch.setattr(core, "_send_line_message", lambda msgs: sent.append(msgs) or True)
     import service.notification.builders as builders
     monkeypatch.setattr(builders, "build_escape_alert_flex", lambda s: {"type": "flex"})
     return state_file, sent
@@ -224,7 +224,7 @@ def test_leverage_data_gap_is_not_silent(notify, patched_state):
     state_file, sent = patched_state
     notify.maybe_send_leverage_window_alert({"ahr999": None, "days_since_ath": None})
     assert len(sent) == 1, "資料缺值時哨兵靜默＝P4 的死法重演"
-    text = sent[0][0]["text"]
+    text = _flex_text(sent[0][0])
     assert "哨兵失明" in text and "升槓桿窗口哨兵" in text
     assert "偵測不了" in text, "必須說清楚這不是『偵測到沒事』"
     assert _gap_flag(state_file, "leverage") is True
@@ -256,7 +256,7 @@ def test_hedge_rsi_gap_is_not_silent(notify, patched_state):
     """套保哨兵缺 RSI → 同樣不得靜默（2026-08-25~09-02 曾因此靜默 8 天）。"""
     state_file, sent = patched_state
     notify.maybe_send_hedge_batch_alert({"rsi14_closed": None, "rsi_peak": None})
-    assert len(sent) == 1 and "套保建倉哨兵" in sent[0][0]["text"]
+    assert len(sent) == 1 and "套保建倉哨兵" in _flex_text(sent[0][0])
     assert _gap_flag(state_file, "hedge") is True
 
 
@@ -265,7 +265,7 @@ def test_d3_data_gap_is_not_silent(notify, patched_state):
     state_file, sent = patched_state
     notify.maybe_send_bear_bottom_confirm_alert({"bear_low_since_ath": None,
                                                  "current_price": None})
-    assert len(sent) == 1 and "熊底確認 D3 哨兵" in sent[0][0]["text"]
+    assert len(sent) == 1 and "熊底確認 D3 哨兵" in _flex_text(sent[0][0])
     assert _gap_flag(state_file, "d3") is True
 
 

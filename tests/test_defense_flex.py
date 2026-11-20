@@ -81,7 +81,10 @@ def test_notify_defense_line_falls_back_to_text_when_flex_rejected(monkeypatch):
     monkeypatch.setattr(facade, "_is_telegram_configured", lambda: False)
     monkeypatch.setattr("time.sleep", lambda s: None)
     res = facade.notify_defense_line(ALERT_PRICE_LOW - 1)
-    assert sent[0] == "flex" and sent[1] == "text"
+    # 2026-11-20：退回路徑也先試文字卡片（flex），再退純文字 → 首響段為 flex、flex、text；
+    # 之後每一響同樣「flex 失敗 → text」
+    assert sent[:3] == ["flex", "flex", "text"]
+    assert sent[3:] == ["flex", "text"] * ((len(sent) - 3) // 2)
     assert res["line"] is True and res["format"] == "text"
 
 
@@ -94,5 +97,5 @@ def test_notify_defense_line_sends_flex_first(monkeypatch):
     monkeypatch.setattr("time.sleep", lambda s: None)
     res = facade.notify_defense_line(ALERT_PRICE_LOW - 1)
     assert sent[0] == "flex", "首響應為 Flex"
-    assert all(t == "text" for t in sent[1:]), "三連響後續短訊息維持純文字"
+    assert all(t == "flex" for t in sent[1:]), "三連響後續短訊息 2026-11-20 起也改 Flex"
     assert res["format"] == "flex" and res["burst"] == len(sent) - 1
