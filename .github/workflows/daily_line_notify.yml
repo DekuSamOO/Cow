@@ -17,6 +17,12 @@ on:
   # 允許在 GitHub Actions 頁面上手動觸發測試
   workflow_dispatch: 
 
+# 2026-11-20（余力 D 紅隊 D2 No.3）：同一時間只跑一場，手動 dispatch 撞上排程時排隊、不平行，
+# 否則兩場還原同一份 state、各推一次「只推一次」的指示（雙推）。不取消進行中的那場。
+concurrency:
+  group: daily-line-notify
+  cancel-in-progress: false
+
 jobs:
   send_notification:
     runs-on: ubuntu-22.04
@@ -100,7 +106,9 @@ jobs:
     # 上傳最新逃頂警報狀態（保留 90 天，見下方 retention-days）
     - name: Upload escape alert state
       # 還原失敗那場是空 state，不可上傳（否則成為「最新 artifact」，下一場還原到空狀態且年齡新鮮、守門放行）
-      if: env.STATE_RESTORE_FAILED != '1'
+      # always()：腳本中途丟例外時，前面已推出、已存檔的旗標也要上傳，否則下一場還原到上一份（年齡 <30h、
+      # 守門放行）會重推（2026-11-20，D2 No.3）。還原失敗那場例外（空 state 不可蓋掉好的 artifact）。
+      if: always() && env.STATE_RESTORE_FAILED != '1'
       uses: actions/upload-artifact@v5
       with:
         name: escape-alert-state

@@ -80,6 +80,21 @@ def test_alert_threshold_leads_stage1_trigger():
         '警報須高於全部階梯觸發價，否則存在「行動已觸價但警報未響」的階')
 
 
+def test_liq_base_below_ladder_and_alert():
+    """要防守的那台強平價必須低於第 1 階觸發價、且警報至少高它 20%（2026-11-20，余力 D 紅隊 D4 No.7）。
+
+    舊測試只驗「每階強平 < 該階觸發價」「警報 ≥ 各階觸發價」，沒驗 LIQ_BASE 本身：
+    新批次若強平高過階梯，等於還沒響就爆。SOP 的「設在最高那台強平價之上」原本只靠人工。
+    20% 取自 2026-11-13 拍板時的實際餘裕（警報高 No.7 強平 21.2%）。
+    """
+    if _LIQ_BASE is None:
+        pytest.skip("無槓桿部位（LIQ_BASE=None）或公開環境讀不到 config_private")
+    assert _LIQ_BASE < DEFENSE_LADDER[0][0] <= ALERT_PRICE_LOW, (
+        '強平價須低於第 1 階觸發價、第 1 階不得高於警報價')
+    assert ALERT_PRICE_LOW >= _LIQ_BASE * 1.2, (
+        '警報價距要防守那台的強平價不足 20%——開新批次後若強平更高，要改 LIQ_BASE 與階梯')
+
+
 def test_ladder_monotonic():
     trigs = [s[0] for s in DEFENSE_LADDER]
     liqs  = [s[3] for s in DEFENSE_LADDER]

@@ -84,6 +84,15 @@ def validate_local_schema() -> list:
         widths = {len(r) for r in cp.DEFENSE_LADDER}
         if widths != {5}:
             problems.append(f'DEFENSE_LADDER 每列應 5 欄（trig/action/add_btc/liq_after/note），實際 {sorted(widths)}')
+    # 2026-11-20（余力 D 紅隊 D4 No.7）：要防守那台的強平價須低於第 1 階、警報至少高它 20%
+    liq = getattr(cp, 'LIQ_BASE', None)
+    if liq is not None and getattr(cp, 'DEFENSE_LADDER', None):
+        first = cp.DEFENSE_LADDER[0][0]
+        alp = getattr(cp, 'ALERT_PRICE_LOW', None)
+        if not (liq < first <= (alp if alp is not None else first)):
+            problems.append(f'LIQ_BASE {liq} 須 < 第 1 階觸發價 {first} ≤ 警報價 {alp}')
+        if alp is not None and alp < liq * 1.2:
+            problems.append(f'警報價 {alp} 距 LIQ_BASE {liq} 不足 20%（新批次強平更高時要改 LIQ_BASE 與階梯）')
     if hasattr(cp, 'DEFENSE_DECISION_CARD') and len(cp.DEFENSE_DECISION_CARD) < 6:
         problems.append(f'DEFENSE_DECISION_CARD 應 ≥6 行（含 C-R5 反彈側＋U5-2 預設政策），實際 {len(cp.DEFENSE_DECISION_CARD)}')
     return problems

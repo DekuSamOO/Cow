@@ -239,7 +239,9 @@ def get_decision_data():
                     summary["cycle_ath_date"] = cycle_ath_dt.strftime("%Y-%m-%d")
                     # 升槓桿哨兵用：距 ATH 天數（第二道閘門）
                     _ath_naive = cycle_ath_dt.replace(tzinfo=None)
-                    summary["days_since_ath"] = (datetime.now() - _ath_naive).days
+                    # 一律 UTC：ATH 日期是 UTC 日線；本機（台北）跑 datetime.now() 會多算一天
+                    # （2026-11-20，余力 D 紅隊 D1 No.6；雲端 Actions 本來就是 UTC）
+                    summary["days_since_ath"] = (_utc_now_naive() - _ath_naive).days
                 if cycle_ath > 0:
                     summary["from_high_pct"] = (current_price - cycle_ath) / cycle_ath * 100
                     # 熊底確認哨兵 D3 用：自 ATH 之後、且「已跌逾 30%」之後的最低收盤。
@@ -256,7 +258,7 @@ def get_decision_data():
                                 # 距低點天數以日曆天計：cron 執行時當日 K 棒可能還沒收，
                                 # 用 K 棒位移會少算一天（BTC_WATCH 手上是完整日線，故用位移）。
                                 summary["days_since_bear_low"] = (
-                                    datetime.now() - _lo_i.to_pydatetime().replace(tzinfo=None)).days
+                                    _utc_now_naive() - _lo_i.to_pydatetime().replace(tzinfo=None)).days
                     except Exception:
                         pass   # 顯示/提醒用，取不到就讓 D3 哨兵自己 skip，不阻斷主推播
 
@@ -495,6 +497,22 @@ def _compute_radars(btc_df, curr, latest_funding, price) -> dict:
         # ETF 快取最新一筆距今天數（>4 天時卡片提示資料過舊，週末 1-3 天屬正常）
         "etf_stale_days": (etf or {}).get("stale_days"),
     }
+
+
+def _utc_now_naive() -> datetime:
+    """UTC 現在（naive）。日線與 ATH／低點日期都是 UTC 日切，天數差一律用它。"""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _closed_lag_days(closed_date) -> "int | None":
+    """收完日線最後一筆距 UTC 今天幾天（正常＝1：昨天收完）。日期缺值回 None（不判定）。"""
+    if not closed_date:
+        return None
+    try:
+        d = datetime.strptime(str(closed_date)[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
+    return (datetime.now(timezone.utc).date() - d).days
 
 
 class LineSendError(RuntimeError):
@@ -920,7 +938,23 @@ def maybe_send_leverage_window_alert(data: dict, dry_run: bool = False) -> None:
             "情境一是目前唯一活著的出路，這則哨兵瞎掉＝窗口開了也不會有人通知。",
             dry_run=dry_run)
         return
+    # 收完日線落後 >1 天＝主源少了一天，AHR999 是舊值（2026-11-20，余力 D 紅隊 D2 No.9；
+    # 原本只有套保做這道檢查，套保停用後升槓桿沒人管）。
+    _lag = _closed_lag_days(data.get("ahr999_closed_date"))
+    if _lag is not None and _lag > 1:
+        _maybe_send_data_gap_alert(
+            "leverage",
+            f"收完日線最後一筆是 {data.get('ahr999_closed_date')}（落後 {_lag} 天），"
+            "AHR999 是舊值，本場不判定開／關窗與批次。",
+            dry_run=dry_run)
+        return
     _clear_data_gap_flag("leverage", dry_run=dry_run)
+
+    # 情境一／二互斥（2026-11-20，余力 D 紅隊 D2 No.6）：D3 熊底已確認＝已進情境二，
+    # 升槓桿窗口只顯示、不再推批次（剩餘 B 依 SOP 併入情境二 F-2 網格）。
+    if _load_escape_state().get("d3_confirmed"):
+        print("OK 熊底確認 D3 已成立（情境二），升槓桿窗口只顯示、不推批次。")
+        return
 
     # 升槓桿批次也是「只推一次」的計數（lev_batches_sent）：還原到舊／空 state 會重推已投的批次，
     # 或在 lev_window_open=False 的舊 state 上重推「[開啟] 第 1/6 批」（2026-11-20，余力 D 紅隊 D2 No.1）。
@@ -1127,6 +1161,39 @@ def maybe_send_bear_bottom_confirm_alert(data: dict, dry_run: bool = False) -> N
                   "（任一為 None 就無法判定 c1/c2/c3）。",
             dry_run=dry_run)
         return
+    # 收完日線落後 >1 天＝收盤是舊值（2026-11-20，余力 D 紅隊 D2 No.9）
+    _lag = _closed_lag_days(data.get("close_closed_date"))
+    if _lag is not None and _lag > 1:
+        _maybe_send_data_gap_alert(
+            "d3", f"收完日線最後一筆是 {data.get('close_closed_date')}（落後 {_lag} 天），"
+                  "收盤是舊值，本場不判定 c1/c3。",
+            dry_run=dry_run)
+        return
+
+    # D3 誤報重置（SOP F-6；2026-11-20，余力 D 紅隊 D2 No.7）：已確認後收盤跌破「確認當時的低點」
+    # ＝那次確認是誤報，清旗標並推一則重置，之後依新低點重新判定。舊版旗標寫入後永不清除。
+    _st = _load_escape_state()
+    _cl = _st.get("d3_confirmed_low")
+    if _st.get("d3_confirmed") and _cl and judge < float(_cl):
+        if dry_run:
+            print(f"[dry-run] D3 誤報重置：收盤 {judge:,.0f} < 確認時低點 {float(_cl):,.0f}（未發送）")
+            return
+        try:
+            send_line_message({"type": "text", "text": "\n".join([
+                "[D3 誤報重置] 熊底確認撤回",
+                f"收完日線收盤 ${judge:,.0f} 跌破 {_st.get('d3_confirmed_date')} 確認當時的低點 ${float(_cl):,.0f}。",
+                "依 SOP F-6：那次 D3 視為誤報，情境二暫停；之後以新低點重新判定 c1／c2／c3。",
+                "已開的 D3 網格與注資照 SOP 情境二處理，不因本則自動動作。",
+            ])})
+        except Exception as e:
+            print(f"X D3 誤報重置推播失敗（不清旗標，下次重試）: {e}")
+            return
+        for k in ("d3_confirmed", "d3_confirmed_date", "d3_confirmed_low"):
+            _st.pop(k, None)
+        _save_escape_state(_st)
+        print("! D3 誤報重置已推播，旗標已清。")
+        return
+
     # cycle_ath 必傳：沒有它就等於少掉 c3「仍在熊市」閘門（2026-08-25 新增）
     d3 = d3_status(judge, lo, data.get("bear_low_date"),
                    data.get("days_since_bear_low"),
@@ -1183,7 +1250,7 @@ def maybe_send_bear_bottom_confirm_alert(data: dict, dry_run: bool = False) -> N
         f"   上限 ${plan['upper']:,.0f}（下限 x {_config.D3_GRID_STEP}^{plan['grid_count']}）"
         f"｜格數 {plan['grid_count']}",
         f"   強平價粗估 ${plan['liq_estimate']:,.0f}（現價 x {_config.D3_GRID_LIQ_MULT_2X}，"
-        "⚠️僅估算，開單後務必讀 App 實際強平價覆蓋，差 >1% 停下）",
+        "⚠️僅估算，開單後務必讀 App 實際強平價覆蓋，差 >1% 且無法解釋才停下）",
         "   保證金＝現貨+屯幣寶當下持有全部 BTC（自己讀 App/Notion，不設止盈止損）",
         "3. 兩台馬丁繼續跑，不要現在關，當強平緩衝：",
         "   價格跌到「網格 App 實際強平價 x 1.10」時哨兵會另推一則提醒注資",
@@ -1209,6 +1276,7 @@ def maybe_send_bear_bottom_confirm_alert(data: dict, dry_run: bool = False) -> N
         return
     state["d3_confirmed"] = True
     state["d3_confirmed_date"] = str(date.today())
+    state["d3_confirmed_low"] = float(lo)          # 誤報重置的基準（F-6）
     _save_escape_state(state)
     print("! 熊底確認 D3 已推播。")
 

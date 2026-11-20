@@ -13,6 +13,11 @@ on:
         required: false
         default: 'false'
 
+# 2026-11-20（余力 D 紅隊 D2 No.3）：同一時間只跑一場（手動 dispatch 撞上整點排程時排隊，避免雙推）
+concurrency:
+  group: price-alert
+  cancel-in-progress: false
+
 jobs:
   check_price:
     runs-on: ubuntu-22.04
@@ -100,7 +105,8 @@ jobs:
       # 無論是否觸發警報，都上傳最新狀態（保留 90 天，見下方 retention-days）
       - name: Upload alert state
         # 還原失敗那場是空 state，不可上傳（否則成為最新 artifact，下一場以空狀態接續）
-        if: env.STATE_RESTORE_FAILED != '1'
+        # always()：腳本中途丟例外也上傳已存檔的狀態（D2 No.3）；還原失敗那場例外
+        if: always() && env.STATE_RESTORE_FAILED != '1'
         uses: actions/upload-artifact@v5
         with:
           name: alert-state

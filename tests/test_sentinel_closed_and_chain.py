@@ -141,3 +141,78 @@ def test_leverage_first_run_empty_state_still_opens(notify, env):
     notify.maybe_send_leverage_window_alert(_lev_open())
     assert any("[開啟] 升槓桿窗口" in x for x in texts())
     assert load().get("lev_batches_sent") == 1
+
+
+# ── D2 No.9：收完日線落後 >1 天＝舊值，不判定 ───────────────────────────
+
+def _ago(n):
+    return str(datetime.now(timezone.utc).date() - timedelta(days=n))
+
+
+def test_leverage_stale_closed_bar_is_data_gap(notify, env):
+    sent, texts, load, _ = env
+    notify.maybe_send_leverage_window_alert({**_lev_open(), "ahr999_closed_date": _ago(3)})
+    t = texts()
+    assert any("哨兵失明" in x and "落後 3 天" in x for x in t)
+    assert not any("[開啟] 升槓桿窗口" in x for x in t)
+    assert not load().get("lev_batches_sent")
+
+
+def test_leverage_fresh_closed_bar_opens(notify, env):
+    sent, texts, load, _ = env
+    notify.maybe_send_leverage_window_alert({**_lev_open(), "ahr999_closed_date": _ago(1)})
+    assert any("[開啟] 升槓桿窗口" in x for x in texts())
+
+
+def test_d3_stale_closed_bar_is_data_gap(notify, env, monkeypatch):
+    sent, texts, load, _ = env
+    monkeypatch.setattr(notify, "_state_chain_broken", lambda *a, **k: False)
+    notify.maybe_send_bear_bottom_confirm_alert({**_d3_data(61_000.0), "close_closed_date": _ago(4)})
+    assert any("哨兵失明" in x for x in texts())
+    assert not load().get("d3_confirmed")
+
+
+# ── D2 No.6：D3 已確認（情境二）→ 升槓桿不推批次 ──────────────────────────
+
+def test_leverage_silent_after_d3_confirmed(notify, env):
+    sent, texts, load, state_file = env
+    state_file.write_text(json.dumps({"d3_confirmed": True}), encoding="utf-8")
+    notify.maybe_send_leverage_window_alert(_lev_open())
+    assert not any("升槓桿窗口" in x for x in texts())
+    assert not load().get("lev_batches_sent")
+
+
+# ── D2 No.7：D3 誤報重置 ─────────────────────────────────────────────────
+
+def test_d3_confirm_records_low(notify, env, monkeypatch):
+    sent, texts, load, _ = env
+    monkeypatch.setattr(notify, "_state_chain_broken", lambda *a, **k: False)
+    notify.maybe_send_bear_bottom_confirm_alert(_d3_data(judge_close=61_000.0))
+    assert load().get("d3_confirmed_low") == 40_000.0
+
+
+def test_d3_false_alarm_reset_when_close_breaks_confirmed_low(notify, env, monkeypatch):
+    sent, texts, load, state_file = env
+    monkeypatch.setattr(notify, "_state_chain_broken", lambda *a, **k: False)
+    state_file.write_text(json.dumps({"d3_confirmed": True, "d3_confirmed_date": "2026-01-01",
+                                      "d3_confirmed_low": 40_000.0}), encoding="utf-8")
+    notify.maybe_send_bear_bottom_confirm_alert(_d3_data(judge_close=39_000.0))
+    assert any("D3 誤報重置" in x for x in texts())
+    st = load()
+    assert "d3_confirmed" not in st and "d3_confirmed_low" not in st
+
+
+def test_d3_no_reset_while_above_confirmed_low(notify, env, monkeypatch):
+    sent, texts, load, state_file = env
+    monkeypatch.setattr(notify, "_state_chain_broken", lambda *a, **k: False)
+    state_file.write_text(json.dumps({"d3_confirmed": True, "d3_confirmed_low": 40_000.0}),
+                          encoding="utf-8")
+    notify.maybe_send_bear_bottom_confirm_alert(_d3_data(judge_close=41_000.0))
+    assert not any("誤報重置" in x for x in texts())
+    assert load().get("d3_confirmed") is True
+
+
+def test_utc_day_count_helper(notify):
+    assert notify._closed_lag_days(_ago(1)) == 1
+    assert notify._closed_lag_days(None) is None
+    assert abs((notify._utc_now_naive() - datetime.now(timezone.utc).replace(tzinfo=None)).total_seconds()) < 5
