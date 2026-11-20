@@ -208,15 +208,25 @@ def test_compact_rows_handles_missing():
 
 
 def test_d3_grid_plan_bounds_and_liq_estimate():
-    """下限=前波新低本身；上限=下限 x step^count；強平估算=開單價 x liq_mult。"""
+    """下限=前波新低本身；上限=下限 x step^(count−1)（App 格數＝價格線數）；強平估算=開單價 x liq_mult。"""
     plan = d3_grid_plan(lower_bound=50_000.0, open_price=80_000.0,
                          grid_step=1.0074, grid_count=100, liq_mult=0.667)
     assert plan["lower"] == 50_000.0
-    assert abs(plan["upper"] - 50_000.0 * (1.0074 ** 100)) < 1e-6
+    assert abs(plan["upper"] - 50_000.0 * (1.0074 ** 99)) < 1e-6
     assert plan["grid_count"] == 100
     assert abs(plan["liq_estimate"] - 80_000.0 * 0.667) < 1e-6
     # 上限必須高於下限（100 格、每格漲 0.74% 是正報酬率）
     assert plan["upper"] > plan["lower"]
+
+
+def test_grid_upper_matches_app_line_convention():
+    """App「N 格」＝N 條價格線＝N−1 個間距：用 App 實測相鄰比反推，上限要回到原區間頂。
+    （假數字區間 10,000～20,000；比例關係與 2026-11-13 實測同型，不放真實部位數字）"""
+    from core.leverage_window import grid_upper
+    ratio = (20_000.0 / 10_000.0) ** (1 / 99)        # App 掛單相鄰比（100 條線）
+    assert abs(grid_upper(10_000.0, ratio, 100) - 20_000.0) < 1e-6
+    # 舊式 ^N 會多算一格、超過區間頂
+    assert 10_000.0 * ratio ** 100 > 20_000.0 * 1.005
 
 
 def test_d3_grid_plan_missing_inputs_returns_none():
@@ -464,7 +474,8 @@ def test_batch_plan_lines():
     t = "\n".join(batch_plan_lines(87_654.32, 3, 6, 5_000.0, 1.0074, 100))
     assert "剩餘 4 批（含本批）" in t
     assert "網格下限參考 $85,000" in t and "$87,654" in t and "自訂" in t
-    assert f"網格上限 ${85_000 * 1.0074 ** 100:,.0f}" in t
+    assert f"網格上限 ${85_000 * 1.0074 ** 99:,.0f}" in t
+    assert "1.0074^99" in t
     assert "馬丁" in t and "LIQ_BASE" in t
     assert "剩餘 1 批" in "\n".join(batch_plan_lines(87_654.32, 6, 6, 5_000.0, 1.0074, 100))
     gap = "\n".join(batch_plan_lines(None, 2, 6, 5_000.0, 1.0074, 100))

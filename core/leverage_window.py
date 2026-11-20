@@ -372,6 +372,21 @@ def rule1_grid_floor(low, round_usd):
     return float(int(float(low) // step)) * step
 
 
+def grid_upper(lower, grid_step, grid_count):
+    """規則二：等比網格上限＝下限 x grid_step^(grid_count − 1)。
+
+    派網 App 的「格數 N」＝N 條價格線＝**N−1 個間距**（2026-11-13 實測：100 格網格的
+    App 掛單相鄰比＝(上限/下限)^(1/99)）。舊式 ^N 多算一格，上限偏高約 0.74%
+    （2026-11-20 余力 C 事實對齊 C1 No.4 更正，finance-calc-reviewer 獨立驗算一致）。
+    """
+    return float(lower) * (float(grid_step) ** (int(grid_count) - 1))
+
+
+def grid_upper_label(grid_step, grid_count):
+    """推播用的公式字樣，與 grid_upper 同步（例：`下限 x 1.0074^99`）。"""
+    return f"下限 x {grid_step}^{int(grid_count) - 1}"
+
+
 def batch_plan_lines(low, batch, n, round_usd, grid_step, grid_count):
     """情境一批次推播的「這批怎麼開」行（純函數供測試；2026-11-20 立）。
 
@@ -385,10 +400,11 @@ def batch_plan_lines(low, batch, n, round_usd, grid_step, grid_count):
     if floor is None:
         lines.append("網格下限：本波低點資料缺，照規則一自己抓（前波新低往下抓整數）")
     else:
-        upper = floor * (float(grid_step) ** int(grid_count))
+        upper = grid_upper(floor, grid_step, grid_count)
         lines.append(f"網格下限參考 ${floor:,.0f}（本波低點 ${float(low):,.0f} 往下抓整數，"
                      "規則一；實際由你自訂）")
-        lines.append(f"網格上限 ${upper:,.0f}（參考下限 x {grid_step}^{int(grid_count)}，等比）")
+        lines.append(f"網格上限 ${upper:,.0f}（參考{grid_upper_label(grid_step, grid_count)}，"
+                     f"{int(grid_count)} 格＝{int(grid_count) - 1} 個間距，等比）")
     lines += [
         "馬丁：這批要不要平由你決定（可再延後）。平了 -> BTC 併入剩餘 B，",
         "  並把 Cow 防守階梯的該馬丁那一階拿掉、更新 secret、跑指紋驗證（SOP 步驟 6）",
@@ -400,7 +416,7 @@ def batch_plan_lines(low, batch, n, round_usd, grid_step, grid_count):
 def d3_grid_plan(lower_bound, open_price, grid_step, grid_count, liq_mult):
     """D3 觸發後的 2X 網格參數（`1a BTC部位SOP.md` 情境二 F-2）。
 
-    下限＝前波新低本身；上限＝下限 x grid_step^grid_count；強平價為**粗估**
+    下限＝前波新低本身；上限＝grid_upper（下限 x grid_step^(grid_count−1)）；強平價為**粗估**
     （開單價 x liq_mult）。⚠️ liq_mult 不可信到能省略 App 覆蓋這一步——
     No.6 名義 L 該是 0.667、App 實際強平價落在 0.554（見 config_private.py 附註），
     差距達 17%。本函式只給「先算個數量級」的估算，開單後仍必須讀 App 訂單詳情
@@ -409,7 +425,7 @@ def d3_grid_plan(lower_bound, open_price, grid_step, grid_count, liq_mult):
     if lower_bound is None or open_price is None:
         return None
     lower = float(lower_bound)
-    upper = lower * (float(grid_step) ** int(grid_count))
+    upper = grid_upper(lower, grid_step, grid_count)
     return {
         "lower": lower,
         "upper": upper,

@@ -1141,7 +1141,7 @@ def maybe_send_bear_bottom_confirm_alert(data: dict, dry_run: bool = False) -> N
     回測見 `Work\\BTC幣本位網格去留評估\\scripts\\X1_d3_relaunch_grid.py`）。
 
     **2026-08-26 二次改寫**：網格下限/上限/格數改為算出確切數字（`core.leverage_window
-    .d3_grid_plan`，純算術：下限=前波新低、上限=下限×1.0074^100，不依賴使用者保證金額，
+    .d3_grid_plan`，純算術：下限=前波新低、上限=下限×1.0074^99（100 格＝99 個間距，2026-11-20 更正），不依賴使用者保證金額，
     可以自動算）。強平價**仍只給粗估**——那需要「開單價」且歷史對過 App 實際強平價
     落差達 17%（config_private.py 附註），本函式不試圖假裝算得準，只給量級並保留
     「以 App 實際值覆蓋」的警語。保證金 BTC 數量（現貨＋屯幣寶）本函式仍不試圖算，
@@ -1248,7 +1248,7 @@ def maybe_send_bear_bottom_confirm_alert(data: dict, dry_run: bool = False) -> N
         "1. 套保機器人若還有未平批次，先到者全平，未建批次取消",
         "2. 用現貨+屯幣寶（不含馬丁）開 2X 幣本位網格：",
         f"   下限參考 ${plan['lower']:,.0f}（前波新低 ${lo:,.0f} 往下抓整數，規則一；實際由你自訂）",
-        f"   上限 ${plan['upper']:,.0f}（下限 x {_config.D3_GRID_STEP}^{plan['grid_count']}）"
+        f"   上限 ${plan['upper']:,.0f}（下限 x {_config.D3_GRID_STEP}^{plan['grid_count'] - 1}）"
         f"｜格數 {plan['grid_count']}",
         f"   強平價粗估 ${plan['liq_estimate']:,.0f}（現價 x {_config.D3_GRID_LIQ_MULT_2X}，"
         "⚠️僅估算，開單後務必讀 App 實際強平價覆蓋，差 >1% 且無法解釋才停下）",
@@ -1313,13 +1313,14 @@ def maybe_send_grid_floor_shift_alert(data: dict, dry_run: bool = False) -> None
     if _state_chain_broken("網格下限下移", dry_run=dry_run):
         return
 
-    upper = floor * (D3_GRID_STEP ** D3_GRID_COUNT)
+    from core.leverage_window import grid_upper, grid_upper_label
+    upper = grid_upper(floor, D3_GRID_STEP, D3_GRID_COUNT)
     lines = [
         "[網格下限下移] 本波低點創新低",
         f"本波低點 ${lo:,.0f}（{data.get('bear_low_date')}），跌破舊參考下限 ${float(prev):,.0f}",
         "",
         f"下一批／D3 網格下限參考改為 ${floor:,.0f}（往下抓整數，實際由你自訂）",
-        f"上限參考 ${upper:,.0f}（下限 x {D3_GRID_STEP}^{D3_GRID_COUNT}）",
+        f"上限參考 ${upper:,.0f}（{grid_upper_label(D3_GRID_STEP, D3_GRID_COUNT)}）",
         "既有網格若下限是舊值：價格已在區間下方，下方買單已全部成交、不再買進（不是強平）",
         "D3 熊底確認改以新低點重算：c1 價位下移、距低天數歸零",
     ]

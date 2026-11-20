@@ -205,7 +205,7 @@ LEVERAGE_MANUAL_ADJUSTMENTS: tuple = (
 
 # ── D3 熊底確認後的 2X 網格參數（2026-08-26；1a BTC部位SOP 情境二 F-2）──
 D3_GRID_STEP: float = 1.0074        # 每格漲幅 0.74%
-D3_GRID_COUNT: int = 100            # 網格數；上限 = 下限 x D3_GRID_STEP^D3_GRID_COUNT
+D3_GRID_COUNT: int = 100            # 網格數（App「格數」＝價格線數）；上限 = 下限 x D3_GRID_STEP^(D3_GRID_COUNT-1)，見 leverage_window.grid_upper
 # 強平價粗估乘數：開單價 x 此值。⚠️ 只是估算量級，No.6 名義 L 該是 0.667、
 # App 實際強平價落在 0.554（差 17%），開單後一律以 App 訂單詳情覆蓋，差 >1% 停下。
 D3_GRID_LIQ_MULT_2X: float = 0.667
