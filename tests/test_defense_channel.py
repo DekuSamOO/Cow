@@ -149,3 +149,70 @@ def test_legacy_state_without_event_keys_is_safe(patched, monkeypatch):
         {"last_defense_date": "2026-07-13", "armed_defense": False}))
     _run_at(pa, monkeypatch, pa.ALERT_PRICE_LOW - 100, clock, t0)
     assert sent["full"] == [] and sent["reminder"] == [] and sent["close"] == []
+
+
+# ── 防守階梯到價推播（2026-11-20 立）：首響後下探到新一階才推，每階每事件一次 ──
+# 數字一律顯假值（公開檔禁真值，CLAUDE.md 已知陷阱 21）
+
+_FAKE_LOW = 99_999.0
+_FAKE_LADDER = (
+    (88_888.0, "範例動作A", 0.1, 11_111.0, "附註A"),
+    (77_777.0, "範例動作B", 0.2, 10_000.0, ""),
+    (66_666.0, "範例動作C", 0.3, 9_999.0, "附註C"),
+)
+
+
+@pytest.fixture
+def tiered(patched, monkeypatch):
+    pa, state_file, sent, clock, t0 = patched
+    monkeypatch.setattr(pa, "ALERT_PRICE_LOW", _FAKE_LOW)
+    monkeypatch.setattr(pa, "DEFENSE_LADDER", _FAKE_LADDER)
+    sent["tier"] = []
+    monkeypatch.setattr(pa, "notify_defense_tier",
+                        lambda p, hits: sent["tier"].append((p, [i for i, _ in hits])) or True)
+    return pa, state_file, sent, clock, t0
+
+
+def test_tier_push_lifecycle(tiered, monkeypatch):
+    pa, state_file, sent, clock, t0 = tiered
+    h = lambda x: t0 + timedelta(hours=x)
+
+    _run_at(pa, monkeypatch, 95_000.0, clock, h(0))          # 首響，未觸及任何階
+    assert len(sent["full"]) == 1 and sent["tier"] == []
+    _run_at(pa, monkeypatch, 88_000.0, clock, h(1.2))        # 下探到第 1 階
+    assert sent["tier"] == [(88_000.0, [1])]
+    _run_at(pa, monkeypatch, 87_000.0, clock, h(2.2))        # 同一階不重推
+    assert len(sent["tier"]) == 1
+    _run_at(pa, monkeypatch, 60_000.0, clock, h(30))         # 窗已關仍推；一次跳兩階合併一則
+    assert sent["tier"][-1] == (60_000.0, [2, 3])
+    assert sent["close"], "決策窗應已關閉"
+    _run_at(pa, monkeypatch, 59_000.0, clock, h(31))
+    assert len(sent["tier"]) == 2
+
+    # 回升 rearm → 清空；新事件首響時已在第 1 階下 → 算已通知，不另推
+    _run_at(pa, monkeypatch, _FAKE_LOW + pa.ALERT_PRICE_REARM_GAP + 1, clock, h(40))
+    assert "defense_tiers_notified" not in json.loads(state_file.read_text())
+    _run_at(pa, monkeypatch, 80_000.0, clock, h(50))
+    assert len(sent["full"]) == 2 and len(sent["tier"]) == 2
+    _run_at(pa, monkeypatch, 77_000.0, clock, h(51))         # 新事件下探到第 2 階
+    assert sent["tier"][-1] == (77_000.0, [2])
+
+
+def test_tier_push_failure_retries(tiered, monkeypatch):
+    pa, state_file, sent, clock, t0 = tiered
+    _run_at(pa, monkeypatch, 95_000.0, clock, t0)
+    monkeypatch.setattr(pa, "notify_defense_tier", lambda p, hits: False)
+    _run_at(pa, monkeypatch, 88_000.0, clock, t0 + timedelta(hours=1.2))
+    assert json.loads(state_file.read_text()).get("defense_tiers_notified") == []
+    monkeypatch.setattr(pa, "notify_defense_tier",
+                        lambda p, hits: sent["tier"].append((p, [i for i, _ in hits])) or True)
+    _run_at(pa, monkeypatch, 88_000.0, clock, t0 + timedelta(hours=1.5))
+    assert sent["tier"] == [(88_000.0, [1])]
+
+
+def test_tier_alert_text():
+    from service.notification.facade import build_defense_tier_alert
+    t = build_defense_tier_alert(76_000.0, [(2, _FAKE_LADDER[1]), (3, _FAKE_LADDER[2])])
+    assert "76,000" in t and "第2階 $77,777" in t and "第3階 $66,666" in t
+    assert "範例動作B" in t and "~$9,999" in t and "⚠ 附註C" in t
+    assert "第1階" not in t

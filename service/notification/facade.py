@@ -165,8 +165,8 @@ def build_defense_message(price: float, now_str: str = None) -> str:
     防守推播文案 — 由 config.DEFENSE_LADDER 動態組裝（單一真實來源，數字勿在本檔寫死）。
     抽成純函數供測試對拍（2026-07-04 C-1 修正：舊版寫死「關 2 台馬丁→強平 $37,000」
     為過時計畫且數字錯置，詳見 _governance/AUDIT-SUMMARY C-1 與 vault 馬丁數學稽核）。
-    依現價標示各階狀態：🔴=已觸發應執行、⚪=尚未觸發（完整推移表一次推送——
-    price_alert 每日最多推一次，後續下探不會逐階再推）。
+    依現價標示各階狀態：🔴=已觸發應執行、⚪=尚未觸發（完整推移表一次推送；
+    2026-11-20 起後續下探到新一階另推 build_defense_tier_alert 短訊息）。
 
     2026-09-07：P4 馬丁止盈重啟偵測整組移除（使用者拍板）。原因見 README 更新紀錄——
     Actions 美國 IP 取不到行情恆回 None、從未推播過一則，且六台幣本位網格全關後
@@ -227,6 +227,30 @@ def build_defense_window_close(price: float) -> str:
         f"📌 依 U5-② 預設政策：未行動＝不防守，本事件不再提醒\n"
         f"（價格回升重新武裝後，下次跌破會重新開窗）"
     )
+
+
+def build_defense_tier_alert(price: float, hits: list) -> str:
+    """防守事件期間下探到新一階的到價推播（2026-11-20 立；純函數供測試對拍）。
+
+    hits：[(階序 1-based, DEFENSE_LADDER 列), ...]，數字一律來自該列（單一真實來源）。
+    """
+    lines = [f"🪜 防守階梯到價：BTC ${price:,.0f}", "━━━━━━━━━━━━━━━━"]
+    for i, (trig, action, add_btc, liq_after, note) in hits:
+        lines.append(f"🔴 第{i}階 ${trig:,.0f}：{action}")
+        lines.append(f"　　+{add_btc} BTC → 強平價 ~${liq_after:,.0f}")
+        if note:
+            lines.append(f"　　⚠ {note}")
+    lines += [
+        "━━━━━━━━━━━━━━━━",
+        "要不要做由你此刻決定（決策卡見首響）；不做＝維持現狀，這一階不會再提醒",
+        "🔁 馬丁若已平倉或止盈重啟，該階作廢——執行前必對帳重算",
+    ]
+    return "\n".join(lines)
+
+
+def notify_defense_tier(price: float, hits: list) -> bool:
+    """防守階梯到價推播（price_alert.py 驅動；走防守專用通道，未設時 fallback 日常）。"""
+    return _send_defense_text(build_defense_tier_alert(price, hits))
 
 
 def _u5_window_h() -> int:

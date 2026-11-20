@@ -848,8 +848,9 @@ def maybe_send_leverage_window_alert(data: dict, dry_run: bool = False) -> None:
                         LEVERAGE_BATCH_DAYS, LEVERAGE_BATCH_COUNT,
                         LEVERAGE_MANUAL_ADJUSTMENTS)
 
+    from config import (GRID_FLOOR_ROUND_USD, D3_GRID_STEP, D3_GRID_COUNT)
     from core.leverage_window import (gate_status, advance_batches, trigger_price,
-                                      apply_manual_adjustments)
+                                      apply_manual_adjustments, batch_plan_lines)
 
     gate = gate_status(data.get("ahr999"), data.get("days_since_ath"),
                        LEVERAGE_AHR999_MAX, LEVERAGE_MIN_DAYS_FROM_ATH)
@@ -880,6 +881,11 @@ def maybe_send_leverage_window_alert(data: dict, dry_run: bool = False) -> None:
         state, gate["ok"], str(today), LEVERAGE_BATCH_DAYS, n)
     sig = int(state.get("lev_signal_days") or 0)
 
+    def _plan(b: int) -> list:
+        """這批的金額除數、規則一下限／上限、馬丁與開單後提醒（2026-11-20 補）。"""
+        return batch_plan_lines(data.get("bear_low_since_ath"), b, n,
+                                GRID_FLOOR_ROUND_USD, D3_GRID_STEP, D3_GRID_COUNT)
+
     def _push(lines: list) -> bool:
         """訊息一律以行陣列組裝，換行交給 join——本檔既有慣用法，
         且原始碼不出現反斜線（本檔曾被反斜線逸出咬壞過）。"""
@@ -903,7 +909,8 @@ def maybe_send_leverage_window_alert(data: dict, dry_run: bool = False) -> None:
             f"投入第 1/{n} 批（每批 1/{n}，間隔 {LEVERAGE_BATCH_DAYS} 個「訊號日」）",
             "配置：2X 無額外保證金，強平價 = 開單價 x 0.667（2026-08-24 拍板）",
             "開單後務必讀 App 實際強平價比對，差 > 1% 且無法解釋即停止",
-            "區間下限 = 前波新低下方；上限 = 下限 x 1.0074^格數（每格 0.74%）",
+            "",
+            *_plan(1),
         ]):
             return
         print(f"! 升槓桿窗口開啟（AHR999 {ahr:.3f}／距 ATH {dath} 天），已發第 1 批。")
@@ -917,6 +924,8 @@ def maybe_send_leverage_window_alert(data: dict, dry_run: bool = False) -> None:
             f"AHR999 {ahr:.3f}｜距 ATH {dath} 天｜BTC ${price:,.0f}",
             f"累計訊號日 {sig}（窗口自 {state.get('lev_window_start')} 開啟；期間關窗不重置）",
             "配置同前：2X 無額外保證金，強平 = 開單價 x 0.667",
+            "",
+            *_plan(batch),
         ]):
             return
         print(f"! 升槓桿第 {batch}/{n} 批提醒已發送。")

@@ -445,3 +445,27 @@ def test_production_adjustment_is_well_formed():
     for a in LEVERAGE_MANUAL_ADJUSTMENTS:
         assert set(a) == {"id", "window_start", "expect_sent", "add_batches", "add_signal_days"}
         assert a["add_signal_days"] == a["add_batches"] * LEVERAGE_BATCH_DAYS
+
+
+# ── 規則一網格下限與批次推播行（2026-11-20 立；顯假值）──
+
+def test_rule1_grid_floor_rounds_down_to_barrier():
+    from core.leverage_window import rule1_grid_floor
+    assert rule1_grid_floor(87_654.0, 5_000.0) == 85_000.0
+    assert rule1_grid_floor(89_999.99, 5_000.0) == 85_000.0
+    assert rule1_grid_floor(85_000.0, 5_000.0) == 85_000.0      # 剛好在關卡上不再往下
+    assert rule1_grid_floor(84_999.0, 5_000.0) == 80_000.0
+    assert rule1_grid_floor(None, 5_000.0) is None
+    assert rule1_grid_floor(0, 5_000.0) is None
+
+
+def test_batch_plan_lines():
+    from core.leverage_window import batch_plan_lines
+    t = "\n".join(batch_plan_lines(87_654.32, 3, 6, 5_000.0, 1.0074, 100))
+    assert "剩餘 4 批（含本批）" in t
+    assert "網格下限 $85,000" in t and "$87,654" in t
+    assert f"網格上限 ${85_000 * 1.0074 ** 100:,.0f}" in t
+    assert "馬丁" in t and "LIQ_BASE" in t
+    assert "剩餘 1 批" in "\n".join(batch_plan_lines(87_654.32, 6, 6, 5_000.0, 1.0074, 100))
+    gap = "\n".join(batch_plan_lines(None, 2, 6, 5_000.0, 1.0074, 100))
+    assert "本波低點資料缺" in gap and "網格上限" not in gap

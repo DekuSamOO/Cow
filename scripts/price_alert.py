@@ -4,6 +4,9 @@ scripts/price_alert.py
 
 監控關鍵門檻：
   - BTC <= config.ALERT_PRICE_LOW（防守線）→ 防守事件：馬丁格爾轉換 + 補保證金
+  - 事件期間 BTC 再下探到 DEFENSE_LADDER 某一階觸發價 → 該階到價推播（2026-11-20 立）。
+    首響當下已觸及的階算「已通知」（首響推移表已標 🔴）；之後每階每事件只推一次，
+    與 24h 決策窗獨立（窗關閉後仍會推——到新一階是新的決策點）；rearm 時清空。
 
 防重複推播：使用 alert_state.json 記錄今日已推播的警報，
 每個警報每個曆日最多推一次，避免 BTC 在門檻附近震盪時狂轟。
@@ -18,9 +21,9 @@ from datetime import datetime, timezone
 
 
 from config import (SSL_VERIFY, ALERT_PRICE_LOW, ALERT_PRICE_REARM_GAP,
-                    DEFENSE_DECISION_WINDOW_H, DEFENSE_REMINDER_HOURS)
+                    DEFENSE_DECISION_WINDOW_H, DEFENSE_REMINDER_HOURS, DEFENSE_LADDER)
 from service.notification.facade import (notify_defense_line, notify_defense_reminder,
-                                         notify_defense_window_close)
+                                         notify_defense_window_close, notify_defense_tier)
 
 if not SSL_VERIFY:
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -72,6 +75,33 @@ def _due_reminder_idx(elapsed_h: float, sent_idx: int) -> int:
     return idx
 
 
+def _hit_tier_triggers(price: float, ladder) -> list:
+    """回傳現價已觸及（price <= 觸發價）的各階觸發價（純函數供測試）。"""
+    return [float(row[0]) for row in ladder if price <= float(row[0])]
+
+
+def _new_tier_hits(price: float, ladder, notified) -> list:
+    """回傳「已觸及但本事件尚未通知」的 (階序 1-based, 該列) 清單（純函數供測試）。"""
+    done = {float(t) for t in (notified or [])}
+    return [(i, row) for i, row in enumerate(ladder, 1)
+            if price <= float(row[0]) and float(row[0]) not in done]
+
+
+def _maybe_push_tiers(price: float, state: dict) -> None:
+    """事件期間（未武裝）到新一階就推；推播失敗不記為已通知，下次重試。"""
+    hits = _new_tier_hits(price, DEFENSE_LADDER, state.get("defense_tiers_notified"))
+    if not hits:
+        return
+    labels = "、".join(f"第{i}階 ${float(r[0]):,.0f}" for i, r in hits)
+    print(f"🪜 防守階梯到價：BTC ${price:,.0f} 觸及 {labels}，推播該階動作")
+    if notify_defense_tier(price, hits):
+        state["defense_tiers_notified"] = sorted(
+            set(state.get("defense_tiers_notified") or []) | {float(r[0]) for _, r in hits},
+            reverse=True)
+    else:
+        print("❌ 防守階梯推播失敗，下次執行重試")
+
+
 def fetch_btc_price() -> float | None:
     """透過 Coinbase 公開 API 取得 BTC 現價（GitHub Actions 環境適用）。"""
     try:
@@ -112,6 +142,8 @@ def main() -> None:
             state["defense_event_start"] = _now().isoformat(timespec="seconds")
             state["defense_reminder_idx"] = 0
             state["defense_window_closed"] = False
+            # 首響推移表已標出當下觸及的階，視為已通知，避免同一場再推一次
+            state["defense_tiers_notified"] = _hit_tier_triggers(price, DEFENSE_LADDER)
         elif not armed and state.get("defense_event_start") and not state.get("defense_window_closed"):
             elapsed_h = (_now() - datetime.fromisoformat(state["defense_event_start"])
                          ).total_seconds() / 3600.0
@@ -132,12 +164,16 @@ def main() -> None:
             reason = ("今日已推播" if armed
                       else f"事件已收尾（回升至 ${rearm_price:,.0f} 才重新武裝）")
             print(f"ℹ️  BTC ${price:,.0f} <= ${ALERT_PRICE_LOW:,.0f}，{reason}，略過。")
+        # 階梯到價：只在事件進行中（已推過首響、尚未 rearm）判斷，與決策窗是否關閉無關
+        if not state.get("armed_defense", True) and state.get("defense_event_start"):
+            _maybe_push_tiers(price, state)
     else:
         if not armed and price >= rearm_price:
             state["armed_defense"] = True
             state.pop("defense_event_start", None)   # U5-①：清事件狀態，下次跌破重新開窗
             state.pop("defense_reminder_idx", None)
             state.pop("defense_window_closed", None)
+            state.pop("defense_tiers_notified", None)
             print(f"🔄 BTC ${price:,.0f} >= ${rearm_price:,.0f}，防守警報重新武裝。")
         else:
             print(f"✓ BTC ${price:,.0f} > ${ALERT_PRICE_LOW:,.0f}，未觸及防守門檻。")

@@ -412,6 +412,14 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 
 ## 版本紀錄
 
+### v3.67 (2026-11-20)
+**哨兵對齊情境一建倉：防守階梯逐階到價推播、批次推播補「這批怎麼開」。**
+
+- **feat(price_alert)**: 防守事件期間（首響後、尚未重新武裝）價格下探到 `DEFENSE_LADDER` 新一階，另推一則該階動作短訊息（`facade.build_defense_tier_alert`／`notify_defense_tier`）。首響當下已觸及的階算已通知；每階每事件只推一次；與 24h 決策窗獨立（窗關閉後到新一階仍推）；推播失敗不記已通知、下次重試；重新武裝時清空 `defense_tiers_notified`。舊版只在首響列「已觸及 n/3 階」，之後下探不再推。
+- **feat(sentinel)**: 升槓桿開窗／第 N 批推播新增 `core.leverage_window.batch_plan_lines()`：這批金額除數（剩餘批數，B 由使用者自填）、規則一網格下限（本波低點向下取整到 `config.GRID_FLOOR_ROUND_USD` 關卡）與上限、馬丁平倉後要拿掉防守階並同步 secret、開單後比對強平價。舊版第 2 批起只寫「配置同前」。
+- **test**: `test_defense_channel.py` +3（階梯生命週期／推播失敗重試／文案）、`test_leverage_window.py` +2（規則一取整／批次行）。全套 **674 passed**；負向驗證：拿掉階梯呼叫與取整後 4 項失敗。
+- **ops**: `DEFENSE_CONFIG_JSON` secret 依 `config_private.py` 重新上傳（前次 2026-09-22，未跟上 11-13 改版）。
+
 ### v3.66 (2026-11-19)
 **升槓桿分批計數一次性人工校正：使用者自主提前投入一批後，哨兵批號與實際對齊。**
 
@@ -1725,4 +1733,4 @@ watcher 面板誠實化：移除已回測無效的 Hash Ribbons 參考訊號、�
 
 ---
 
-**最後更新：2026-11-19（v3.66）**
+**最後更新：2026-11-20（v3.67）**

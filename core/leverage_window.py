@@ -353,6 +353,43 @@ def compact_rows(gate, d3, price, ahr_max, min_days, batch_days=None,
     return rows
 
 
+def rule1_grid_floor(low, round_usd):
+    """規則一：網格下限＝前波新低向下取整到整數關卡（round_usd 的倍數）。
+
+    低點剛好落在關卡上照樣取該關卡——「下方」指不高於新低。
+    low 缺值或非正數回 None（呼叫端要改推「自己照規則一算」）。
+    """
+    if low is None or round_usd is None or float(low) <= 0 or float(round_usd) <= 0:
+        return None
+    step = float(round_usd)
+    return float(int(float(low) // step)) * step
+
+
+def batch_plan_lines(low, batch, n, round_usd, grid_step, grid_count):
+    """情境一批次推播的「這批怎麼開」行（純函數供測試；2026-11-20 立）。
+
+    正本：vault「1a BTC部位SOP」情境一步驟 3、4、6 與〈部署期間與之後的定投〉階段 1。
+    B 與定投到帳量只有使用者知道（Cow 不讀部位），所以金額只給除數、不給數字。
+    文字一律不放真實部位數字（本檔進公開版控）。
+    """
+    remaining = max(1, int(n) - int(batch) + 1)
+    lines = [f"這批金額＝(剩餘 B＋已到帳定投) ÷ 剩餘 {remaining} 批（含本批）"]
+    floor = rule1_grid_floor(low, round_usd)
+    if floor is None:
+        lines.append("網格下限：本波低點資料缺，照規則一自己算（前波新低向下取整到整數關卡）")
+    else:
+        upper = floor * (float(grid_step) ** int(grid_count))
+        lines.append(f"網格下限 ${floor:,.0f}（本波低點 ${float(low):,.0f} 向下取整到 "
+                     f"{float(round_usd):,.0f} 關卡，規則一）")
+        lines.append(f"網格上限 ${upper:,.0f}（下限 x {grid_step}^{int(grid_count)}，等比）")
+    lines += [
+        "馬丁：這批要不要平由你決定（可再延後）。平了 -> BTC 併入剩餘 B，",
+        "  並把 Cow 防守階梯的該馬丁那一階拿掉、更新 secret、跑指紋驗證（SOP 步驟 6）",
+        "開單後：讀 App 實際強平價；比現行防守那台更高 -> 改 LIQ_BASE 與階梯",
+    ]
+    return lines
+
+
 def d3_grid_plan(lower_bound, open_price, grid_step, grid_count, liq_mult):
     """D3 觸發後的 2X 網格參數（`1a BTC部位SOP.md` 情境二 F-2）。
 
