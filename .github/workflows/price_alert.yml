@@ -44,10 +44,17 @@ jobs:
       - name: Restore alert state from latest artifact
         env:
           GH_TOKEN: ${{ github.token }}
+        # 2026-11-20（同 daily，余力 D 紅隊 D2 No.2）：查清單失敗或下載失敗＝還原失敗，
+        # 設 STATE_RESTORE_FAILED=1 → 下方 Upload 跳過（空 state 不可蓋掉好的 artifact）、最後判 job 失敗。
+        # 本場防守仍以空 state（armed）照跑：寧可重推首響，也不漏推。
         run: |
-          META=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=alert-state&per_page=100" \
+          if ! META=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=alert-state&per_page=100" \
                  --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last
-                       | "\(.id) \(.created_at)"' || echo "")
+                       | "\(.id) \(.created_at)"'); then
+            echo "查詢 artifact 清單失敗 → 視為還原失敗"
+            echo "STATE_RESTORE_FAILED=1" >> "$GITHUB_ENV"
+            exit 0
+          fi
           ART_ID="${META%% *}"
           ART_AT="${META#* }"
           if [ -n "$ART_ID" ] && [ "$ART_ID" != "null" ]; then
@@ -56,7 +63,8 @@ jobs:
               echo "restored state from artifact $ART_ID (created_at $ART_AT)"
             else
               rm -f state.zip
-              echo "artifact $ART_ID 下載失敗，從空 state 開始"
+              echo "artifact $ART_ID 下載失敗 → 視為還原失敗（不是第一次跑）"
+              echo "STATE_RESTORE_FAILED=1" >> "$GITHUB_ENV"
             fi
           else
             echo "查無未過期的 alert-state artifact，從空 state 開始"
@@ -91,6 +99,8 @@ jobs:
 
       # 無論是否觸發警報，都上傳最新狀態（保留 90 天，見下方 retention-days）
       - name: Upload alert state
+        # 還原失敗那場是空 state，不可上傳（否則成為最新 artifact，下一場以空狀態接續）
+        if: env.STATE_RESTORE_FAILED != '1'
         uses: actions/upload-artifact@v5
         with:
           name: alert-state
@@ -107,11 +117,17 @@ jobs:
       # 失敗那則 state 未前進，下一小時重送。
       - name: Fail if any LINE push failed
         run: |
+          rc=0
+          if [ "$STATE_RESTORE_FAILED" = "1" ]; then
+            echo "本場 state 還原失敗（已跳過上傳）"
+            rc=1
+          fi
           if [ -f line_send_failures.txt ]; then
             echo "本場防守推播失敗："
             cat line_send_failures.txt
-            exit 1
+            rc=1
           fi
+          exit $rc
 
       # 任一步驟失敗時推 LINE 文字告警，避免排程靜默失敗無人知
       - name: Alert on failure

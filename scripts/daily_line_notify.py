@@ -68,7 +68,7 @@ from core.risk import compute_atr_risk
 from service.bottom_metrics import get_latest_bottom_metrics, fetch_hashrate_history_ths
 from core.sentinel_board import (crosscheck_daily_rsi,
                                  HEDGE_BATCHES, HEDGE_G3_PEAK, HEDGE_G3_WINDOW,
-                                 closed_daily_rsi)
+                                 closed_daily_rsi, closed_daily_last)
 
 
 def _get_cycle_meta(score: int):
@@ -154,7 +154,13 @@ def get_decision_data():
             # 升槓桿哨兵用：AHR999 現值（原本只算不外露）。
             # curr 是 Series，缺欄位時 .get 直接回 None；NaN 靠 _a == _a 濾掉。
             _a = curr.get("AHR999")
-            summary["ahr999"] = float(_a) if _a is not None and _a == _a else None
+            summary["ahr999_intraday"] = float(_a) if _a is not None and _a == _a else None
+            # 閘門口徑＝**收完的日線**（2026-11-20，余力 D 紅隊 D1 No.2）：curr＝iloc[-1] 可能是
+            # fetch_market_data 縫上去的今日盤中 K 棒，一天三場都吃盤中值、0.40 附近會同日開又關；
+            # 研究（T1／C5／D1_batching）用日收盤。盤中值只留 ahr999_intraday／ahr999_at_price 顯示。
+            summary["ahr999"], summary["ahr999_closed_date"] = closed_daily_last(btc_df, "AHR999")
+            # D3 c1／c3 口徑＝收完的日線收盤（PREREG「收盤自本輪最低點反彈 ≥50%」；D1 No.1）
+            summary["close_closed"], summary["close_closed_date"] = closed_daily_last(btc_df, "close")
 
             # Coinbase 與幣安都失敗 → 才用歷史 K 棒最後一筆收盤當備用，並標記為「舊價」。
             # 這個值可能是殘留的未收完日線，不是現價；顯示端要看 price_source 加警示。
@@ -163,13 +169,14 @@ def get_decision_data():
                 price_source = "stale_close"
                 print(f"⚠️ 現價兩個來源都失敗，退回 K 棒收盤 {current_price:,.1f}（可能是舊價）")
             summary["price_source"] = price_source
-            # 只供顯示／本機複核（不改哨兵判定）：summary["ahr999"] 是用 K 棒收盤算的，
+            # 只供顯示／本機複核（不改哨兵判定）：ahr999_intraday 是用最後一根 K 棒收盤算的，
             # K 棒若是殘留舊價，讀值會偏。這裡另給「以現價換算」的 AHR999：
             # AHR999 ∝ 價格²（SMA200 與冪律模型在同一天內視為不變），故 × (現價/K 棒收盤)²。
             _close_df = float(curr['close'])
             summary["df_close"] = _close_df
-            if summary.get("ahr999") is not None and _close_df > 0:
-                summary["ahr999_at_price"] = summary["ahr999"] * (current_price / _close_df) ** 2
+            if summary.get("ahr999_intraday") is not None and _close_df > 0:
+                summary["ahr999_at_price"] = (summary["ahr999_intraday"]
+                                              * (current_price / _close_df) ** 2)
 
             curr['close'] = current_price
             summary["price"] = f"${current_price:,.0f}"
@@ -702,24 +709,30 @@ def _state_chain_broken(label: str, dry_run: bool = False) -> bool:
     去重旗標寫在**當下這份（舊的）state** 裡，所以「每次還原到同一份舊 artifact」
     的情況下仍會重複提醒——那是刻意的：鏈還斷著就該一直吵。
     """
-    age = _state_artifact_age_hours()
-    if age is None or age <= STATE_STALE_HOURS:
-        return False
+    # 2026-11-20（余力 D 紅隊 D2 No.2）：「artifact 存在但這場下載失敗」workflow 會設
+    # STATE_RESTORE_FAILED=1——這時是空 state，但**不是**第一次跑，旗標確實被抹掉了，必須當斷鏈。
+    # （workflow 同時跳過 Upload，避免空 state 蓋掉好的 artifact；並在上傳步驟後判 job 失敗。）
+    if (os.getenv("STATE_RESTORE_FAILED") or "").strip() == "1":
+        why = "state artifact 存在，但這場下載失敗，哨兵是從**空狀態**開始跑的"
+    else:
+        age = _state_artifact_age_hours()
+        if age is None or age <= STATE_STALE_HOURS:
+            return False
+        if not _load_escape_state():
+            # 空 state＝第一次跑或 artifact 全過期，沒有「旗標被抹掉」的風險，照常放行。
+            return False
+        why = f"還原到的 state artifact 是 {age:.0f} 小時前的（門檻 {STATE_STALE_HOURS} 小時）"
     state = _load_escape_state()
-    if not state:
-        # 空 state＝第一次跑或 artifact 全過期，沒有「旗標被抹掉」的風險，照常放行。
-        return False
-    print(f"X {label}：還原到的狀態 artifact 已是 {age:.1f} 小時前的內容"
-          f"（門檻 {STATE_STALE_HOURS} 小時）→ 本場不送任何『只推一次』的指示。")
+    print(f"X {label}：{why} → 本場不送任何『只推一次』的指示。")
     if state.get("state_chain_warned_date") == str(date.today()) or dry_run:
         if dry_run:
             print(f"[dry-run] 狀態鏈斷裂告警（未發送）")
         return True
     lines = [
-        "[狀態鏈斷裂] 哨兵還原到的是舊狀態，本場暫停建倉類推播",
+        "[狀態鏈斷裂] 哨兵狀態不可靠（舊狀態或空狀態），本場暫停建倉類推播",
         "",
-        f"還原到的 state artifact 是 {age:.0f} 小時前的（門檻 {STATE_STALE_HOURS} 小時）。",
-        "舊狀態裡「已推播過」的旗標是缺的，照常跑會把**已經建過的批次再推一次**。",
+        f"{why}。",
+        "狀態裡「已推播過」的旗標是缺的，照常跑會把**已經建過的批次再推一次**。",
         "",
         "該做的事：不要照舊訊息下單；去 GitHub Actions 看還原步驟印出的 artifact 時間。",
         "前例：2026-09-09、09-10 兩晚就是這樣重推了套保第 1 批。",
@@ -909,6 +922,12 @@ def maybe_send_leverage_window_alert(data: dict, dry_run: bool = False) -> None:
         return
     _clear_data_gap_flag("leverage", dry_run=dry_run)
 
+    # 升槓桿批次也是「只推一次」的計數（lev_batches_sent）：還原到舊／空 state 會重推已投的批次，
+    # 或在 lev_window_open=False 的舊 state 上重推「[開啟] 第 1/6 批」（2026-11-20，余力 D 紅隊 D2 No.1）。
+    # 斷鏈時整場不前進、不存檔。
+    if _state_chain_broken("升槓桿窗口", dry_run=dry_run):
+        return
+
     state = _load_escape_state()
     # 一次性人工校正要在讀 prev_sent 之前套，否則本場的「已投 N 批」文案會是校正前的數字
     state, adj_done, adj_skipped = apply_manual_adjustments(state, LEVERAGE_MANUAL_ADJUSTMENTS)
@@ -1097,14 +1116,19 @@ def maybe_send_bear_bottom_confirm_alert(data: dict, dry_run: bool = False) -> N
     import config as _config
 
     lo = data.get("bear_low_since_ath")
-    price = data.get("current_price")
-    if lo is None or price is None:
+    price = data.get("current_price")              # 推播文案顯示用
+    # c1／c3 判定口徑＝收完的日線收盤（2026-11-20，余力 D 紅隊 D1 No.1）：PREREG 定義「收盤自
+    # 本輪最低點反彈 ≥50%」，V1 研究也用 close；舊版用 Coinbase 即時現價，任一場插針就會一次性
+    # 推「熊底確認」且旗標不撤。
+    judge = data.get("close_closed")
+    if lo is None or price is None or judge is None:
         _maybe_send_data_gap_alert(
-            "d3", f"本波低點＝{lo!r}／現價＝{price!r}（任一為 None 就無法判定 c1/c2/c3）。",
+            "d3", f"本波低點＝{lo!r}／現價＝{price!r}／收完日線收盤＝{judge!r}"
+                  "（任一為 None 就無法判定 c1/c2/c3）。",
             dry_run=dry_run)
         return
     # cycle_ath 必傳：沒有它就等於少掉 c3「仍在熊市」閘門（2026-08-25 新增）
-    d3 = d3_status(price, lo, data.get("bear_low_date"),
+    d3 = d3_status(judge, lo, data.get("bear_low_date"),
                    data.get("days_since_bear_low"),
                    cycle_ath=(data.get("cycle_ath") or None))
     if d3.get("ok") is None:

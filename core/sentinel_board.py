@@ -82,6 +82,27 @@ def closed_daily_rsi(df, window: int = HEDGE_G3_WINDOW):
             str(closed.index[-1])[:10])
 
 
+def closed_daily_last(df, col: str):
+    """收完的日線（UTC 日切，排除當日未收 K 棒）中 `col` 的最後一筆，回傳 `(value, date)`。
+
+    口徑同 `closed_daily_rsi`。2026-11-20 抽出（余力 D 紅隊 D1 No.1／No.2）：
+    `fetch_market_data()` 在本地日線落後今天時會把**今日盤中 K 棒**縫到尾端，
+    哨兵若取 `iloc[-1]`，升槓桿的 AHR999 與 D3 的 c1／c3 就吃到盤中值；
+    研究（T1／C5／D1_batching／V1）與 PREREG 的定義都是「收盤」。
+    缺欄位、沒有收完的列、或最後一筆是 NaN → `(None, None)`（呼叫端走缺值告警）。
+    """
+    if df is None or col not in getattr(df, "columns", []):
+        return None, None
+    today = datetime.now(timezone.utc).date()
+    closed = df[df.index.date < today]
+    if closed.empty:
+        return None, None
+    v = closed[col].iloc[-1]
+    if v is None or v != v:
+        return None, None
+    return float(v), str(closed.index[-1])[:10]
+
+
 def crosscheck_daily_rsi(window: int = HEDGE_G3_WINDOW):
     """對拍源的 RSI：**15m DB 重採樣成 1D**，回傳 `(rsi14, rsi_peak, closed_date)`。
 

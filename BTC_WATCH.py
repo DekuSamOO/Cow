@@ -355,8 +355,11 @@ class BitcoinMonitor:
         df = self._daily_cache
         if df is None or len(df) < 200 or "AHR999" not in df.columns:
             return
-        ahr = df["AHR999"].iloc[-1]
-        if ahr is None or (isinstance(ahr, float) and math.isnan(ahr)):
+        # 閘門與 D3 判定口徑＝收完的日線（與 LINE 哨兵同源，2026-11-20 余力 D 紅隊 D1 No.1／No.2）
+        from core.sentinel_board import closed_daily_last
+        ahr, _ = closed_daily_last(df, "AHR999")
+        judge_close, _ = closed_daily_last(df, "close")
+        if ahr is None or judge_close is None:
             return
         closes = df["close"].values
         # ATH 一律取 season_forecast 的 cycle_ath（**減半後最高收盤**），與 LINE 哨兵同源。
@@ -385,7 +388,7 @@ class BitcoinMonitor:
             # 距低點天數用**日曆天**（與 LINE 哨兵同基準）——K 棒位移會在日線缺日時分歧
             lo_naive = idx_naive[lo_pos].to_pydatetime().replace(tzinfo=None)
             # cycle_ath 必傳：沒有它就等於少掉 c3「仍在熊市」閘門（2026-08-25 新增）
-            d3 = d3_status(float(closes[-1]), lo_val,
+            d3 = d3_status(judge_close, lo_val,
                            str(idx_naive[lo_pos])[:10], (now - lo_naive).days,
                            cycle_ath=float(cycle_ath))
         self._sentinel_cache = (
