@@ -463,7 +463,7 @@ def test_batch_plan_lines():
     from core.leverage_window import batch_plan_lines
     t = "\n".join(batch_plan_lines(87_654.32, 3, 6, 5_000.0, 1.0074, 100))
     assert "剩餘 4 批（含本批）" in t
-    assert "網格下限 $85,000" in t and "$87,654" in t
+    assert "網格下限參考 $85,000" in t and "$87,654" in t and "自訂" in t
     assert f"網格上限 ${85_000 * 1.0074 ** 100:,.0f}" in t
     assert "馬丁" in t and "LIQ_BASE" in t
     assert "剩餘 1 批" in "\n".join(batch_plan_lines(87_654.32, 6, 6, 5_000.0, 1.0074, 100))

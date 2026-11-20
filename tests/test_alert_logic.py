@@ -277,3 +277,38 @@ def test_advisory_sentinels_stay_quiet_on_missing_data(notify, patched_state):
     _, sent = patched_state
     notify.maybe_send_action_alert({})            # 無 composite_action
     assert sent == []
+
+
+# ── 網格下限下移哨兵（2026-11-20 立；顯假值）──
+
+def test_grid_floor_shift_alert(notify, patched_state, monkeypatch):
+    state_file, _sent = patched_state
+    texts = []
+    monkeypatch.setattr(notify, "send_line_message", lambda m: texts.append(m["text"]))
+    monkeypatch.setattr(notify, "_state_chain_broken", lambda *a, **k: False)
+    run = lambda lo: notify.maybe_send_grid_floor_shift_alert(
+        {"bear_low_since_ath": lo, "bear_low_date": "2099-01-01"})
+
+    run(87_654.0)                      # 首次：只記錄參考下限，不推
+    assert texts == []
+    assert json.loads(state_file.read_text())["grid_floor_ref"] == 85_000.0
+    run(86_000.0)                      # 創新低但沒跨關卡：不推
+    assert texts == []
+    run(84_321.0)                      # 跨過關卡：推一次
+    assert len(texts) == 1 and "$80,000" in texts[0] and "$85,000" in texts[0]
+    run(83_000.0)                      # 同一關卡內：不重推
+    assert len(texts) == 1
+    run(None)                          # 低點缺值：不推、不改狀態
+    assert len(texts) == 1 and json.loads(state_file.read_text())["grid_floor_ref"] == 80_000.0
+
+
+def test_grid_floor_shift_failure_retries(notify, patched_state, monkeypatch):
+    state_file, _sent = patched_state
+    monkeypatch.setattr(notify, "_state_chain_broken", lambda *a, **k: False)
+    state_file.write_text(json.dumps({"grid_floor_ref": 85_000.0}))
+
+    def _boom(m):
+        raise RuntimeError("LINE 5xx")
+    monkeypatch.setattr(notify, "send_line_message", _boom)
+    notify.maybe_send_grid_floor_shift_alert({"bear_low_since_ath": 84_000.0})
+    assert json.loads(state_file.read_text())["grid_floor_ref"] == 85_000.0   # 失敗不前進

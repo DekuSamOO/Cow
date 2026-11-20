@@ -102,17 +102,21 @@ def test_message_contains_all_stages_and_conditions():
 
 def test_message_stage_marks_follow_price():
     # 測試價由 DEFENSE_LADDER 動態推導（不寫死絕對數字，S-1 覆蓋層後測試不再洩漏真實門檻）
-    trig1, trig2, trig3 = (s[0] for s in DEFENSE_LADDER)
-    mid_price = (trig1 + trig2) / 2   # 介於第 1、2 階之間：僅第 1 階已觸發
-    msg = build_defense_message(mid_price, now_str='TEST')
-    l1 = next(l for l in msg.splitlines() if '第1階' in l)
-    l2 = next(l for l in msg.splitlines() if '第2階' in l)
-    l3 = next(l for l in msg.splitlines() if '第3階' in l)
-    assert l1.startswith('🔴') and l2.startswith('⚪') and l3.startswith('⚪')
-    below_all = trig3 - 1   # 低於全部三階觸發價
-    msg2 = build_defense_message(below_all, now_str='TEST')
-    assert all(next(l for l in msg2.splitlines() if f'第{i}階' in l).startswith('🔴')
-               for i in (1, 2, 3))
+    # 2026-11-20：不再寫死 3 階——馬丁平倉投入後續批次時要拿掉該階（SOP 步驟 6），
+    # 階梯可能只剩 1~2 階；最後只剩台股一階也要能過。
+    trigs = [s[0] for s in DEFENSE_LADDER]
+    n = len(trigs)
+    assert n >= 1, '防守階梯至少要有一階'
+
+    def _marks(price):
+        msg = build_defense_message(price, now_str='TEST')
+        return [next(l for l in msg.splitlines() if f'第{i}階' in l)[0] for i in range(1, n + 1)]
+
+    assert _marks(trigs[0] + 1) == ['⚪'] * n                     # 高於全部：都未觸發
+    if n >= 2:
+        mid_price = (trigs[0] + trigs[1]) / 2   # 介於第 1、2 階之間：僅第 1 階已觸發
+        assert _marks(mid_price) == ['🔴'] + ['⚪'] * (n - 1)
+    assert _marks(trigs[-1] - 1) == ['🔴'] * n                    # 低於全部：都已觸發
 
 
 # ── 靜態重算警語（2026-09-07：P4 馬丁重啟偵測整組移除後改為固定一行）──────

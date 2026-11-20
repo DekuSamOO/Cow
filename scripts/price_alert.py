@@ -7,6 +7,8 @@ scripts/price_alert.py
   - 事件期間 BTC 再下探到 DEFENSE_LADDER 某一階觸發價 → 該階到價推播（2026-11-20 立）。
     首響當下已觸及的階算「已通知」（首響推移表已標 🔴）；之後每階每事件只推一次，
     與 24h 決策窗獨立（窗關閉後仍會推——到新一階是新的決策點）；rearm 時清空。
+  - BTC < config.PREREG_PESSIMISTIC_FLOOR → PREREG 事前保險絲：決策卡一律走「不防守」
+    （2026-11-20 立；每次跌破推一次，rearm 時清除）
 
 防重複推播：使用 alert_state.json 記錄今日已推播的警報，
 每個警報每個曆日最多推一次，避免 BTC 在門檻附近震盪時狂轟。
@@ -21,9 +23,11 @@ from datetime import datetime, timezone
 
 
 from config import (SSL_VERIFY, ALERT_PRICE_LOW, ALERT_PRICE_REARM_GAP,
-                    DEFENSE_DECISION_WINDOW_H, DEFENSE_REMINDER_HOURS, DEFENSE_LADDER)
+                    DEFENSE_DECISION_WINDOW_H, DEFENSE_REMINDER_HOURS, DEFENSE_LADDER,
+                    PREREG_PESSIMISTIC_FLOOR)
 from service.notification.facade import (notify_defense_line, notify_defense_reminder,
-                                         notify_defense_window_close, notify_defense_tier)
+                                         notify_defense_window_close, notify_defense_tier,
+                                         notify_prereg_fuse)
 
 if not SSL_VERIFY:
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -167,6 +171,13 @@ def main() -> None:
         # 階梯到價：只在事件進行中（已推過首響、尚未 rearm）判斷，與決策窗是否關閉無關
         if not state.get("armed_defense", True) and state.get("defense_event_start"):
             _maybe_push_tiers(price, state)
+        # PREREG 事前保險絲：跌破悲觀外插 → 決策卡一律走不防守（每次跌破推一次，rearm 清除）
+        if price < PREREG_PESSIMISTIC_FLOOR and not state.get("prereg_fuse_notified"):
+            print(f"🧯 PREREG 事前保險絲：BTC ${price:,.0f} < 悲觀外插 ${PREREG_PESSIMISTIC_FLOOR:,.0f}")
+            if notify_prereg_fuse(price):
+                state["prereg_fuse_notified"] = True
+            else:
+                print("❌ 保險絲推播失敗，下次執行重試")
     else:
         if not armed and price >= rearm_price:
             state["armed_defense"] = True
@@ -174,6 +185,7 @@ def main() -> None:
             state.pop("defense_reminder_idx", None)
             state.pop("defense_window_closed", None)
             state.pop("defense_tiers_notified", None)
+            state.pop("prereg_fuse_notified", None)
             print(f"🔄 BTC ${price:,.0f} >= ${rearm_price:,.0f}，防守警報重新武裝。")
         else:
             print(f"✓ BTC ${price:,.0f} > ${ALERT_PRICE_LOW:,.0f}，未觸及防守門檻。")

@@ -940,6 +940,7 @@ def maybe_send_leverage_window_alert(data: dict, dry_run: bool = False) -> None:
             f"本輪已投 {prev_sent}/{n} 批，累計訊號日 {sig}。",
             f"批次計數保留不歸零：窗口重開會從第 {prev_sent + 1} 批續投。",
             "連續關窗超過 90 天才視為換一個熊市階段、計數歸零。",
+            "剩餘 B 先以現貨持有；若 D3 熊底確認比下一個窗口先到 -> 剩餘 B 當天併入情境二 F-2 網格",
         ]):
             return
         print(f"! 升槓桿窗口暫停（{why}），批次計數保留。")
@@ -1092,7 +1093,10 @@ def maybe_send_bear_bottom_confirm_alert(data: dict, dry_run: bool = False) -> N
         return
 
     # lo/price 已在函式開頭 guard 過非 None，d3_grid_plan 這裡必定回傳 dict
-    plan = d3_grid_plan(lo, price, _config.D3_GRID_STEP, _config.D3_GRID_COUNT,
+    # 規則一：下限＝前波新低往下抓整數（2026-11-20 對齊；舊版直接用新低本身）
+    from core.leverage_window import rule1_grid_floor
+    plan = d3_grid_plan(rule1_grid_floor(lo, _config.GRID_FLOOR_ROUND_USD) or lo, price,
+                         _config.D3_GRID_STEP, _config.D3_GRID_COUNT,
                          _config.D3_GRID_LIQ_MULT_2X)
 
     lines = [
@@ -1106,7 +1110,7 @@ def maybe_send_bear_bottom_confirm_alert(data: dict, dry_run: bool = False) -> N
         "動作（2026-08-26 拍板，取代舊版「馬丁全額換現貨」）：",
         "1. 套保機器人若還有未平批次，先到者全平，未建批次取消",
         "2. 用現貨+屯幣寶（不含馬丁）開 2X 幣本位網格：",
-        f"   下限 ${plan['lower']:,.0f}（前波新低本身）",
+        f"   下限參考 ${plan['lower']:,.0f}（前波新低 ${lo:,.0f} 往下抓整數，規則一；實際由你自訂）",
         f"   上限 ${plan['upper']:,.0f}（下限 x {_config.D3_GRID_STEP}^{plan['grid_count']}）"
         f"｜格數 {plan['grid_count']}",
         f"   強平價粗估 ${plan['liq_estimate']:,.0f}（現價 x {_config.D3_GRID_LIQ_MULT_2X}，"
@@ -1138,6 +1142,60 @@ def maybe_send_bear_bottom_confirm_alert(data: dict, dry_run: bool = False) -> N
     state["d3_confirmed_date"] = str(date.today())
     _save_escape_state(state)
     print("! 熊底確認 D3 已推播。")
+
+
+def maybe_send_grid_floor_shift_alert(data: dict, dry_run: bool = False) -> None:
+    """網格下限下移哨兵（2026-11-20 立）：本波低點被跌破、且參考下限（往下抓整數）跟著下移時推一次。
+
+    為什麼盯「參考下限」不盯低點本身：熊市裡低點幾乎天天刷新，每次都推會洗版；
+    真正影響決策的是「下一批／D3 網格的下限要改」——只有跨過整數關卡才改。
+    同時提醒：既有網格若用舊下限，價格已在區間下方（不再買進）；D3 的低點與距低天數重算。
+    首次執行只記錄不推（沒有比較基準）；低點回升不會讓下限上移（本波低點只會往下）。
+    """
+    from config import GRID_FLOOR_ROUND_USD, D3_GRID_STEP, D3_GRID_COUNT
+    from core.leverage_window import rule1_grid_floor
+
+    lo = data.get("bear_low_since_ath")
+    floor = rule1_grid_floor(lo, GRID_FLOOR_ROUND_USD)
+    if floor is None:
+        return   # 低點缺值由 D3 哨兵的資料缺值告警負責，這裡不重複喊
+
+    state = _load_escape_state()
+    prev = state.get("grid_floor_ref")
+    if prev is None or floor >= float(prev):
+        if prev is None:
+            print(f"OK 網格下限哨兵：初始化參考下限 ${floor:,.0f}（本波低點 ${lo:,.0f}）。")
+            state["grid_floor_ref"] = floor
+            if not dry_run:
+                _save_escape_state(state)
+        else:
+            print(f"OK 網格下限未下移（參考 ${float(prev):,.0f}，本波低點 ${lo:,.0f}）。")
+        return
+
+    if _state_chain_broken("網格下限下移", dry_run=dry_run):
+        return
+
+    upper = floor * (D3_GRID_STEP ** D3_GRID_COUNT)
+    lines = [
+        "[網格下限下移] 本波低點創新低",
+        f"本波低點 ${lo:,.0f}（{data.get('bear_low_date')}），跌破舊參考下限 ${float(prev):,.0f}",
+        "",
+        f"下一批／D3 網格下限參考改為 ${floor:,.0f}（往下抓整數，實際由你自訂）",
+        f"上限參考 ${upper:,.0f}（下限 x {D3_GRID_STEP}^{D3_GRID_COUNT}）",
+        "既有網格若下限是舊值：價格已在區間下方，下方買單已全部成交、不再買進（不是強平）",
+        "D3 熊底確認改以新低點重算：c1 價位下移、距低天數歸零",
+    ]
+    if dry_run:
+        print("[dry-run] 網格下限下移：" + lines[0] + "（未發送）")
+        return
+    try:
+        send_line_message({"type": "text", "text": "\n".join(lines)})
+    except Exception as e:
+        print(f"X 網格下限下移推播失敗: {e}")
+        return   # 不前進 state，下次重試
+    state["grid_floor_ref"] = floor
+    _save_escape_state(state)
+    print(f"! 網格下限下移推播已發送：${float(prev):,.0f} -> ${floor:,.0f}。")
 
 
 def maybe_send_d3_grid_buffer_alert(data: dict, dry_run: bool = False) -> None:
@@ -1461,6 +1519,8 @@ if __name__ == "__main__":
     # 升槓桿窗口：AHR999 + 距 ATH 兩道閘門，開/關/分批提醒（2026-08-23）
     maybe_send_leverage_window_alert(data)
     maybe_send_bear_bottom_confirm_alert(data)
+    # 本波低點跌破整數關卡 → 下一批／D3 網格下限參考下移（2026-11-20）
+    maybe_send_grid_floor_shift_alert(data)
     # D3 網格開單後的強平緩衝監控（2026-08-26；無活躍網格時整段略過）
     maybe_send_d3_grid_buffer_alert(data)
     # 套保建倉哨兵：2026-10-05 停用（使用者指示「短期不會再開套保機器人，關閉相關通知跟哨兵」）。

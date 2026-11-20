@@ -216,3 +216,29 @@ def test_tier_alert_text():
     assert "76,000" in t and "第2階 $77,777" in t and "第3階 $66,666" in t
     assert "範例動作B" in t and "~$9,999" in t and "⚠ 附註C" in t
     assert "第1階" not in t
+
+
+# ── PREREG 事前保險絲（2026-11-20 立；顯假值）──
+
+def test_prereg_fuse_once_per_event(tiered, monkeypatch):
+    pa, state_file, sent, clock, t0 = tiered
+    monkeypatch.setattr(pa, "PREREG_PESSIMISTIC_FLOOR", 33_333.0)
+    fuse = []
+    monkeypatch.setattr(pa, "notify_prereg_fuse", lambda p: fuse.append(p) or True)
+    h = lambda x: t0 + timedelta(hours=x)
+
+    _run_at(pa, monkeypatch, 40_000.0, clock, h(0))      # 跌破警報，尚未破保險絲
+    assert fuse == []
+    _run_at(pa, monkeypatch, 33_000.0, clock, h(1))      # 跌破保險絲：推一次
+    _run_at(pa, monkeypatch, 30_000.0, clock, h(2))
+    assert fuse == [33_000.0]
+    _run_at(pa, monkeypatch, _FAKE_LOW + pa.ALERT_PRICE_REARM_GAP + 1, clock, h(10))
+    assert "prereg_fuse_notified" not in json.loads(state_file.read_text())
+    _run_at(pa, monkeypatch, 32_000.0, clock, h(20))     # 新事件再跌破：再推
+    assert fuse == [33_000.0, 32_000.0]
+
+
+def test_prereg_fuse_text():
+    from service.notification.facade import build_prereg_fuse_alert
+    t = build_prereg_fuse_alert(33_000.0, 33_333.0)
+    assert "$33,000" in t and "$33,333" in t and "不防守" in t and "30%" in t

@@ -127,7 +127,9 @@ def main():
 
     stale = _main_source_stale(btc_df, cdate)
 
-    out.append("[套保 G3]")
+    # 2026-11-20：套保 SOP 2026-10-05 停用、11-13 三批全平。批次判定不再列（舊狀態檔的
+    # hedge_batch_* 旗標只是殘留，列出來會被誤讀成現行建倉進度）；RSI 兩源仍印，供資料對拍。
+    out.append("[RSI 兩源對拍]（套保 G3 已停用：SOP 2026-10-05 停用、2026-11-13 三批全平）")
     if stale:
         out.append("  ⚠️ %s" % stale)
         out.append("  ⚠️ **本區塊的門檻判定不可信**——等 collector 跑完（台北 09:00）再查一次。")
@@ -139,17 +141,6 @@ def main():
                   round(x_peak, 2) if x_peak is not None else None))
     out.append("  前提: 最後一根 RSI>%d = %s，有效到收盤日 %s"
                % (HEDGE_G3_PEAK, last_hot, premise_until))
-    for n, thr, qty in HEDGE_BATCHES:
-        done = state.get("hedge_batch_%d" % n)
-        both = (rsi is not None and x_rsi is not None and rsi < thr and x_rsi < thr)
-        one = (rsi is not None and x_rsi is not None and (rsi < thr) != (x_rsi < thr))
-        # 「已推播」不是「已建倉」：state 記的是哨兵喊的日子（推播成功後才寫），
-        # 哨兵不知道你實際幾點下單。2026-09-11 由「已建（…）」改名——舊字面害人把
-        # 推播日讀成建倉日，兩批實際都是使用者跑在哨兵前面幾小時建的。
-        mark = "已推播（%s）" % state.get("hedge_batch_%d_date" % n) if done else (
-            "判定不可信（主源殘缺）" if stale else
-            ("兩源皆過" if both else ("兩源分歧→不可建" if one else "未達門檻")))
-        out.append("  第 %d 批 <%d（%.4f BTC）: %s" % (n, thr, qty, mark))
     out.append("")
 
     out.append("[開窗／D3 出場閘門]")

@@ -253,6 +253,25 @@ def notify_defense_tier(price: float, hits: list) -> bool:
     return _send_defense_text(build_defense_tier_alert(price, hits))
 
 
+def build_prereg_fuse_alert(price: float, floor: float) -> str:
+    """PREREG 事前保險絲推播（2026-11-20 立；純函數供測試對拍）。
+    正本：_governance/PREREG-season-falsification.md「三、與防守決策卡的連動」。"""
+    return "\n".join([
+        f"🧯 PREREG 事前保險絲：BTC ${price:,.0f} 跌破悲觀外插 ${floor:,.0f}",
+        "━━━━━━━━━━━━━━━━",
+        "若仍無止跌結構＝模型已被現實否證中，熊底讀值不可信",
+        "→ 防守決策卡一律走「不防守」分支（錯得最便宜的方向）",
+        "另一條徵兆要自己看：戰情室非週期地板（礦工成本、鏈上成本基礎）與四季論外插分歧 > 30%",
+        "熊底確認後依 PREREG 否證條件評判四季論存活與否",
+    ])
+
+
+def notify_prereg_fuse(price: float) -> bool:
+    """PREREG 事前保險絲推播（price_alert.py 驅動；走防守通道）。"""
+    import config as _config
+    return _send_defense_text(build_prereg_fuse_alert(price, _config.PREREG_PESSIMISTIC_FLOOR))
+
+
 def _u5_window_h() -> int:
     import config as _config
     return getattr(_config, "DEFENSE_DECISION_WINDOW_H", 24)

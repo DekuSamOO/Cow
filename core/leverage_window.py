@@ -354,7 +354,10 @@ def compact_rows(gate, d3, price, ahr_max, min_days, batch_days=None,
 
 
 def rule1_grid_floor(low, round_usd):
-    """規則一：網格下限＝前波新低向下取整到整數關卡（round_usd 的倍數）。
+    """規則一：網格下限＝前波新低往下抓整數——推播用的參考值（round_usd 的倍數）。
+
+    使用者自訂下限、不是固定公式（2026-11-20 使用者：「我只是抓整數」），
+    本函式只給一個與過去抓法一致的參考值。
 
     低點剛好落在關卡上照樣取該關卡——「下方」指不高於新低。
     low 缺值或非正數回 None（呼叫端要改推「自己照規則一算」）。
@@ -376,12 +379,12 @@ def batch_plan_lines(low, batch, n, round_usd, grid_step, grid_count):
     lines = [f"這批金額＝(剩餘 B＋已到帳定投) ÷ 剩餘 {remaining} 批（含本批）"]
     floor = rule1_grid_floor(low, round_usd)
     if floor is None:
-        lines.append("網格下限：本波低點資料缺，照規則一自己算（前波新低向下取整到整數關卡）")
+        lines.append("網格下限：本波低點資料缺，照規則一自己抓（前波新低往下抓整數）")
     else:
         upper = floor * (float(grid_step) ** int(grid_count))
-        lines.append(f"網格下限 ${floor:,.0f}（本波低點 ${float(low):,.0f} 向下取整到 "
-                     f"{float(round_usd):,.0f} 關卡，規則一）")
-        lines.append(f"網格上限 ${upper:,.0f}（下限 x {grid_step}^{int(grid_count)}，等比）")
+        lines.append(f"網格下限參考 ${floor:,.0f}（本波低點 ${float(low):,.0f} 往下抓整數，"
+                     "規則一；實際由你自訂）")
+        lines.append(f"網格上限 ${upper:,.0f}（參考下限 x {grid_step}^{int(grid_count)}，等比）")
     lines += [
         "馬丁：這批要不要平由你決定（可再延後）。平了 -> BTC 併入剩餘 B，",
         "  並把 Cow 防守階梯的該馬丁那一階拿掉、更新 secret、跑指紋驗證（SOP 步驟 6）",
