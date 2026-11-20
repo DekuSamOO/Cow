@@ -3,7 +3,7 @@ core/relative_high_tw.py  ·  v0.5（2026-07-02 疊加新維回測拍板）
 台股相對高點（逃頂雷達）— 純函數、零網路請求。把加密專屬維度（funding/OI/鏈上）
 替換為台股對應（融資融券/三大法人/TDCC/PE-PB/成交量）。
 
-七維（六維已校準核心總分 100 不動；vol_price 為**已驗證疊加**、理論總分 108，
+七維（六維已校準核心總分 100 不動；vol_price 為**弱維疊加**（2026-11-20 改標）、理論總分 108，
 `compute_relative_high_tw` 仍 clamp 到 100）：
   技術衰竭 30（頂背離 + RSI 超買）        ← 複用 core/divergence（與加密同源、已驗證）
   估值過高 30（PE/PB 絕對值高）          ← ✅ 最強維（swing 逃頂 AUC PE 0.626/PB 0.640）
@@ -11,7 +11,7 @@ core/relative_high_tw.py  ·  v0.5（2026-07-02 疊加新維回測拍板）
   槓桿過熱 10（融資增速高＝散戶追高）      ← 〔弱〕swing AUC 0.538
   法人派發  4（三大法人賣超）            ← 〔弱/雜訊〕swing AUC 0.519 → 降權
   籌碼鬆動  8（TDCC 散戶持股比高）       ← 〔弱・樣本薄 2023-09起〕swing AUC 0.538
-  量價背離  8（量增價縮＝出貨）          ← ✅ v0.5 轉正式（swing 逃頂 AUC 0.566，2026-07-02 全市場回測>0.55）
+  量價背離  8（量增價縮＝出貨）          ← 〔弱〕swing AUC 0.509（2026-11-20 修正回測；原 0.566 為 bug 值）
 
 校準關鍵：
   v0.1→v0.2：估值 15→30（最強）、法人 25→10（雜訊）。
@@ -22,6 +22,9 @@ core/relative_high_tw.py  ·  v0.5（2026-07-02 疊加新維回測拍板）
             2080 檔、out-of-sample≥2024）：量價背離逃頂 **AUC 0.566>0.55** → 轉正式權重
             5→8（與弱維 leverage/散戶 同級疊加）；結構轉折逃頂 **AUC 0.483（雜訊/微反）→ 移除**
             （不再計分；純函數仍在 relative_universal 供美股框架用）。核心六維內部分級不動。
+            ⚠ 2026-11-20 更正：該次回測 `_vp_scores` 把成交量 groupby 當收盤用（ret_now≈−1 恆成立，
+            量到的其實是「爆量」），0.566 不成立。修正後重跑（同腳本、≥2024）逃頂量價 **AUC 0.509**
+            → 依本腳本判讀規則（0.48–0.55 標弱維給低權）**改標弱維、權重 8 不動**（使用者拍板 A 案）。
   v0.5→v0.5.1：**2026-08-10 均量視窗校準**（`scripts/tw_volwindow_calib.py`）量能維由單日量
             改吃 `VOL_WINDOW`=5 日均量（判別力等價、判讀更穩，見 `vol_pctile`）；並新增
             `forming_last` 供 live 盤中排除未結算今日棒。**配重與分級門檻不動。**
@@ -41,8 +44,8 @@ WEIGHTS_HIGH_TW = {
     "vol_price": 8,
 }
 # AUC<0.55 的弱維（已回測、給低權、判讀僅參考）。volume/valuation/technical 非弱維。
-WEAK_DIMS_HIGH_TW = ("leverage", "institution", "tdcc")
-# 已無「未擬合」維：vol_price 逃頂 2026-07-02 回測 AUC 0.566（>0.55）轉正式權重（見 docstring）；
+WEAK_DIMS_HIGH_TW = ("leverage", "institution", "tdcc", "vol_price")
+# 已無「未擬合」維：vol_price 逃頂修正後回測 AUC 0.509 → 弱維（2026-11-20；原 0.566 為 bug 值，見 docstring）；
 # structure 逃頂 AUC 0.483（雜訊/微反）已移除，不再計分。
 UNFITTED_DIMS_HIGH_TW = ()
 # 量能維的均量視窗（交易日）；改此值＝改維度定義，須重跑 scripts/tw_volwindow_calib.py

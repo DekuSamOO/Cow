@@ -12,6 +12,39 @@ from datetime import datetime
 from core.indicators import _ta_series
 
 
+def _monthly_rsi_pit(close: pd.Series, length: int = 14) -> pd.Series:
+    """逐日 point-in-time 月線 RSI：「已收完的各月收盤＋當月截至當日收盤（成形中的月 K）」算 RSI。
+
+    舊版 `close.resample('MS').last()` 以月初為標籤、值卻是**該月最後一筆**收盤，reindex 回日線後
+    整個月都吃到月底收盤＝歷史每一列偷看到月底（2026-11-20 修，余力 B 抓蟲 B2 No.1）。
+    最後一列（即時推播）兩者相同：當月 bin 只到今天。不改用 `resample('ME')`——那會讓
+    最後一列退化成「上個月」的 RSI（2026-11-19 實測 43.55 → 50.31），即時推播晚一個月。
+
+    驗證性質：截到任一日 t 重算，t 那天的值與全資料算出的值相同（tests/test_bear_bottom.py）。
+    完整月不足 `length` 個時為 NaN（與 ta.rsi 在短序列回 None 一致；舊版在資料開頭
+    約 13 個月有值，是用全序列 ewm 回推的，截斷重算不存在）。
+    """
+    out = pd.Series(np.nan, index=close.index, dtype=float)
+    if close.empty:
+        return out
+    periods = close.index.to_period('M')
+    month_last = close.groupby(periods).last()          # 各月最後一筆（完整月＝月收盤）
+    for k, p in enumerate(month_last.index):
+        if k < length:                                  # 已收完的月份不足 → 無法算 RSI
+            continue
+        base = month_last.iloc[:k].to_numpy(dtype=float)
+        mask = periods == p
+        vals = []
+        for c in close[mask].to_numpy(dtype=float):
+            if np.isnan(c):                             # 當日收盤缺 → 當日不給值，不拿前值冒充
+                vals.append(np.nan)
+                continue
+            r = ta.rsi(pd.Series(np.append(base, c)), length=length)
+            vals.append(np.nan if r is None else float(r.iloc[-1]))
+        out[mask] = vals
+    return out
+
+
 def calculate_bear_bottom_indicators(df):
     """
     計算 6 大熊市底部識別指標:
@@ -40,10 +73,8 @@ def calculate_bear_bottom_indicators(df):
     df['SMA_365'] = _ta_series(ta.sma(df['close'], length=365), df.index)
     df['Puell_Proxy'] = df['close'] / df['SMA_365'].where(df['SMA_365'] > 0)
 
-    # 4. Monthly RSI
-    monthly_close = df['close'].resample('MS').last()
-    monthly_rsi = _ta_series(ta.rsi(monthly_close, length=14), monthly_close.index)
-    df['RSI_Monthly'] = monthly_rsi.reindex(df.index).ffill()
+    # 4. Monthly RSI（逐日 point-in-time，見 _monthly_rsi_pit）
+    df['RSI_Monthly'] = _monthly_rsi_pit(df['close'], length=14)
 
     # 5. Power Law Support
     genesis_date = datetime(2009, 1, 3)

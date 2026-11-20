@@ -41,15 +41,25 @@ _STRUCT_WIN = 140  # structure 每點只吃近 140 列（lookback120+order4+buff
 
 
 # ── 量價向量化（與 core.relative_universal 門檻一致，但 batch 版）─────────────────
-def _vp_scores(g: pd.core.groupby.DataFrameGroupBy, close: pd.Series, vol: pd.Series):
-    """回傳 (vp_top, vp_bottom) 分數 Series（全列向量化，門檻鏡像 relative_universal）。"""
-    v5 = g.transform(lambda s: s.rolling(5).mean())
-    v20 = g.transform(lambda s: s.rolling(20).mean())
+def _vp_scores(g_vol, g_close, close: pd.Series):
+    """回傳 (vp_top, vp_bottom) 分數 Series（全列向量化，門檻鏡像 relative_universal）。
+
+    量比用成交量 groupby、報酬用**收盤價** groupby。2026-11-20 修（余力 B 抓蟲 B5 No.14）：
+    舊版只收一個 groupby 且呼叫端傳的是成交量 → c5／c10 變成「5／10 日前成交量」，
+    ret_now＝股價÷5 日前成交股數−1 ≈ −1 恆成立，逃頂退化成只看爆量、抄底幾乎全 0。
+    2026-07-02 的「逃頂 0.566 轉正式／抄底 0.500 移除」兩個結論的輸入因此都是錯的。
+    逐列與生產函式對拍見 tests/test_tw_universal_vp_parity.py。
+
+    與生產端唯一差異（刻意保留）：資料不足／v20<=0／c5 或 c10 為 0／視窗內有缺值時，
+    批次給 NaN（該列從 AUC 剔除），生產給 0 分。climber DB 的成交量空值一律與收盤空值同列
+    （停牌／非交易日；2016 起 231,109 列、≥2024 僅 169 列），對 AUC 影響可忽略（2026-11-20 實查）。"""
+    v5 = g_vol.transform(lambda s: s.rolling(5).mean())
+    v20 = g_vol.transform(lambda s: s.rolling(20).mean())
     vol_ratio = (v5 / v20.where(v20 > 0))
-    c5 = g.transform(lambda s: s.shift(5))
-    c10 = g.transform(lambda s: s.shift(10))
-    ret_now = close / c5 - 1
-    ret_prior = c5 / c10 - 1
+    c5 = g_close.transform(lambda s: s.shift(5))
+    c10 = g_close.transform(lambda s: s.shift(10))
+    ret_now = close / c5.where(c5 != 0) - 1
+    ret_prior = c5 / c10.where(c10 != 0) - 1
 
     top = pd.Series(0, index=close.index, dtype=float)
     top[(vol_ratio >= 1.3) & (ret_now < ret_prior)] = 8
@@ -134,7 +144,7 @@ def main():
     print("[2] 量價分數（向量化）…")
     g_close = df.groupby("Stock_ID", sort=False)["close"]
     g_vol = df.groupby("Stock_ID", sort=False)["Volume"]
-    df["vp_top"], df["vp_bottom"] = _vp_scores(g_vol, df["close"], df["Volume"].astype(float))
+    df["vp_top"], df["vp_bottom"] = _vp_scores(g_vol, g_close, df["close"])
 
     # swing 標註（centered，與 tw_swing_backtest 一致）
     win = 2 * _W + 1

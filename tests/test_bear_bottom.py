@@ -297,3 +297,84 @@ class TestScoreSeries:
         df = _make_df(rows)
         scores = score_series(df)
         assert len(scores) == 10
+
+
+# ────────────────────────────────────────────────────────────────
+# 月線 RSI point-in-time（2026-11-20，余力 B 抓蟲 B2 No.1）
+# 舊版 resample('MS').last() 讓整個月吃到月底收盤＝歷史 look-ahead。
+# ────────────────────────────────────────────────────────────────
+
+import pandas_ta as _ta
+from core.bear_bottom import _monthly_rsi_pit
+
+
+def _walk(days=1000, seed=7):
+    """年週期正弦＋小雜訊：讓月線 RSI 落在 30～70 之間（審查建議，避免全程極端值）。"""
+    rng = np.random.default_rng(seed)
+    idx = pd.date_range("2020-01-15", periods=days, freq="D")
+    t = np.arange(days)
+    log_p = 0.6 * np.sin(2 * np.pi * t / 365) + np.cumsum(rng.normal(0, 0.01, days))
+    return pd.Series(10_000 * np.exp(log_p), index=idx)
+
+
+def test_monthly_rsi_walk_spans_scoring_range():
+    """前提檢查：測試序列的 RSI 要跨過計分門檻區，否則下面的性質測試只在極端值上成立。"""
+    r = _monthly_rsi_pit(_walk()).dropna()
+    assert r.min() < 50 < r.max() and r.max() - r.min() > 15
+
+
+def test_monthly_rsi_month_end_equals_completed_month_rsi():
+    """每月最後一天＝該月已收完，值必須等於標準月線 RSI（正向錨點）。"""
+    close = _walk()
+    new = _monthly_rsi_pit(close)
+    mc = close.resample("ME").last()
+    std = _ta.rsi(mc, length=14)
+    n = 0
+    for me, v in std.dropna().items():
+        # 開頭不足 14 個完整月：ta.rsi 在全序列上仍會吐值（ewm 回推），新版刻意給 NaN，不比
+        if me in new.index and not math.isnan(new.loc[me]):
+            assert new.loc[me] == pytest.approx(v)
+            n += 1
+    assert n >= 10
+
+
+def test_monthly_rsi_nan_close_gives_nan():
+    close = _walk()
+    close.loc["2022-06-10"] = np.nan
+    r = _monthly_rsi_pit(close)
+    assert math.isnan(r.loc["2022-06-10"])
+    assert not math.isnan(r.loc["2022-06-09"])
+
+
+def test_monthly_rsi_is_point_in_time():
+    """截到任一日重算，該日的值必須與全資料算出的相同（不能看到之後的收盤）。"""
+    close = _walk()
+    full = _monthly_rsi_pit(close)
+    for t in ["2021-06-03", "2021-11-30", "2022-04-15", "2022-08-01"]:
+        trunc = _monthly_rsi_pit(close.loc[:t])
+        assert not math.isnan(full.loc[t])
+        assert trunc.loc[t] == pytest.approx(full.loc[t]), f"{t} 偷看到之後的收盤"
+
+
+def test_monthly_rsi_unaffected_by_later_close_in_same_month():
+    """把月底收盤改掉，同月較早日子的值不得改變（舊版會變＝look-ahead 的直接寫照）。"""
+    close = _walk()
+    a = _monthly_rsi_pit(close)
+    bumped = close.copy()
+    bumped.loc["2022-03-31"] *= 0.5
+    b = _monthly_rsi_pit(bumped)
+    early = slice("2022-03-01", "2022-03-30")
+    assert np.allclose(a.loc[early], b.loc[early])
+    assert b.loc["2022-03-31"] != pytest.approx(a.loc["2022-03-31"])
+
+
+def test_monthly_rsi_last_row_matches_previous_live_value():
+    """最後一列＝即時推播用值，須與舊算法一致（不可退化成上個月的 RSI）。"""
+    close = _walk()
+    old = _ta.rsi(close.resample("MS").last(), length=14).reindex(close.index).ffill()
+    assert _monthly_rsi_pit(close).iloc[-1] == pytest.approx(old.iloc[-1])
+
+
+def test_monthly_rsi_nan_until_enough_completed_months():
+    close = _walk(days=200)                 # 不到 14 個完整月
+    assert _monthly_rsi_pit(close).isna().all()

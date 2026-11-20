@@ -188,15 +188,11 @@ def run_swing_strategy_backtest(
     final_equity = balance if state == "CASH" else position * last_close
     roi          = (final_equity - initial_capital) / initial_capital * 100
 
-    # 從 Sell 交易重建權益曲線（向量化）
     trades_df = pd.DataFrame(trades)
 
-    if not trades_df.empty and 'Balance' in trades_df.columns:
-        sell_balances = trades_df.loc[trades_df['Type'] == 'Sell', 'Balance'].tolist()
-    else:
-        sell_balances = []
-
-    equity_curve = np.array([initial_capital] + sell_balances + [final_equity])
+    # MDD 用逐日市值曲線（含持倉中浮虧）；舊版只取每筆賣出後餘額，持倉中的回撤全部漏掉
+    # （2026-11-20 修，余力 B 抓蟲 B4 No.2；walkforward_backtest 早已改用全期市值）
+    equity_curve = np.array([initial_capital] + list(equity_daily.values()), dtype=float)
     mdd          = calculate_max_drawdown(equity_curve)
 
     # ──────────────────────────────────────────────────────────────
@@ -265,7 +261,7 @@ def run_multitf_backtest(
 
     15m 出場條件：
       - 15m 收盤 < 15m EMA20（趨勢轉弱）
-      - 固定停損：進場後收盤跌破 stop_loss_pct%
+      - 固定停損：進場後收盤跌破 stop_loss_pct% → 次根開盤成交（同 EMA 出場口徑）
 
     返回: (trades_df, final_equity, roi_pct, trade_count, max_drawdown_pct, stats_dict)
     """
@@ -352,6 +348,7 @@ def run_multitf_backtest(
     state       = "CASH"
     entry_price = 0.0
     stop_price  = 0.0
+    stop_pending = False   # 前一根收盤已跌破停損 → 本根開盤出場
     trades      = []
     equity_ts   = {}
 
@@ -375,7 +372,10 @@ def run_multitf_backtest(
             state   = "INVESTED"
 
         elif state == "INVESTED":
-            stop_triggered = closes[i] < stop_price
+            # 停損與 EMA 出場同一口徑：第 M 根收盤確認 → 第 M+1 根開盤成交。
+            # 舊版用「本根收盤 < 停損」判定、卻以「本根開盤」成交＝看到收盤才回頭用開盤價賣，
+            # 停損虧損系統性少算約一根 K 棒（2026-11-20 修，余力 B 抓蟲 B4 No.1）。
+            stop_triggered = stop_pending
             if exit_mask[i] or stop_triggered:
                 friction_out         = fee_rate + slippage_rate
                 effective_exit       = exec_price * (1.0 - friction_out)
@@ -392,6 +392,9 @@ def run_multitf_backtest(
                 position   = 0.0
                 state      = "CASH"
 
+        # 本根收盤後才知道是否跌破停損（含進場當根）；出場或空手時清除
+        stop_pending = state == "INVESTED" and closes[i] < stop_price
+
         equity_ts[date] = balance if state == "CASH" else position * closes[i]
 
     # ──────────────────────────────────────────────────────────────
@@ -403,9 +406,9 @@ def run_multitf_backtest(
 
     trades_df = pd.DataFrame(trades)
 
-    sell_balances = (trades_df.loc[trades_df['Type'] == 'Sell', 'Balance'].tolist()
-                     if not trades_df.empty else [])
-    equity_curve  = np.array([initial_capital] + sell_balances + [final_equity])
+    # MDD 用逐根市值曲線（含持倉中浮虧）；舊版只取每筆賣出後餘額，持倉中跌 30% 再反彈出場
+    # 會顯示 0%（2026-11-20 修，余力 B 抓蟲 B4 No.2；walkforward_backtest 早已改用全期市值）
+    equity_curve  = np.array([initial_capital] + list(equity_ts.values()), dtype=float)
     mdd           = calculate_max_drawdown(equity_curve)
 
     stats = {'win_rate': 0.0, 'sharpe': 0.0, 'avg_profit': 0.0, 'avg_loss': 0.0}
