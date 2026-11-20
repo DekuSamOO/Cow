@@ -88,7 +88,11 @@ def patched(pa, tmp_path, monkeypatch):
     state_file = tmp_path / "alert_state.json"
     monkeypatch.setattr(pa, "STATE_FILE", str(state_file))
     sent = {"full": [], "reminder": [], "close": []}
-    monkeypatch.setattr(pa, "notify_defense_line", lambda p: sent["full"].append(p) or {})
+    monkeypatch.setattr(pa, "_SEND_FAILURES", [])
+    monkeypatch.setattr(pa, "SEND_FAILURE_MARKER", str(tmp_path / "line_send_failures.txt"))
+    # 回傳形狀同 facade.notify_defense_line；首響以 'line' 判定送達（2026-11-20 起會看回傳值）
+    monkeypatch.setattr(pa, "notify_defense_line",
+                        lambda p: sent["full"].append(p) or {"line": True})
     monkeypatch.setattr(pa, "notify_defense_reminder",
                         lambda p, h, n: sent["reminder"].append((p, round(h, 1), n)) or True)
     monkeypatch.setattr(pa, "notify_defense_window_close", lambda p: sent["close"].append(p) or True)
@@ -242,3 +246,56 @@ def test_prereg_fuse_text():
     from service.notification.facade import build_prereg_fuse_alert
     t = build_prereg_fuse_alert(33_000.0, 33_333.0)
     assert "$33,000" in t and "$33,333" in t and "不防守" in t and "30%" in t
+
+
+# ── 防守推播失敗不得前進 state（2026-11-20，余力 B 抓蟲 B5 No.1）──
+# 舊版丟掉 facade 回傳值：首響 LINE 失敗仍解除武裝 → 全量防守訊息永久遺失且 exit 0。
+
+def test_full_alert_failure_stays_armed_and_retries(patched, monkeypatch):
+    pa, state_file, sent, clock, t0 = patched
+    low = pa.ALERT_PRICE_LOW
+    monkeypatch.setattr(pa, "notify_defense_line",
+                        lambda p: sent["full"].append(p) or {"line": False, "telegram": True})
+    _run_at(pa, monkeypatch, low - 100, clock, t0)
+    st = json.loads(state_file.read_text())
+    assert st.get("armed_defense", True) is True, "首響沒送到 LINE 卻解除武裝＝全量防守訊息永久遺失"
+    assert "defense_event_start" not in st and not st.get("last_defense_date")
+    monkeypatch.setattr(pa, "notify_defense_line",
+                        lambda p: sent["full"].append(p) or {"line": True})
+    _run_at(pa, monkeypatch, low - 100, clock, t0 + timedelta(hours=1))
+    assert len(sent["full"]) == 2, "LINE 恢復後下一小時必須重送全量警報"
+    assert json.loads(state_file.read_text())["armed_defense"] is False
+
+
+def test_reminder_and_close_failure_do_not_advance(patched, monkeypatch):
+    pa, state_file, sent, clock, t0 = patched
+    low = pa.ALERT_PRICE_LOW
+    _run_at(pa, monkeypatch, low - 100, clock, t0)                       # 首響成功
+    monkeypatch.setattr(pa, "notify_defense_reminder", lambda p, h, n: False)
+    _run_at(pa, monkeypatch, low - 100, clock, t0 + timedelta(hours=1.5))
+    assert json.loads(state_file.read_text())["defense_reminder_idx"] == 0, "提醒沒送到卻前進 idx"
+    monkeypatch.setattr(pa, "notify_defense_window_close", lambda p: False)
+    _run_at(pa, monkeypatch, low - 100, clock, t0 + timedelta(hours=25))
+    assert not json.loads(state_file.read_text()).get("defense_window_closed"), "窗關閉沒送到卻記為已關"
+    monkeypatch.setattr(pa, "notify_defense_window_close", lambda p: sent["close"].append(p) or True)
+    _run_at(pa, monkeypatch, low - 100, clock, t0 + timedelta(hours=26))
+    assert sent["close"] == [low - 100], "LINE 恢復後必須補推窗關閉"
+
+
+def test_send_failure_marker_only_on_actions(patched, monkeypatch, tmp_path):
+    pa, state_file, sent, clock, t0 = patched
+    monkeypatch.setattr(pa, "notify_defense_line", lambda p: {"line": False})
+    marker = tmp_path / "line_send_failures.txt"
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    _run_at(pa, monkeypatch, pa.ALERT_PRICE_LOW - 100, clock, t0)
+    assert not marker.exists(), "本機跑不該在 repo 留標記檔"
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    _run_at(pa, monkeypatch, pa.ALERT_PRICE_LOW - 100, clock, t0 + timedelta(hours=1))
+    assert marker.exists() and "防守首響" in marker.read_text(encoding="utf-8")
+
+
+def test_no_marker_when_all_sent(patched, monkeypatch, tmp_path):
+    pa, state_file, sent, clock, t0 = patched
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    _run_at(pa, monkeypatch, pa.ALERT_PRICE_LOW - 100, clock, t0)
+    assert not (tmp_path / "line_send_failures.txt").exists()

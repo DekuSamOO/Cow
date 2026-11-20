@@ -371,7 +371,7 @@ streamlit run app.py
 3. 推送後 Actions 將依排程自動執行，亦可手動觸發 `workflow_dispatch` 測試。
 4. **Streamlit Cloud** 網頁版若要中文新聞，另需在 App settings → Secrets 加 `GOOGLE_API_KEY = "..."`。
 
-**失敗告警：** `daily_line_notify.yml` 與 `price_alert.yml` 任一步驟失敗時，會以 `if: failure()` step 直接 curl 推送 LINE 文字告警（含 run 連結），避免排程靜默失敗無人知。`daily_line_notify.py` 的 LINE 推送最終失敗時，腳本**不直接 exit 1**（那會跳過上傳 state，同場已推過的「只推一次」旗標沒上傳 → 下一場重複推播），改寫 `line_send_failures.txt`，由 `Fail if any LINE push failed` 步驟在**上傳 state 之後**判 job 失敗；失敗那則因 state 未前進，下一場自動重送。每日 Flex 卡片另在本機 OI 快照 >2 天未更新時顯示「⚠️ OI 快照已 N 天未更新」健康警告。
+**失敗告警：** `daily_line_notify.yml` 與 `price_alert.yml` 任一步驟失敗時，會以 `if: failure()` step 直接 curl 推送 LINE 文字告警（含 run 連結），避免排程靜默失敗無人知。`daily_line_notify.py`／`price_alert.py` 的 LINE 推送最終失敗時，腳本**不直接 exit 1**（那會跳過上傳 state，同場已推過的「只推一次」旗標沒上傳 → 下一場重複推播），改寫 `line_send_failures.txt`，由 `Fail if any LINE push failed` 步驟在**上傳 state 之後**判 job 失敗；失敗那則因 state 未前進，下一場自動重送。每日 Flex 卡片另在本機 OI 快照 >2 天未更新時顯示「⚠️ OI 快照已 N 天未更新」健康警告。
 
 **本地端除錯：**
 ```bash
@@ -411,6 +411,13 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 ---
 
 ## 版本紀錄
+
+### v3.71 (2026-11-20)
+**防守警報推送失敗不再「解除武裝」；price_alert 狀態還原改走 artifacts API。**（余力 B 抓蟲 B5 No.1、No.3）
+
+- **fix(price_alert)**: 舊版丟掉 facade 回傳值——首響 LINE 失敗仍 `armed_defense=False`，全量防守訊息永久遺失且 exit 0；決策窗提醒／窗關閉失敗也照樣前進。改為首響以 `result['line']` 判定（只有 Telegram 送到也算失敗、維持武裝下一小時重送），提醒／窗關閉失敗不前進；階梯到價、PREREG 保險絲原本就會重試，改為一併記入失敗清單。推送失敗寫 `line_send_failures.txt`（僅 Actions）。
+- **ci(price_alert.yml)**: 還原 state 由 `gh run list --status success --limit 1` 改查 artifacts API 依 `created_at` 取最新（同 daily；該 API 曾回 10 天前的 run，且推送失敗的 run 現在會被判失敗，只認成功 run 會讓狀態倒退）；新增 `Fail if any LINE push failed` 排在 `Upload alert state` 之後。
+- **test**: `test_defense_channel.py` +4（首響失敗維持武裝並重送、提醒／窗關閉失敗不前進、標記檔僅 Actions、全成功不留標記）；fixture 的假首響改回 `{"line": True}`。全套 **715 passed**；負向驗證：只拿掉 3 處回傳值判斷 → 3 項紅。
 
 ### v3.70 (2026-11-20)
 **LINE 推送失敗不再被記成「已推」。**（余力 B 抓蟲 B5 No.5）
@@ -1756,4 +1763,4 @@ watcher 面板誠實化：移除已回測無效的 Hash Ribbons 參考訊號、�
 
 ---
 
-**最後更新：2026-11-20（v3.70）**
+**最後更新：2026-11-20（v3.71）**

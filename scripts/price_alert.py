@@ -38,6 +38,28 @@ _REPO_ROOT  = os.path.dirname(_SCRIPT_DIR)
 # GitHub Actions artifact 下載後放在 repo 根目錄
 STATE_FILE = os.path.join(_REPO_ROOT, "alert_state.json")
 
+# 本場推送失敗清單（2026-11-20，余力 B 抓蟲 B5 No.1）：facade 的防守推播失敗只回 False／
+# {'line': False}、不拋例外，舊版又丟掉回傳值 → 首響失敗仍「解除武裝」、提醒失敗仍前進 idx，
+# 全量防守訊息永久遺失且 exit 0。改為失敗不前進 state（下一小時重送），並在 Actions 上寫標記檔。
+_SEND_FAILURES: list = []
+SEND_FAILURE_MARKER = os.path.join(_REPO_ROOT, "line_send_failures.txt")
+
+
+def _record_send_failure(label: str) -> None:
+    print(f"❌ {label} 推送失敗：state 不前進，下次執行重送")
+    _SEND_FAILURES.append(label)
+
+
+def _write_send_failure_marker() -> None:
+    """只在 GitHub Actions 寫標記檔（本機閘門擋下也算失敗，不該在 repo 留檔）。"""
+    if not _SEND_FAILURES:
+        return
+    print(f"X 本場共 {len(_SEND_FAILURES)} 則推送失敗：{_SEND_FAILURES}")
+    if not os.getenv("GITHUB_ACTIONS"):
+        return
+    with open(SEND_FAILURE_MARKER, "w", encoding="utf-8") as f:
+        f.write("\n".join(_SEND_FAILURES) + "\n")
+
 
 def _load_state() -> dict:
     if os.path.exists(STATE_FILE):
@@ -103,7 +125,7 @@ def _maybe_push_tiers(price: float, state: dict) -> None:
             set(state.get("defense_tiers_notified") or []) | {float(r[0]) for _, r in hits},
             reverse=True)
     else:
-        print("❌ 防守階梯推播失敗，下次執行重試")
+        _record_send_failure("防守階梯到價")
 
 
 def fetch_btc_price() -> float | None:
@@ -140,28 +162,36 @@ def main() -> None:
     if price <= ALERT_PRICE_LOW:
         if armed and _should_alert(state.get("last_defense_date")):
             print(f"🛡️  防守事件：BTC ${price:,.0f} <= ${ALERT_PRICE_LOW:,.0f}，發送防守警報（三連響）")
-            notify_defense_line(price)
-            state["last_defense_date"] = today
-            state["armed_defense"] = False  # 解除武裝：全量警報只推一次，後續走決策窗提醒
-            state["defense_event_start"] = _now().isoformat(timespec="seconds")
-            state["defense_reminder_idx"] = 0
-            state["defense_window_closed"] = False
-            # 首響推移表已標出當下觸及的階，視為已通知，避免同一場再推一次
-            state["defense_tiers_notified"] = _hit_tier_triggers(price, DEFENSE_LADDER)
+            # 以 LINE 為準：只有 Telegram 送到也算失敗——維持武裝、下一小時整組重送
+            # （重複一則 Telegram 的代價遠小於全量防守訊息遺失）
+            if (notify_defense_line(price) or {}).get("line"):
+                state["last_defense_date"] = today
+                state["armed_defense"] = False  # 解除武裝：全量警報只推一次，後續走決策窗提醒
+                state["defense_event_start"] = _now().isoformat(timespec="seconds")
+                state["defense_reminder_idx"] = 0
+                state["defense_window_closed"] = False
+                # 首響推移表已標出當下觸及的階，視為已通知，避免同一場再推一次
+                state["defense_tiers_notified"] = _hit_tier_triggers(price, DEFENSE_LADDER)
+            else:
+                _record_send_failure("防守首響")
         elif not armed and state.get("defense_event_start") and not state.get("defense_window_closed"):
             elapsed_h = (_now() - datetime.fromisoformat(state["defense_event_start"])
                          ).total_seconds() / 3600.0
             if elapsed_h >= DEFENSE_DECISION_WINDOW_H:
                 print(f"🔒 決策窗屆滿（{elapsed_h:.1f}h ≥ {DEFENSE_DECISION_WINDOW_H}h），推播窗關閉（預設不防守）")
-                notify_defense_window_close(price)
-                state["defense_window_closed"] = True
+                if notify_defense_window_close(price):
+                    state["defense_window_closed"] = True
+                else:
+                    _record_send_failure("決策窗屆滿")
             else:
                 sent_idx = state.get("defense_reminder_idx", 0)
                 due_idx = _due_reminder_idx(elapsed_h, sent_idx)
                 if due_idx > sent_idx:
                     print(f"⏰ 決策窗提醒：事件後 {elapsed_h:.1f}h，推播第 {due_idx} 則里程碑提醒")
-                    notify_defense_reminder(price, elapsed_h, due_idx)
-                    state["defense_reminder_idx"] = due_idx
+                    if notify_defense_reminder(price, elapsed_h, due_idx):
+                        state["defense_reminder_idx"] = due_idx
+                    else:
+                        _record_send_failure(f"決策窗第 {due_idx} 則提醒")
                 else:
                     print(f"ℹ️  決策窗內（{elapsed_h:.1f}h），下個里程碑未到，略過。")
         else:
@@ -177,7 +207,7 @@ def main() -> None:
             if notify_prereg_fuse(price):
                 state["prereg_fuse_notified"] = True
             else:
-                print("❌ 保險絲推播失敗，下次執行重試")
+                _record_send_failure("PREREG 保險絲")
     else:
         if not armed and price >= rearm_price:
             state["armed_defense"] = True
@@ -191,6 +221,7 @@ def main() -> None:
             print(f"✓ BTC ${price:,.0f} > ${ALERT_PRICE_LOW:,.0f}，未觸及防守門檻。")
 
     _save_state(state)
+    _write_send_failure_marker()
 
 
 if __name__ == "__main__":

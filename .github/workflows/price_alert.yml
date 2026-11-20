@@ -34,20 +34,32 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # 還原上一個成功 run 的警報狀態（跨 run 去重持久化）。
+      # 還原最新的警報狀態（跨 run 去重持久化）。
       # 踩坑（2026-06）：actions/download-artifact 只能拿「當前 run」自己的 artifact，
-      # 拿不到前一個 run → 跨 run 去重從未生效。改用 gh 從最近一個成功 run 下載。
-      - name: Restore alert state from latest prior run
+      # 拿不到前一個 run → 跨 run 去重從未生效。
+      # 2026-11-20 改走 artifacts API（同 daily_line_notify.yml，余力 B 抓蟲 B5 No.3）：
+      # ①`gh run list --status success --limit 1` 曾在 daily 側回傳 10 天前的 run、造成套保重推；
+      # ②推送失敗的 run 現在會被判失敗（下方 Fail if any LINE push failed），若只認「成功 run」，
+      #   那場已上傳的 state 會被跳過 → 狀態倒退、重複推播。改成不看 run 結果，依 created_at 取最新。
+      - name: Restore alert state from latest artifact
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          PREV=$(gh run list --workflow=price_alert.yml --status success \
-                 --limit 1 --json databaseId -q '.[0].databaseId' || echo "")
-          if [ -n "$PREV" ]; then
-            gh run download "$PREV" -n alert-state -D . \
-              && echo "restored state from run $PREV" || echo "run $PREV 無 state artifact（可能已過期）"
+          META=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=alert-state&per_page=100" \
+                 --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last
+                       | "\(.id) \(.created_at)"' || echo "")
+          ART_ID="${META%% *}"
+          ART_AT="${META#* }"
+          if [ -n "$ART_ID" ] && [ "$ART_ID" != "null" ]; then
+            if gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ART_ID/zip" > state.zip \
+               && unzip -o -q state.zip && rm -f state.zip; then
+              echo "restored state from artifact $ART_ID (created_at $ART_AT)"
+            else
+              rm -f state.zip
+              echo "artifact $ART_ID 下載失敗，從空 state 開始"
+            fi
           else
-            echo "無前一個成功 run，從空 state 開始"
+            echo "查無未過期的 alert-state artifact，從空 state 開始"
           fi
         continue-on-error: true
 
@@ -89,6 +101,17 @@ jobs:
           # （需連續 90 天排程全失敗，而那時早就發現沒收到推播了）。
           retention-days: 90
         continue-on-error: true
+
+      # 2026-11-20：防守推播失敗時腳本不直接 exit 1（會跳過上面的 Upload），改寫標記檔、
+      # 這一步在上傳**之後**才判失敗 → GitHub 寄失敗信、下面 Alert on failure 試推一次。
+      # 失敗那則 state 未前進，下一小時重送。
+      - name: Fail if any LINE push failed
+        run: |
+          if [ -f line_send_failures.txt ]; then
+            echo "本場防守推播失敗："
+            cat line_send_failures.txt
+            exit 1
+          fi
 
       # 任一步驟失敗時推 LINE 文字告警，避免排程靜默失敗無人知
       - name: Alert on failure
