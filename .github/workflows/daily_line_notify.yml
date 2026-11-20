@@ -101,6 +101,17 @@ jobs:
         retention-days: 90
       continue-on-error: true
 
+    # 2026-11-20：LINE 推送失敗時腳本不直接 exit 1（那會跳過上面的 Upload，同場已成功推送的
+    # 「只推一次」旗標沒上傳 → 下一場重複推播），改由腳本寫標記檔、這一步在上傳**之後**才判失敗，
+    # 讓 GitHub 寄失敗信、下面的 Alert on failure 也會試推一次。失敗的那則因 state 未前進，下一場會重送。
+    - name: Fail if any LINE push failed
+      run: |
+        if [ -f line_send_failures.txt ]; then
+          echo "本場 LINE 推送失敗："
+          cat line_send_failures.txt
+          exit 1
+        fi
+
     # 任一步驟失敗時推 LINE 文字告警，避免排程靜默失敗無人知
     - name: Alert on failure
       if: failure()

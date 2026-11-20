@@ -371,7 +371,7 @@ streamlit run app.py
 3. 推送後 Actions 將依排程自動執行，亦可手動觸發 `workflow_dispatch` 測試。
 4. **Streamlit Cloud** 網頁版若要中文新聞，另需在 App settings → Secrets 加 `GOOGLE_API_KEY = "..."`。
 
-**失敗告警：** `daily_line_notify.yml` 與 `price_alert.yml` 任一步驟失敗時，會以 `if: failure()` step 直接 curl 推送 LINE 文字告警（含 run 連結），避免排程靜默失敗無人知；每日 Flex 卡片另在本機 OI 快照 >2 天未更新時顯示「⚠️ OI 快照已 N 天未更新」健康警告。
+**失敗告警：** `daily_line_notify.yml` 與 `price_alert.yml` 任一步驟失敗時，會以 `if: failure()` step 直接 curl 推送 LINE 文字告警（含 run 連結），避免排程靜默失敗無人知。`daily_line_notify.py` 的 LINE 推送最終失敗時，腳本**不直接 exit 1**（那會跳過上傳 state，同場已推過的「只推一次」旗標沒上傳 → 下一場重複推播），改寫 `line_send_failures.txt`，由 `Fail if any LINE push failed` 步驟在**上傳 state 之後**判 job 失敗；失敗那則因 state 未前進，下一場自動重送。每日 Flex 卡片另在本機 OI 快照 >2 天未更新時顯示「⚠️ OI 快照已 N 天未更新」健康警告。
 
 **本地端除錯：**
 ```bash
@@ -411,6 +411,13 @@ Streamlit Community Cloud 在 **7 天無流量**後自動休眠。本專案使�
 ---
 
 ## 版本紀錄
+
+### v3.70 (2026-11-20)
+**LINE 推送失敗不再被記成「已推」。**（余力 B 抓蟲 B5 No.5）
+
+- **fix(notify)**: 底層 `_send_line_message` 失敗只回 False、不拋例外，`send_line_message` 又丟掉回傳值 → 本檔所有「發送失敗不前進 state」的 `try/except` 都是死碼，LINE token 過期或額度用完那場，升槓桿第 N 批、D3 成立、網格緩衝、資料缺值等「只推一次」旗標照樣寫成已推。改為 `send_line_message` 最終失敗拋 `LineSendError`，既有守門因此生效；逃頂警報改走同一出口；每日主卡片失敗只印錯、不中斷後續哨兵。
+- **ci**: 推送失敗寫 `line_send_failures.txt`（僅 GitHub Actions），workflow 新增 `Fail if any LINE push failed` 排在 `Upload escape alert state` 之後；週報 Flex 被拒但文字版送達不算失敗。
+- **test**: 新增 `tests/test_line_send_failure.py`（11 項：出口拋例外、資料缺值／升槓桿第 1 批／逃頂去重／行動翻轉在失敗時不前進且恢復後重送、標記檔三情境、週報退回文字）。全套 **711 passed**；負向驗證：換回舊版 7 項全紅、單拿掉週報清除 1 項紅。
 
 ### v3.69 (2026-11-20)
 **哨兵純文字推播全面改 LINE Flex 卡片（失敗自動退回純文字）。**
@@ -1749,4 +1756,4 @@ watcher 面板誠實化：移除已回測無效的 Hash Ribbons 參考訊號、�
 
 ---
 
-**最後更新：2026-11-20（v3.69）**
+**最後更新：2026-11-20（v3.70）**

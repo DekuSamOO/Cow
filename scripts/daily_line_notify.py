@@ -490,9 +490,38 @@ def _compute_radars(btc_df, curr, latest_funding, price) -> dict:
     }
 
 
-def send_line_message(flex_payload):
+class LineSendError(RuntimeError):
+    """LINE 最終沒送出（HTTP 非 200、逾時、未設定、對外閘門擋下）。"""
+
+
+# 本場推送失敗清單 → 結束時寫標記檔，workflow 在「上傳 state 之後」才據此判 job 失敗。
+# 不直接 sys.exit(1)：腳本步驟一失敗，後面的 Upload state 會被跳過，同場其他已成功推送的
+# 「只推一次」旗標就不會上傳 → 下一場重複推播（2026-11-20 使用者拍板甲案）。
+_LINE_SEND_FAILURES: list = []
+LINE_SEND_FAILURE_MARKER = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "line_send_failures.txt")
+
+
+def _write_send_failure_marker() -> None:
+    """只在 GitHub Actions 寫標記檔（本機閘門擋下也算失敗，不該在 repo 留檔）。"""
+    if not _LINE_SEND_FAILURES:
+        return
+    print(f"X 本場共 {len(_LINE_SEND_FAILURES)} 則 LINE 推送失敗：{_LINE_SEND_FAILURES}")
+    if not os.getenv("GITHUB_ACTIONS"):
+        return
+    with open(LINE_SEND_FAILURE_MARKER, "w", encoding="utf-8") as f:
+        f.write("\n".join(_LINE_SEND_FAILURES) + "\n")
+
+
+def send_line_message(flex_payload) -> bool:
     """LINE 推播出口。純文字 payload 一律先轉 Flex 卡片送（2026-11-20 全面改 Flex），
-    卡片建構或推送失敗才退回原純文字——寧可醜也不可丟失（比照防守首響）。"""
+    卡片建構或推送失敗才退回原純文字——寧可醜也不可丟失（比照防守首響）。
+
+    成功回 True；**最終仍失敗就拋 LineSendError**（2026-11-20 修）。
+    底層 `_send_line_message` 失敗只回 False、不拋例外，舊版又丟掉回傳值，
+    於是本檔所有 `try: send_line_message(...) except: return  # 不前進 state` 的守門
+    都是死碼——LINE 失敗時「只推一次」旗標照樣寫成已推（余力 B 抓蟲 B5 No.5）。
+    改成拋例外，讓那些既有守門真正生效，呼叫端不必逐一改寫。"""
     from service.notification.core import _send_line_message
     if flex_payload.get("type") == "text":
         from service.notification.builders import build_text_card_flex
@@ -503,9 +532,13 @@ def send_line_message(flex_payload):
             card = None
         if card is not None:
             if _send_line_message([card]):
-                return
+                return True
             print("! Flex 推送失敗，退回純文字再送一次")
-    _send_line_message([flex_payload])
+    if _send_line_message([flex_payload]):
+        return True
+    alt = flex_payload.get("altText") or str(flex_payload.get("text", ""))[:40]
+    _LINE_SEND_FAILURES.append(alt.split("\n")[0] or flex_payload.get("type", "?"))
+    raise LineSendError(f"LINE 推送失敗（payload type={flex_payload.get('type')}）")
 
 
 # 獨立 state 檔（與 price_alert.py 的 alert_state.json 分開，避免兩 workflow 互相覆蓋）
@@ -786,14 +819,13 @@ def maybe_send_escape_alert(data: dict) -> None:
 
     try:
         from service.notification.builders import build_escape_alert_flex
-        from service.notification.core import _send_line_message
         if last_score is not None:
             data["escape_prev_score"] = last_score
         flex = build_escape_alert_flex(data)
         if flex is None:
             print("⚠️ 逃頂警報 Flex 無法建構（缺 escape_signals），略過。")
             return
-        _send_line_message([flex])
+        send_line_message(flex)   # 失敗拋 LineSendError → 不寫去重 state，下場重試
         state.update({"last_escape_date": today, "last_escape_score": score,
                       "last_escape_tier": tier_rank})
         _save_escape_state(state)
@@ -1480,6 +1512,7 @@ def maybe_send_weekly_summary(data: dict, now=None) -> None:
     from service.notification.builders import build_weekly_flex
     flex = build_weekly_flex(data, esc, low, today)
     sent = False
+    n_fail_before = len(_LINE_SEND_FAILURES)
     if flex is not None:
         try:
             send_line_message(flex)
@@ -1508,6 +1541,7 @@ def maybe_send_weekly_summary(data: dict, now=None) -> None:
         try:
             send_line_message({"type": "text", "text": "\n".join(lines)})
             sent = True
+            del _LINE_SEND_FAILURES[n_fail_before:]   # 文字版送到了，Flex 那次不算失敗
             print("📒 已發送週報（文字）。")
         except Exception as e:
             print(f"❌ 週報發送失敗: {e}")
@@ -1524,7 +1558,11 @@ if __name__ == "__main__":
     data = get_decision_data()
     data.update(fetch_news_digest())
     attach_score_deltas(data)  # 逃頂/抄底分數 vs 昨日 Δ，顯示於波段雷達區塊
-    send_line_message(build_flex_message(data))
+    try:
+        send_line_message(build_flex_message(data))
+    except LineSendError as e:
+        # 主卡片沒送出也要繼續跑下面的哨兵——各哨兵失敗時自己不前進 state
+        print(f"X 每日主卡片推送失敗：{e}")
     # 逃頂警報：抖進每日推播，超門檻才額外推一則（分級 + 去重 + 遲滯）
     maybe_send_escape_alert(data)
     # 行動翻轉警報：三軸合成行動 key 變動才推一則（去重 + 首次只記錄）
@@ -1542,3 +1580,5 @@ if __name__ == "__main__":
     # maybe_send_hedge_batch_alert(data)
     # 週報：週日傍晚場次加推一則（每週一次）
     maybe_send_weekly_summary(data)
+    # 有推送失敗 → 寫標記檔，workflow 上傳 state 後再判 job 失敗（不在這裡 exit 1）
+    _write_send_failure_marker()
