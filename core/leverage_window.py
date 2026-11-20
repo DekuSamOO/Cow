@@ -226,7 +226,11 @@ def apply_manual_adjustments(state, adjustments):
 def d3_status(current_price, low_since, low_date_iso, days_since_low,
               rebound_req=0.50, days_req=90, cycle_ath=None,
               trigger_drawdown=D3_TRIGGER_DRAWDOWN):
-    """熊底確認（D3＝PREREG 預簽定義）：自最低點反彈 >= 50% 且距最低點 >= 90 天。
+    """熊底確認（D3＝PREREG 預簽定義 c1＋c2，**再加 SOP 追加的 c3**）：自最低點反彈 >= 50% 且距最低點 >= 90 天。
+
+    ⚠ PREREG（`_governance\\PREREG-season-falsification.md`）的熊底確認「唯一定義」只有 c1＋c2；
+    c3 是 SOP 為擋 2021-10-18 型誤報追加的閘門。PREREG 評判只看 c1＋c2，PREREG 不動（要改就作廢重簽）。
+    （2026-11-20 補註，余力 D 紅隊 D3 No.14）
 
     回測（三次熊底、限「自 ATH 已跌逾 30%」後才評判）：中位延遲 +99 天、
     **提早喊底 0/2**；而「站回 200 週均線」「自低點彈 30%」等快訊號提早 51~304 天、
