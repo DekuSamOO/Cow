@@ -55,10 +55,10 @@ def find_bear_low(closes, ath_value, start_pos=0, drawdown=BEAR_DRAWDOWN):
     回傳 `(低點收盤, 低點在 closes 的位置)`；區間內沒有任何一天跌破門檻就回 `(None, None)`。
     不加這道跌幅門檻的話，熊市初期價格還在高檔就會被當成「低點」而誤判 D3。
 
-    **只回位置不回天數**是刻意的：兩個呼叫端的「距低點天數」基準不同——
-    BTC_WATCH 用 K 棒位移（手上就是完整日線快取），daily_line_notify 用日曆天
-    （cron 執行時該日 K 棒可能還沒收）。日線無缺漏時兩者相等，但基準該由呼叫端
-    自己決定，本函式只負責「30% 門檻 + 取最低」這段真正會分歧的邏輯。
+    **只回位置不回天數**是刻意的：「距低點天數」的基準由呼叫端決定——目前
+    BTC_WATCH 與 daily_line_notify 都用日曆天（BTC_WATCH 原用 K 棒位移，已改）。
+    注意兩邊的 closes 不同源：BTC_WATCH 是 Binance 永續（fapi）日 K、含當日未收那根；
+    daily_line_notify 是 Cow DB 現貨合成日線。本函式只負責「30% 門檻 + 取最低」這段邏輯。
     """
     if ath_value is None or closes is None or len(closes) == 0:
         return None, None

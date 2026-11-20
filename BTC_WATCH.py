@@ -196,6 +196,11 @@ class BitcoinMonitor:
             return
         try:
             import pandas as pd
+            # 來源＝Binance **USDⓈ-M 永續合約**（fapi）日 K、最多 1500 根，且**含當日未收那根**。
+            # 與 LINE 哨兵（Cow DB 現貨 15m 合成日線）不是同一條價格序列：永續有基差、根數有上限。
+            # 閘門／D3 判定已改用 closed_daily_last 排除未收 K 棒（見 _compute_sentinels），
+            # 但 find_bear_low 吃的 closes 仍含當日未收那根（只會把 c2 歸零、偏保守）。
+            # 畫面與 LINE 哨兵不一致時以 LINE 哨兵為準（2026-11-20 余力 D 紅隊 D1 No.10）。
             r = self._session().get(
                 f"{self.fapi_url}/klines",
                 params={"symbol": self.symbol, "interval": "1d", "limit": 1500}, timeout=20)

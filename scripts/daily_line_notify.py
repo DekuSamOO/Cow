@@ -1007,6 +1007,7 @@ def maybe_send_leverage_window_alert(data: dict, dry_run: bool = False) -> None:
             f"投入第 1/{n} 批（每批 1/{n}，間隔 {LEVERAGE_BATCH_DAYS} 個「訊號日」）",
             "配置：2X 無額外保證金，強平價 = 開單價 x 0.667（2026-08-24 拍板）",
             "開單後務必讀 App 實際強平價比對，差 > 1% 且無法解釋即停止",
+            "開單前（SOP 情境一步驟 3）：同時全平套保（F-1）、關屯幣寶，取回的 BTC 併入 B；馬丁可延後到後續批次再平",
             "",
             *_plan(1),
         ]):
