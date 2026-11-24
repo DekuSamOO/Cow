@@ -70,6 +70,25 @@ def test_dingbat_range_width_follows_east_asian_width():
         assert _dw(ch) == 2, f"{ch} U+{ord(ch):04X} 應為寬符號，實得 {_dw(ch)}"
 
 
+def test_narrow_symbol_plus_vs16_is_wide():
+    """窄符號＋FE0F（emoji 樣式）終端機畫 2 欄；單獨的窄符號維持 1（2026-11-24 操作面板右框凸一欄）。"""
+    from core.term_ui import _dw, _row
+    vs16 = chr(0xFE0F)
+    assert _dw("⚠") == 1
+    assert _dw("⚠" + vs16) == 2
+    assert _dw("✅" + vs16) == 2          # 本來就寬的不可變 3
+    assert _dw("🟡" + vs16) == 2
+    assert _dw("1" + vs16) == 1           # ASCII 不受影響
+    # 使用者實際看到的那兩行：⚠️ 算 2 欄，補白後整行才會 = W+2
+    from core.action_ensemble import CRYPTO_ACTION_NOTES
+    W = 100
+    for note in (CRYPTO_ACTION_NOTES["escape_driven"], CRYPTO_ACTION_NOTES["value_driven"]):
+        assert vs16 in note
+        line = _row("     " + note, W)
+        assert _dw(line) == W + 2
+        assert _dw(line.replace("⚠" + vs16, "⚠⚠")) == W + 2, "⚠️ 必須與兩個 1 欄字元等寬"
+
+
 def test_real_emoji_range_still_wide():
     """0x1F300–0x1FAFF 是真 emoji，維持一律 2（本次修正不得波及）。"""
     from core.term_ui import _dw

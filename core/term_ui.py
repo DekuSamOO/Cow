@@ -45,22 +45,37 @@ def _dw(s):
     「LINE 哨兵」那行錯位，該行有 4 個 ✕、右框整整少 4 欄。
     改為在這段內信任 `east_asian_width`（W/F 才算 2）。
     0x1F300–0x1FAFF 那段是真 emoji，維持一律 2。
+
+    ⚠️ **窄符號後面緊接 FE0F（VS16）＝強制 emoji 樣式，終端機畫成 2 欄**：
+    `⚠` 單獨是 1 欄，`⚠️`（U+26A0 U+FE0F）是 2 欄。2026-11-24 使用者回報 BTC 操作面板
+    「⚠️ 抄底僅 ≤5 分…」那行右框往右凸一欄（core/action_ensemble.py 信心註記帶 FE0F）。
+    所以 FE0F 本身仍算 0，但會把前一個「算成 1 的符號」補成 2。
     """
     w = 0
+    prev_narrow_sym = False      # 前一個字元是不是「算 1 欄的非 ASCII 符號」（FE0F 會把它撐成 2）
     for ch in s:
         if ch == "️":
+            if prev_narrow_sym:
+                w += 1
+            prev_narrow_sym = False
             continue
         o = ord(ch)
         if o in _NARROW_SYMBOLS:
             w += 1
+            prev_narrow_sym = o >= 0x2000
         elif 0x1F300 <= o <= 0x1FAFF:
             w += 2
+            prev_narrow_sym = False
         elif 0x2600 <= o <= 0x27BF:
-            w += 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+            wide = unicodedata.east_asian_width(ch) in ("W", "F")
+            w += 2 if wide else 1
+            prev_narrow_sym = not wide
         elif unicodedata.east_asian_width(ch) in ("W", "F"):
             w += 2
+            prev_narrow_sym = False
         else:
             w += 1
+            prev_narrow_sym = o >= 0x2000
     return w
 
 
